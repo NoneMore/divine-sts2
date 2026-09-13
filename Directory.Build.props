@@ -6,7 +6,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <!-- Projects that reference the shipped game assemblies set RequiresGameData
+         and receive GameDataDir from the configured installation. -->
     <GameDataDir Condition="'$(GameDataDir)' == '' and '$(STS2_GAME_ROOT)' != ''">$(STS2_GAME_ROOT)\data_sts2_windows_x86_64</GameDataDir>
-    <GameDataDir Condition="'$(GameDataDir)' == ''">F:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</GameDataDir>
   </PropertyGroup>
+  <!-- No machine-specific path is committed. When the game location is neither
+       configured nor passed on the command line, fail with guidance instead of
+       an unresolved-reference error. -->
+  <Target Name="ValidateGameDataDir" BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(RequiresGameData)' == 'true' and '$(GameDataDir)' == ''">
+    <Error Code="DIVINE0001"
+           Text="GameDataDir is not configured. Set STS2_GAME_ROOT (see .env.example) or build with -p:GameDataDir=&lt;install&gt;\data_sts2_windows_x86_64." />
+  </Target>
 </Project>

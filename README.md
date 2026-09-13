@@ -103,11 +103,13 @@ with Sts2NativeVectorEnv(workers=4, ascension=1) as env:
 
 ## Configuration
 
-The runtime auto-detects standard Steam installations. For custom library paths, define `STS2_GAME_ROOT` in `.env`:
+The runtime auto-detects standard Steam installations, including Steam libraries registered on non-default drives. For custom or unregistered layouts, define `STS2_GAME_ROOT` in `.env` at the repository root:
 
 ```ini
 STS2_GAME_ROOT=D:\SteamLibrary\steamapps\common\Slay the Spire 2
 ```
+
+`.env` is loaded automatically by the Python runtime (`sts2_native_sim.paths.load_env_file`) and by the PowerShell scripts (`scripts/common.ps1`). A real environment variable always takes precedence over the file.
 
 ---
 

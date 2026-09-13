@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AssemblyName>sts2-native-trace-exporter</AssemblyName>
     <RootNamespace>Sts2.NativeSim.TraceExporter</RootNamespace>
+    <RequiresGameData>true</RequiresGameData>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="sts2" HintPath="$(GameDataDir)\sts2.dll" Private="false" />

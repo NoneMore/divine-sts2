@@ -12,10 +12,94 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GAME_DIRECTORY_NAME = "Slay the Spire 2"
 GAME_DATA_DIRECTORY_NAME = "data_sts2_windows_x86_64"
+ENV_FILE_NAME = ".env"
+
+_ENV_FILE_LOADED = False
 
 
 class DiscoveryError(FileNotFoundError):
     """Raised when a required local dependency cannot be discovered."""
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """Parse `KEY=VALUE` overrides, ignoring blank lines and `#` comments."""
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export ") :].strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def load_env_file(path: str | Path | None = None) -> list[str]:
+    """Apply repository `.env` overrides to `os.environ`.
+
+    A real process environment variable always wins over the file, so CI and
+    explicit shell exports keep precedence. Returns the names applied.
+    """
+    global _ENV_FILE_LOADED
+    default_file = path is None
+    target = REPOSITORY_ROOT / ENV_FILE_NAME if default_file else Path(path)
+    if default_file:
+        if _ENV_FILE_LOADED:
+            return []
+        _ENV_FILE_LOADED = True
+    if not target.is_file():
+        return []
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    applied: list[str] = []
+    for key, value in parse_env_file(text).items():
+        if os.environ.get(key):
+            continue
+        os.environ[key] = value
+        applied.append(key)
+    return applied
+
+
+def _environment(name: str) -> str | None:
+    """Read a configuration variable after repository `.env` defaults are applied."""
+    load_env_file()
+    value = os.environ.get(name)
+    return value or None
+
+
+def _registry_steam_roots() -> list[Path]:
+    """Steam libraries registered with Windows, including non-default drives."""
+    if os.name != "nt":
+        return []
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - Windows only module.
+        return []
+
+    lookups = (
+        (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", "InstallPath"),
+    )
+    roots: list[Path] = []
+    for hive, key_path, value_name in lookups:
+        try:
+            with winreg.OpenKey(hive, key_path) as key:
+                value, _ = winreg.QueryValueEx(key, value_name)
+        except OSError:
+            continue
+        if isinstance(value, str) and value.strip():
+            # Steam records SteamPath with forward slashes.
+            roots.append(Path(value.strip().replace("/", "\\")))
+    return roots
 
 
 def _steam_roots() -> list[Path]:
@@ -24,9 +108,10 @@ def _steam_roots() -> list[Path]:
         base = os.environ.get(variable)
         if base:
             candidates.append(Path(base) / "Steam")
-    steam_path = os.environ.get("STEAM_PATH")
+    steam_path = _environment("STEAM_PATH")
     if steam_path:
         candidates.insert(0, Path(steam_path))
+    candidates.extend(_registry_steam_roots())
 
     roots: list[Path] = []
     for steam in candidates:
@@ -44,7 +129,7 @@ def _steam_roots() -> list[Path]:
 
 
 def find_game_root(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("STS2_GAME_ROOT")
+    override = explicit or _environment("STS2_GAME_ROOT")
     if override:
         candidate = Path(override).expanduser().resolve()
         if (
@@ -67,13 +152,13 @@ def find_game_root(explicit: str | Path | None = None) -> Path:
             return candidate
     searched = ", ".join(str(path) for path in candidates) or "standard Steam libraries"
     raise DiscoveryError(
-        "Slay the Spire 2 was not found. Set STS2_GAME_ROOT to the installed game directory. "
-        f"Searched: {searched}"
+        f"Slay the Spire 2 was not found. Set STS2_GAME_ROOT in the environment or in {REPOSITORY_ROOT / ENV_FILE_NAME} "
+        f"to the installed game directory. Searched: {searched}"
     )
 
 
 def find_game_assembly(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("STS2_ASSEMBLY")
+    override = explicit or _environment("STS2_ASSEMBLY")
     candidate = Path(override).expanduser().resolve() if override else find_game_root() / GAME_DATA_DIRECTORY_NAME / "sts2.dll"
     if not candidate.is_file():
         raise DiscoveryError(f"STS2 assembly not found: {candidate}")
@@ -81,7 +166,7 @@ def find_game_assembly(explicit: str | Path | None = None) -> Path:
 
 
 def find_dotnet(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("DOTNET")
+    override = explicit or _environment("DOTNET")
     if override:
         candidate = Path(override).expanduser().resolve()
         if candidate.is_file():
@@ -104,7 +189,7 @@ def find_dotnet(explicit: str | Path | None = None) -> Path:
 
 
 def find_host_assembly(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("STS2_NATIVE_HOST")
+    override = explicit or _environment("STS2_NATIVE_HOST")
     if override:
         candidate = Path(override).expanduser().resolve()
         if candidate.is_file():
@@ -128,7 +213,7 @@ def find_host_assembly(explicit: str | Path | None = None) -> Path:
 
 
 def find_godot(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("GODOT")
+    override = explicit or _environment("GODOT")
     if override:
         candidate = Path(override).expanduser().resolve()
         if candidate.is_file():

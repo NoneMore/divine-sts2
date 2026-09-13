@@ -4,6 +4,46 @@ function Get-DivineRepositoryRoot {
     return (Split-Path -Parent $PSScriptRoot)
 }
 
+function Import-DivineEnvFile {
+    # Repository `.env` supplies local overrides; a real environment variable wins.
+    $path = Join-Path (Get-DivineRepositoryRoot) '.env'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    foreach ($line in (Get-Content -LiteralPath $path)) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+        $index = $trimmed.IndexOf('=')
+        if ($index -lt 1) { continue }
+        $key = $trimmed.Substring(0, $index).Trim()
+        $value = $trimmed.Substring($index + 1).Trim().Trim('"').Trim("'")
+        if ($key -and [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($key))) {
+            Set-Item -Path "env:$key" -Value $value
+        }
+    }
+}
+
+function Get-DivineSteamRoots {
+    $roots = [Collections.Generic.List[string]]::new()
+    if ($env:STEAM_PATH) { $roots.Add($env:STEAM_PATH) }
+    foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if ($programFiles) { $roots.Add((Join-Path $programFiles 'Steam')) }
+    }
+    # Steam records its install location in the registry, which is the only
+    # reliable source when Steam lives on a non-default drive.
+    foreach ($probe in @(
+            @{ Path = 'HKCU:\Software\Valve\Steam'; Name = 'SteamPath' },
+            @{ Path = 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam'; Name = 'InstallPath' },
+            @{ Path = 'HKLM:\SOFTWARE\Valve\Steam'; Name = 'InstallPath' }
+        )) {
+        try {
+            $value = (Get-ItemProperty -LiteralPath $probe.Path -Name $probe.Name -ErrorAction Stop).($probe.Name)
+        } catch {
+            continue
+        }
+        if ($value) { $roots.Add(($value -replace '/', '\')) }
+    }
+    return ($roots | Select-Object -Unique)
+}
+
 function Get-DivineDotnet {
     $bundled = Join-Path (Get-DivineRepositoryRoot) '.tools\dotnet9\dotnet.exe'
     if (Test-Path -LiteralPath $bundled) { return $bundled }
@@ -29,9 +69,7 @@ function Get-DivineGameRoot([string]$Explicit = '') {
         return $candidate
     }
     $candidates = [Collections.Generic.List[string]]::new()
-    foreach ($programFiles in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
-        if (-not $programFiles) { continue }
-        $steam = Join-Path $programFiles 'Steam'
+    foreach ($steam in (Get-DivineSteamRoots)) {
         $candidates.Add((Join-Path $steam 'steamapps\common\Slay the Spire 2'))
         $manifest = Join-Path $steam 'steamapps\libraryfolders.vdf'
         if (Test-Path -LiteralPath $manifest) {
@@ -50,7 +88,7 @@ function Get-DivineGameRoot([string]$Explicit = '') {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
     }
-    throw 'Slay the Spire 2 was not found. Set STS2_GAME_ROOT to its installed directory.'
+    throw 'Slay the Spire 2 was not found. Set STS2_GAME_ROOT in the environment or in the repository .env to its installed directory.'
 }
 
 function Get-DivineGameAssembly([string]$Explicit = '') {
@@ -70,3 +108,5 @@ function Get-DivineGodot {
     }
     throw 'Godot 4.5.1 .NET was not found. Run scripts\bootstrap.ps1 or set GODOT.'
 }
+
+Import-DivineEnvFile
