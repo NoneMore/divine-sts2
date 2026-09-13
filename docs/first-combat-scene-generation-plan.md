@@ -74,6 +74,15 @@ E7 真正跨 worker combat keyframe 调查
 
 ### E0 — build-pinned Neow 与 FullApp 启动契约探针
 
+**状态：探针证据已完成（2026-09-13）；E3 入口契约已由项目维护者确认，E0 关闭。**
+结果见 [first-combat-e0-launch-contract-report.md](first-combat-e0-launch-contract-report.md)。摘要：
+
+1. 忠实启动 Neow 的前置条件是 **unlock profile 已 reveal `NEOW_EPOCH`**（`StartedWithNeow = UnlockState.IsEpochRevealed<NeowEpoch>()`）；起始点就是真实 Ancient map point / `EventRoom(Neow)`，不存在另一条 run-start seam，也不需要 standalone `event_reset`。
+2. Neow 完成后回地图是纯 presentation（`NEventRoom.Proceed` → `NMapScreen`）；headless 等价物是按模型层 `MapTravel.GetTravelablePointsFrom` 暴露 `map_choice`。Player/RunState 引用不变（5/5 slice 实测）。
+3. 第一层合法节点**恒为 combat**：3 profile × 5 角色 × A0/A10 × 12 seeds = 360 样本、0 violations；E4 无需为非战斗首层房间设计分支预算。
+4. FullApp 的 requested ascension **未**写入原生 run（实测 echo=5 / native=10、A10 `ASCENDERS_BANE`×1）；正确 seam 为 `StartRunLobby.SyncAscensionChange` 或 `NGame.StartNewSingleplayerRun(..., ascensionLevel, ...)`，且需满足 profile 的 `MaxAscension` / ascension epoch 前置条件。该项归 E5。
+5. 普通 console 进程无法执行 shipped run 生命周期（`Logger`/`LocManager` → Godot native）；E3 必须在 headless Godot 引擎上下文中执行。
+
 **性质**
 
 这是阻塞 E3 和 A>0 golden matrix 的有界调查，不授权选择或实现替代游戏机制。
@@ -97,6 +106,12 @@ E7 真正跨 worker combat keyframe 调查
 - 若证据确定唯一原生 lifecycle，把它写成 E3 的固定入口契约，由项目维护者确认后执行；
 - 若只能依赖 UI presentation、合成 Neow 或逐效果模拟，则 E3 阻塞，项目维护者/用户决定缩小范围或另做规格设计；
 - 若第一层可能不是 combat，提交可复现 seed 与有限状态图，由项目维护者决定“只支持直接第一战节点”还是“遍历到首战”；执行者不得静默扩域。
+
+**E0 已落定的决策点**
+
+- 唯一原生 lifecycle 已确定（见本报告 §7 契约），并已由项目维护者确认，可进入 E3；E0 未发现需要依赖 UI presentation 才能启动 Neow 的情形。
+- 第一层已证实恒为 combat，因此第三个停止条件不触发，E4 首版范围可限定为“直接第一战节点”。
+- 展示抑制方式已确认：沿用仓库现有 scoped Harmony presentation seam，全局 `TestMode.IsOn` 保持 off。
 
 ### E1 — 拆分 run 构造与 combat 构造
 
