@@ -3,6 +3,15 @@
 > **Evidence status:** This is a dated development report, not current public
 > release certification. Re-run the harness on the supported build before
 > treating the GO/PROVEN language or benchmark numbers below as current.
+>
+> **Role:** canonical specification of the `full_application_native` bridge —
+> its sandboxing, protocol, and suppression seams. `full_application_native` is
+> the designated differential authority for the first-combat program, but its
+> read-only projection is still incomplete (see
+> `docs/first-combat-scene-generation-plan.md` §3 and the E5 unit in §5), so it
+> cannot yet serve the golden differential gate. The environment contract for
+> the in-process `reconstructed_native` environment lives in
+> `docs/persistent-environment.md`.
 
 ## 1. Executive Summary & Architecture Verdict
 

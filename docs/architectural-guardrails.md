@@ -2,7 +2,7 @@
 
 This document establishes permanent architectural invariants, research principles, and mathematical specifications to prevent common failure modes in roguelike deckbuilder AI. All Phase 2 (Tactical Expert) and Phase 3 (Holistic Run Solver) models must satisfy these specifications.
 
-Implementation status, evidence precedence, and corrections to external proposals live in `project-status-and-review-guide.md`. Detailed STS1 prior-art comparative analysis lives in `docs/research/sts1-prior-art-and-transfer-strategy.md`.
+Implementation status, evidence precedence, and corrections to external proposals live in `project-status-and-review-guide.md`. An external STS1 prior-art comparative analysis is not maintained in this repository; the seven research principles it informed are fixed in §0 below and in `holistic-solver-roadmap.md`, and the external proposal decisions are recorded in `project-status-and-review-guide.md`.
 
 ---
 

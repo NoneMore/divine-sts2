@@ -1,5 +1,6 @@
 # A1 policy recovery plan
 
+Status: **active as the policy-quality recovery plan.** Current corpus-generation sequencing is owned by `docs/first-combat-scene-generation-plan.md`, and rejected/demoted critic and value-model candidates are recorded in `docs/native-rollout-farm.md`.
 Last updated: **2026-08-23**
 
 ## Decision

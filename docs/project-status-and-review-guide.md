@@ -1,6 +1,7 @@
 # Project status and review guide
 
 Last evidence review: **2026-08-29**
+Latest environment-program evidence recorded: **2026-09-13** (first-combat program E1–E4; see `docs/persistent-environment-evidence.md`)
 Shipped build under test: **`0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314`**
 
 This is the required starting point for architectural reviews. Its purpose is to keep useful outside criticism flowing without allowing proposals, old benchmark numbers, or one successful gate to be mistaken for current proof. Update this document whenever a milestone changes materially.
@@ -15,7 +16,7 @@ commands as the boundary for current contributor-facing capability.
 | :--- | :--- | :--- |
 | **Mechanical fidelity** | NativeSim executes shipped mechanics directly via 20 headless .NET 9 workers (~1,514+ dec/sec, 100% zero-crash stability). 49/49 exact traces and 904 checkpoints verified. | Exact differential replay on a declared, build-pinned coverage matrix. Global certification is false. |
 | **Execution breadth** | Full-app control covers combat, routes, events, rewards, shops, and rest sites across all 5 characters. Multi-worker persistent pools operate with zero unmanaged aborts. | Every advertised boundary remains deterministic, fail-loud, and stress-tested. Breadth is not certification. |
-| **Policy quality** | **Combat V2 diagnosed as Category C (Offline-Only Success).** Offline Top-1 distillation reached 75.19% (+25.51% over V1) with 65.08% disagreement correction, but standalone native execution was 72.66% (vs Frozen V1: 75.78%, Expert Heuristic: 79.69%). UCT B16 teacher achieves 90.62%. Phase 3D is actively evaluating V2 as policy prior in PUCT lookahead. | Statistically significant native combat lift over prior generation; 0% regression on 500-state failure suite. Top-1 imitation accuracy alone never promotes a policy. |
+| **Policy quality** | **Combat V2 diagnosed as Category C (Offline-Only Success).** Offline Top-1 distillation reached 75.19% (+25.51% over V1) with 65.08% disagreement correction, but standalone native execution was 72.66% (vs Frozen V1: 75.78%, Expert Heuristic: 79.69%). UCT B16 teacher achieves 90.62%. Phase 3D is actively evaluating V2 as policy prior in PUCT lookahead. No critic is currently authorized as the application-wide default; rejected and demoted critic/value candidates are recorded in `docs/native-rollout-farm.md`. | Statistically significant native combat lift over prior generation; 0% regression on 500-state failure suite. Top-1 imitation accuracy alone never promotes a policy. |
 | **Advisor product** | Private development tooling (`evaluator.py`, `recommend_pick.py`, and `get_live_context.py`) functions under single-shot live capture. No learned macro advisor is publicly promoted. | Exact legal-action/state alignment, fail-closed behavior, calibrated advice, version checks, and acceptable end-to-end latency. |
 
 ## Evidence precedence
@@ -24,7 +25,7 @@ When documents disagree, use this order:
 
 1. Build-pinned machine-readable artifacts and exact replay outputs.
 2. Tests or benchmarks that can be rerun on the current tree.
-3. This dated status record and the focused implementation reports (`docs/research/sts1-prior-art-and-transfer-strategy.md`, `artifacts/combat-v2-training/phase-3c-final-report.md`).
+3. This dated status record and the focused maintained reports (`docs/persistent-environment-evidence.md`, `docs/native-rollout-farm.md`, `docs/first-combat-e0-launch-contract-report.md`).
 4. The roadmap, which describes intended work.
 5. External proposals, estimates, and historical discussion.
 
@@ -51,13 +52,20 @@ When documents disagree, use this order:
 
 ## Active milestone order
 
-1. **Phase 3D Network-Guided PUCT Evaluation:** Validate Combat V2 policy priors inside shallow MCTS ($B=8, 16$) to eliminate rollout compounding error and evaluate combat lift.
-2. **Tactical Failure Regression Corpus:** Lock $\ge 500$ decision-rich blunder and reverse-drift roots to create an automated promotion ratchet.
-3. **Categorical HP & Death-Risk Loss (`value_cat`):** Transition value head from scalar MSE to 32-bin categorical distribution and explicit $P(\text{death})$.
-4. **Iterative DAgger Loop Implementation:** Build continuous rollout $\to$ native search relabeling $\to$ model update pipeline.
-5. **Combat V3 Typed-Token Transformer:** Implement universal entity tokenization, auxiliary mechanics heads, and counterfactual pairwise ranking.
-6. **Train macro decisions:** Add skip-relative card rewards, shops, routing, upgrades/removals, events, relics, and counterfactual potion reservation using native long-horizon outcomes.
-7. **Ship the advisor last:** Stabilize exact read-only context extraction and legal-action alignment, fail closed on unsupported/build-mismatched state, then finish the HUD.
+The first two items are the outstanding gates of the first-combat corpus program currently in flight (E1–E4 are implemented in the tree); the remainder is the policy-quality sequence that consumes its output.
+
+1. **E5 FullApp authority projection and golden differential:** complete the read-only `full_application_native` first-combat root projection (including the native ascension seam), then require zero mismatches on a frozen manifest for roots and representative complete first combats (`docs/first-combat-scene-generation-plan.md` §5 E5).
+2. **E6 first-combat corpus farm:** queue-based shard generation, schema, seed-level split, resume and soak gates, and public-tree validation (`docs/first-combat-scene-generation-plan.md` §5 E6).
+3. **Differential coverage scheduler:** build-keyed scheduler that consumes the coverage inventory and emits deterministic character/seed/route manifests targeted at the missing encounters and mechanic sets (currently 14 of the 40+ target encounters).
+4. **Phase 3D Network-Guided PUCT Evaluation:** Validate Combat V2 policy priors inside shallow MCTS ($B=8, 16$) to eliminate rollout compounding error and evaluate combat lift.
+5. **Tactical Failure Regression Corpus:** Lock $\ge 500$ decision-rich blunder and reverse-drift roots to create an automated promotion ratchet.
+6. **Categorical HP & Death-Risk Loss (`value_cat`):** Transition value head from scalar MSE to 32-bin categorical distribution and explicit $P(\text{death})$.
+7. **Iterative DAgger Loop Implementation:** Build continuous rollout $\to$ native search relabeling $\to$ model update pipeline.
+8. **Combat V3 Typed-Token Transformer:** Implement universal entity tokenization, auxiliary mechanics heads, and counterfactual pairwise ranking.
+9. **Train macro decisions:** Add skip-relative card rewards, shops, routing, upgrades/removals, events, relics, and counterfactual potion reservation using native long-horizon outcomes.
+10. **Ship the advisor last:** Stabilize exact read-only context extraction and legal-action alignment, fail closed on unsupported/build-mismatched state, then finish the HUD.
+
+A cross-worker native combat keyframe path (E7 in the first-combat plan) is conditional: it starts only if build-pinned benchmarks show prefix replay is the real throughput bottleneck.
 
 ## Non-negotiable claims discipline
 

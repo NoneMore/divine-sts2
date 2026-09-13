@@ -4,7 +4,7 @@ The map is generated from the run's `UpFront` stream, so E2's removal of the dis
 combat must not move a single room; what it must change is that no combat exists before the map
 entry. The encounter identity is asserted as a four-worker agreement plus a real enemy check
 rather than a hardcoded model id, because the shipped build no longer rolls `NIBBIT` for this
-seed (recorded in `docs/persistent-environment.md`).
+seed (recorded in `docs/persistent-environment-evidence.md`).
 """
 from __future__ import annotations
 

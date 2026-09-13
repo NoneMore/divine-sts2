@@ -22,7 +22,9 @@ The exporter currently supports single-player combat actions that complete witho
 
 If a native action pauses for a blocking player choice, or reset serialization encounters an unsupported complex saved-property type, the exporter writes or logs an explicit unsupported condition and closes that trace. It never guesses.
 
-Supported exporter traces declare `comparison: "exact"`. The complete canonical observation passes exact object-key/value equality in the engine-hosted reset/card-action smoke, including its legal-action boundary. That smoke is explicitly tagged `source: "simulator_self_smoke"` and can never certify. A shipped capture is tagged `source: "shipped_game"`; it becomes certifying only if strict replay succeeds. As of 2026-08-23, the pinned campaign contains eight repeatable complete-victory traces and 177 exact checkpoints across Ironclad, Necrobinder/Osty, Nibbits, Slimes, and Shrinker Beetle. This is evidence only for those observed transitions; `global_certification` remains false.
+Supported exporter traces declare `comparison: "exact"`. The complete canonical observation passes exact object-key/value equality in the engine-hosted reset/card-action smoke, including its legal-action boundary. That smoke is explicitly tagged `source: "simulator_self_smoke"` and can never certify. A shipped capture is tagged `source: "shipped_game"`; it becomes certifying only if strict replay succeeds. This is evidence only for the observed transitions; `global_certification` remains false.
+
+An earlier snapshot for the same pinned campaign recorded eight repeatable complete-victory traces and 177 exact checkpoints across Ironclad, Necrobinder/Osty, Nibbits, Slimes, and Shrinker Beetle. That count is superseded: the authoritative aggregate is whatever `python/differential_campaign.py` reports for the current trace directories, and the last recorded result appears in [persistent-environment-evidence.md](persistent-environment-evidence.md).
 
 Replay an exported trace with:
 

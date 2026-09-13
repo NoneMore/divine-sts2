@@ -29,4 +29,15 @@ Use `-CombatCount N` to keep the isolated native run alive through `N` consecuti
 
 The launcher retains every result under `artifacts/shipped-autotraces/candidates`, runs strict exact replay, and copies only a passing trace into `artifacts/shipped-autotraces/certified`. Failed candidates remain useful regression cases but are not certification evidence. A driver launch by itself is never evidence.
 
+## Launcher capture hygiene
+
+Recorded behaviour of the launcher and coverage policy, moved here because this document owns the AutoTrace contract:
+
+- the launcher uses canonical ten-character shipped seeds, reapplies the requested seed after character initialization, keeps deterministic seed/count/policy sandboxes, scales a hard timeout with combat count, and resumes captured runs without relaunching;
+- it copies every trace into candidates, replays every candidate before batch failure, retains diagnostics, refuses content collisions, promotes atomically only after exact replay, and suppresses both exact-SHA and semantic-subset duplicates;
+- the coverage policy deterministically selects native card/target order and native potion actions;
+- reset lifecycle tasks have a five-second bound and fail loudly on timeout or an unsupported reset-time choice.
+
 Pet relic reconstruction invokes each shipped pet relic's native `BeforeCombatStart` lifecycle after enemies are registered. This preserves native combat-ID ordering and delegates companion creation, stats, powers, hooks, and later revival/growth behavior to the game. The first Necrobinder/Osty automated trace passes exact replay through victory; other pet relics and companion-producing effects remain unclaimed until separately observed and replayed.
+
+The aggregate count of certifying traces and checkpoints is reported by `python/differential_campaign.py`, not by this document; the last recorded result is in [persistent-environment-evidence.md](persistent-environment-evidence.md).

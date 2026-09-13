@@ -2,7 +2,8 @@
 
 状态：**E0 已关闭；E1、E2、E3、E4 实施完成，待项目维护者复核合并；E5 起待实施**  
 规划日期：**2026-09-13**  
-治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)
+治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)  
+证据归属：E1–E4 的持久证据同时记录在 [persistent-environment-evidence.md](persistent-environment-evidence.md)；本计划内的逐单元证据用于维护者复核，计划退役后以证据文档为准。
 
 ## 1. 目标与完成定义
 
@@ -126,7 +127,7 @@ E7 真正跨 worker combat keyframe 调查
 3. 负向证据（pinned build）：run-only 阶段 `run_phase_created_combat_state=false`、`run_phase_player_has_combat_state=false`，八个 combat RNG 流（`Shuffle`、`MonsterAi`、`CombatCardGeneration`、`CombatPotionGeneration`、`CombatCardSelection`、`CombatEnergyCosts`、`CombatTargets`、`CombatOrbs`）计数全为 0；combat 阶段则安装 `CombatState`、生成 `PlayerCombatState` 并消耗 `Shuffle`（10 张牌=9；A10 起始负载=10，同时native 起始牌组含恰好一张 `ASCENDERS_BANE`）。四 worker、同 worker 重复构造、八种 reset mode 的审计完全一致。
 4. 两次临时故障注入证明断言可判别而非自证：把 combat 构造移入 run-only 阶段 → 边界报告 `run_phase_created_combat_state: true`、`Shuffle: 9`；仅在 run-only 阶段抽取一次 `Shuffle` → 报告 `run-only construction consumed combat RNG: {'Shuffle': 1}`（此时两条 CombatState 断言仍通过，说明 RNG 断言独立生效）。注入已完全回滚。
 5. 正向回归：16 个 acceptance 脚本拆分前后退出码、状态 hash 集合与（除去计时字段的）输出完全一致，唯一差异是 `acceptance.py` 新增的 `construction_boundary` 字段；direct reset hash 保持 `CEE9B22A0D5E3FC2B3A0C66E2C5E694E54540059B9C27E9EEA77F3D840DBEF7B`。
-6. `run_room_entry_acceptance.py`、`run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在拆分**之前**即已在当前树上失败（断言与当前原生内容/句柄语义不符），本计划未修改其期望，已记录在 `docs/persistent-environment.md` Validation 节。
+6. `run_room_entry_acceptance.py`、`run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在拆分**之前**即已在当前树上失败（断言与当前原生内容/句柄语义不符），本计划未修改其期望，已记录在 `docs/persistent-environment-evidence.md` 的 E1/E2 回归对比节。
 7. 构建：Protocol、Core、Host、GodotHost 的 Release 构建均 0 警告 0 错误；GodotHost Debug（Godot 默认加载配置）同样通过。
 
 **结果**
@@ -167,7 +168,7 @@ E7 真正跨 worker combat keyframe 调查
 5. 语义差分（同 seed、custom 10 张牌与 A10 原生起始负载各一）：map 观测的非 RNG 字段差异为 **0**（map 点、visited、legal actions 完全一致），差异仅在 `run.rng_counters`（`Shuffle` 9/10→0、`Niche` 1→0）以及随后第一场真实战斗的洗牌顺序与怪物 HP——即被删除的合成战斗原先消耗的两条流。map/房间生成使用 `UpFront`，因此路线与房间内容不变。
 6. 正向回归：16 个 acceptance 脚本前后对比，所有不观测 composed run 的脚本（direct combat、choice、bundle、card/item reward、reward option、rest、event、map reset）退出码与 hash 集合完全相同，direct reset hash 保持 `CEE9B22A0D5E3FC2B3A0C66E2C5E694E54540059B9C27E9EEA77F3D840DBEF7B`；composed-run 脚本保留全部内容/路线/奖励/事件断言，仅 hash 变化（run 观测含 RNG counters）。`run_room_entry_acceptance.py` 原先把 seed `NATIVE-COMPOSED-ROOM-ENTRY` 的遭遇硬编码为 `NIBBIT`（shipped build 实际为 `TWIG_SLIME_S`/`LEAF_SLIME_M`/`LEAF_SLIME_S`），现改为四 worker 一致 + 真实敌人 + 牌数守恒 + instance ID 集合相等，脚本转为通过。
 7. `portable_modes_acceptance.py` 覆盖 8 个 mode 的 reset→step→portable export→cross-worker restore，另覆盖 map、event 内嵌 `card_choice`、run combat 三阶段的 local restore 与 portable restore，并对 provenance / method / 未知 method / build / schema / history / expected hash 逐一篡改要求 fail closed（`reset_provenance_mismatch`、`unknown_reset_mode`、`build_mismatch`、`unsupported_portable_branch_schema`、`replay_divergence`），校验发生在任何 reset RPC 之前。无 schema 字段的 v0 记录仍经明确兼容路径精确重放（combat 与 run 各一）。
-8. `run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在 E1 之前即已失败，E2 未改变其观测值与失败原因，仍按 `docs/persistent-environment.md` 记录保留。
+8. `run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在 E1 之前即已失败，E2 未改变其观测值与失败原因，仍按 `docs/persistent-environment-evidence.md` 记录保留。
 9. 构建：Protocol、Core、Host、GodotHost 的 Release 与 Debug 均 0 警告 0 错误。
 
 **迁移说明**：pre-E2 的 run-mode portable branch 在删除合成战斗后不再产生相同状态，重放会以 `replay_divergence` fail closed（不静默降级）；其余七个 mode 的旧记录（含无 schema 的 v0 记录）保持可重放。
@@ -203,11 +204,11 @@ E7 真正跨 worker combat keyframe 调查
 
 **状态：实施完成（2026-09-13），Neow gate 证据见本节；合并决定由项目维护者复核。**
 
-结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment.md`）：
+结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment-evidence.md`）：
 
 1. 新增 `neow_run_reset` RPC 与独立 run-start DTO `NeowRunStartRequest`，线上只接受 `game_build`、`seed`、`character`、`ascension`；没有 deck/relic/potion/hand/enemy/RNG 字段，因此无法表达伪造的 post-Neow 状态。RPC 出现在 `hello.methods`、两个 host dispatch、`hello.run_start` 与 Python client 的 `RESET_METHOD_PROVENANCE`（`neow_run_reset → neow_run`）。
 2. 固定序列按 E0 §7 执行：run-only 构造（`Player.CreateForNewRun` + `RunState.CreateForNewRun` + pinned unlock profile）→ `GenerateRooms` → `GenerateMap` → `AddVisitedMapCoord(StartingMapPoint.coord)` → `EnterMapPointInternal(1, Ancient, null, saveGame: false)` → 捕获并 await fire-and-forget `BeginEvent` → Neow 决策态。开始序列前执行与 `run_reset` 相同的 `CombatManager.Reset(graceful: true)` 清理，否则 shipped `Reset(false)` 留下的 stale `CombatState` 会让下一次 `SetUpCombat` 失败，一个 worker 只能服务一次 run start。
-3. unlock profile 固定为 shipped `UnlockState.all`（`unlock_profile: "unlock_state_all"`，`docs/persistent-environment.md` 记录选择理由），该固定选择已由项目维护者确认（2026-09-13），并发布在 `hello.run_start`、Neow 观测的 `run_start` 块与 `diagnostics.run_identity`。所有 E0 前置条件以 shipped 状态 fail-loud 断言：`StartedWithNeow`、起始点 `Ancient`、事件 id `NEOW`、选项数 > 0、`Hook.ShouldAllowAncient`、首层 travelable 节点全为 `Monster`；pinned enum 成员漂移报 `unsupported_build_contract`，profile 无法产生 Neow 报 `neow_unavailable`，都不降级为 direct reset 或合成 post-Neow 状态。
+3. unlock profile 固定为 shipped `UnlockState.all`（`unlock_profile: "unlock_state_all"`，`docs/persistent-environment.md` 的 run-start 契约节记录选择理由），该固定选择已由项目维护者确认（2026-09-13），并发布在 `hello.run_start`、Neow 观测的 `run_start` 块与 `diagnostics.run_identity`。所有 E0 前置条件以 shipped 状态 fail-loud 断言：`StartedWithNeow`、起始点 `Ancient`、事件 id `NEOW`、选项数 > 0、`Hook.ShouldAllowAncient`、首层 travelable 节点全为 `Monster`；pinned enum 成员漂移报 `unsupported_build_contract`，profile 无法产生 Neow 报 `neow_unavailable`，都不降级为 direct reset 或合成 post-Neow 状态。
 4. Neow 与全部嵌套选择都走 shipped 机制，无遗物 ID 分支：`choose_event`（身份为 shipped `text_key`）、`choose_cards`（New Leaf / Precise Scissors / Pomander / Hefty Tablet / Lead Paperweight / Massive Scroll）、`choose_option`（Scroll Boxes bundle 屏）、`choose_custom_reward`/`skip_custom_rewards`（Lost Coffer / Small Capsule / Large Capsule / Kaleidoscope / Neow's Bones）。事件 `IsFinished` 后由显式 `proceed_neow` 动作转入 map 决策，合法选项来自 `MapTravel.GetTravelablePointsFrom(run, StartingMapPoint)`；该动作不改动游戏状态，finished 的 EventRoom 留在 room stack 上，交由下一次原生 `EnterMapPointInternal` 退出，与生产路径一致。
 5. 正向证据（`python/neow_run_acceptance.py`，四 worker，12 fixtures：Ironclad A0 × Large Capsule / Phial Holster / Small Capsule / New Leaf / Leafy Poultice / Precise Scissors / Scroll Boxes / Neow's Bones / Lost Coffer、Defect A0 Winged Boots、Silent A0 Lost Coffer、Ironclad A10 Scroll Boxes）：每个 fixture 的 Neow 决策在四 worker 上 hash、`choose_event` 动作、`event`/`run_start`/run inventory 完全一致；每条分支都到 `combat.turn == 1 && phase == Play`，根 hash/观测/合法动作/决策序列四 worker 一致；同一 worker 内 Neow 决策态与根的 `diagnostics.run_identity` 完全相同；A10 起始牌组 `ASCENDERS_BANE` 恰好一次、A0 为 0；决策态八个 combat RNG 流全为 0，run-start 构造审计 `combat_phase_constructed: false`。
 6. fork 隔离：Neow 决策态 handle 在另一分支推进后 restore，hash/观测/合法动作逐字节复现，路径为 `replay`（非 resident-prefix），`synthetic_combat_installed: false`、`player_has_combat_state: false`、combat RNG 全 0；被污染 worker 上推进的分支与从未见过另一分支的 worker 上同一分支 hash/观测相同，决策态 RNG counters 不变。
@@ -256,7 +257,7 @@ E7 真正跨 worker combat keyframe 调查
 
 **状态：实施完成（2026-09-13），Root gate 证据见本节；合并决定由项目维护者复核。**
 
-结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment.md`）：
+结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment-evidence.md`）：
 
 1. 新增 `python/sts2_native_sim/first_combat.py`：按 E4 结果要求枚举一个 `seed + character + ascension` 的全部合法 Neow 分支与第一战路线，并在 `combat.turn == 1 && combat.phase == Play` 精确边界产出结构化根记录。只跟随协议真实暴露的 legal actions（`choose_event`、`choose_cards`、`choose_option`、`choose_custom_reward`、`skip_custom_rewards`、`proceed_neow`、`choose_map`），不伪造无玩家选择的 RNG 分支。
 2. 分支身份由有序 action trace 决定（`branch_identity`），不按 deck/relic/遭遇/状态 hash 去重：九个 fixture 共记录 656 条分支，但只有 5/3/4/12/27/4/68/4/27 个不同根 hash，收敛到同一战斗状态的多个首层 map 点仍是独立记录。
@@ -266,7 +267,7 @@ E7 真正跨 worker combat keyframe 调查
 6. 每个根都满足 Turn 1 / Play，具备 `play_card`/`end_turn` 合法动作、八个 combat RNG 流全部可见、完整 build 身份、row 1 `Monster` 路线与敌人，以及 provenance 为 `neow_run`、history 等于 trace、expected hash 等于根 hash、reset request 恰为四个开局字段的 portable branch。
 7. 同 worker replay、local fork restore、跨 worker portable restore 三条路径在每个 fixture 各抽 4 个根（共 36 个）执行，hash/observation/legal actions 全部逐字节一致；restore 证据取 worker 自身的 `last_restore`：`path == "replay"`、`replayed_actions` 等于 trace 长度（3–6）且大于 0、`synthetic_combat_installed == false`，并且验证前先把 worker 移离根状态、移离动作未改变状态则直接报错，避免把 resident-prefix no-op 当作重建证据。
 8. 负向证据：`max_actions_per_branch=1` 与 `max_roots=2` 分别产生 `action_cap`/`root_cap` 失败、`complete=False`、`assert_complete()` 抛错，且 cap 下仍被产出的根全部通过边界断言；Neow 决策态被根断言拒绝；篡改根分支 `expected_hash` 以 `replay_divergence` 失败并只污染尝试它的那个 worker，pool 替换该 worker 后未篡改配方恢复正常，证明篡改是唯一原因。`tests/test_first_combat.py` 用不实现 `restore` 的假 worker 离线覆盖同一套枚举逻辑（分支调度、全部失败原因、caps、排序、canonical 字节稳定性、去重规则）。
-9. 构建与回归：仅新增 Python 库、acceptance 与离线测试，未改动 C# 或 client 协议；`python/acceptance.py`、`python/portable_modes_acceptance.py`、`python/neow_run_acceptance.py` 行为不变（direct reset hash 仍为 `CEE9B22A…DBEF7B`，证据与命令见 `docs/persistent-environment.md` Validation 节）。
+9. 构建与回归：仅新增 Python 库、acceptance 与离线测试，未改动 C# 或 client 协议；`python/acceptance.py`、`python/portable_modes_acceptance.py`、`python/neow_run_acceptance.py` 行为不变（direct reset hash 仍为 `CEE9B22A…DBEF7B`，证据与命令见 `docs/persistent-environment-evidence.md` 的构造边界与 E1/E2 回归对比节）。
 
 **结果**
 
@@ -340,7 +341,7 @@ E7 真正跨 worker combat keyframe 调查
 - 新增 `python/generate_first_combat_corpus.py`
 - 复用 `python/native_rollout_farm.py` 的 worker/metrics/shard 模式，不复制策略训练逻辑
 - 新增纯 Python schema/split/serialization tests
-- 更新 `docs/persistent-environment.md`；仅在证据门通过后更新 `docs/project-status-and-review-guide.md`
+- 更新 `docs/persistent-environment.md` 的接口契约与 `docs/persistent-environment-evidence.md` 的证据记录；仅在证据门通过后更新 `docs/project-status-and-review-guide.md`
 
 **Fixed**
 
@@ -420,7 +421,7 @@ E7 真正跨 worker combat keyframe 调查
 4. **Root gate**：E4 所有有效根均为 Turn 1 / Play，三种 restore 路径一致。
 5. **Authority gate**：E5 冻结 manifest 根差分和代表性完整战斗差分为零；unsupported/error/cap 为零，或以明确不支持状态阻止发布。
 6. **Farm gate**：E6 worker-count invariance、resume、soak、public-tree 和 broad validation 通过。
-7. **Documentation gate**：更新 `docs/persistent-environment.md` 的实际接口与证据；只有当前能力确实改变时才修改 `docs/project-status-and-review-guide.md`。不得把 corpus 生成成功写成策略质量或全局 certification。
+7. **Documentation gate**：更新 `docs/persistent-environment.md` 的实际接口与 `docs/persistent-environment-evidence.md` 的证据；只有当前能力确实改变时才修改 `docs/project-status-and-review-guide.md`。不得把 corpus 生成成功写成策略质量或全局 certification。
 
 ## 8. Re-plan 条件
 

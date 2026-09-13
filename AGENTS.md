@@ -19,7 +19,7 @@ Use evidence in this order when sources disagree:
 4. `docs/architectural-guardrails.md` for durable research and architecture invariants.
 5. Roadmaps, proposals, estimates, and historical discussion.
 
-Read `docs/project-status-and-review-guide.md` before reviewing project capability, changing milestone status, or making architectural claims. Read `docs/architectural-guardrails.md` before changing search, training, reward, value, promotion, or simulation architecture.
+Read `docs/project-status-and-review-guide.md` before reviewing project capability, changing milestone status, or making architectural claims. Read `docs/architectural-guardrails.md` before changing search, training, reward, value, promotion, or simulation architecture. `docs/README.md` indexes the documentation set and states which document owns which claim; place new durable knowledge in that canonical home instead of creating a parallel account.
 
 Do not copy volatile status, benchmark numbers, build identifiers, or file inventories into this file. Update the owning maintained document whenever a milestone, architectural decision, evidence boundary, or externally stated capability changes materially. Record large architectural decisions in the relevant local design or status document; opening an external issue is not required.
 
