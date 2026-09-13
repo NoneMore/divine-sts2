@@ -16,6 +16,13 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private static PersistentNativeCombatEnvironment? _activeEnvironment;
     private static bool _eventPresentationScope;
     private static Task? _scopedScheduledTask;
+    /// The unlock profile every faithful run start uses. It is the shipped `UnlockState.all`
+    /// instance: every timeline epoch revealed (including `NEOW_EPOCH`, which is what makes
+    /// `ExtraRunFields.StartedWithNeow` true and the starting map point Ancient) and every
+    /// encounter seen, with a run count high enough that no first-run tutorial ordering applies.
+    /// It is pinned rather than caller-supplied because the profile decides the whole Act 1 world,
+    /// and it is published in the Neow observation, in `hello.run_start`, and in diagnostics.
+    private const string NeowUnlockProfile = "unlock_state_all";
     private readonly NativeAssemblyContext _context;
     private readonly string _assemblyHash, _pckHash, _productVersion;
     // A complete combat rollout can emit dozens of resident branch handles.
@@ -96,8 +103,16 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         protocol_version = ProtocolConstants.Version, observation_schema_version = ProtocolConstants.ObservationSchemaVersion,
         server = "sts2-native-sim-godot", persistent = true, certifying = false,
         game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-        methods = new[] { "hello", "catalog", "reset", "run_reset", "map_reset", "reward_reset", "item_reward_reset", "custom_reward_reset", "rest_reset", "event_reset", "observe", "run_observe", "map_observe", "reward_observe", "custom_reward_observe", "rest_observe", "event_observe", "legal_actions", "step", "run_step", "map_step", "reward_step", "custom_reward_step", "rest_step", "event_step", "fork", "restore", "diagnostics", "close" },
-        supported_subset = new { characters = "native CharacterModel entries", encounters = "native EncounterModel entries", cards = "base/upgraded cards plus asynchronous native card, bundle, and relic choices", actions = new[] { "play_card", "use_potion", "discard_potion", "end_turn", "choose_cards", "choose_option", "choose_map", "choose_reward", "choose_rest", "choose_event", "open_treasure", "choose_treasure", "buy_shop", "choose_custom_reward", "skip_custom_rewards", "advance_act" }, potions = true, map = "native deterministic routing graph with composed combat, rest, event, treasure, shop, and inter-act transitions", events = "native model initialization, option continuations, nested event-created combats, blocking custom/linked rewards, and the final victory event" }
+        methods = new[] { "hello", "catalog", "reset", "run_reset", "neow_run_reset", "map_reset", "reward_reset", "item_reward_reset", "custom_reward_reset", "rest_reset", "event_reset", "observe", "run_observe", "map_observe", "reward_observe", "custom_reward_observe", "rest_observe", "event_observe", "legal_actions", "step", "run_step", "map_step", "reward_step", "custom_reward_step", "rest_step", "event_step", "fork", "restore", "diagnostics", "close" },
+        run_start = new
+        {
+            method = "neow_run_reset",
+            unlock_profile = NeowUnlockProfile,
+            starting_point = "MapPointType.Ancient",
+            starting_event = "NEOW",
+            note = "Pinned unlock profile with every epoch revealed and every encounter seen; ExtraRunFields.StartedWithNeow is derived from it, so the run always begins at the real Ancient event room."
+        },
+        supported_subset = new { characters = "native CharacterModel entries", encounters = "native EncounterModel entries", cards = "base/upgraded cards plus asynchronous native card, bundle, and relic choices", actions = new[] { "play_card", "use_potion", "discard_potion", "end_turn", "choose_cards", "choose_option", "choose_map", "choose_reward", "choose_rest", "choose_event", "proceed_neow", "open_treasure", "choose_treasure", "buy_shop", "choose_custom_reward", "skip_custom_rewards", "advance_act" }, potions = true, map = "native deterministic routing graph with composed combat, rest, event, treasure, shop, and inter-act transitions", events = "native model initialization, option continuations, nested event-created combats, blocking custom/linked rewards, and the final victory event", run_start = "native Act 1 world generation plus the shipped starting Ancient event reached through the real Ancient map point" }
     };
 
     public object Catalog()
@@ -180,6 +195,37 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         => await ResetToAsync(new ResetProvenance(ResetMode.Event, EventId: request.EventId), request.State,
             new { kind = "event_reset", event_id = request.EventId, replayed_actions = 0 });
 
+    /// Faithful run start. The caller supplies only real start parameters, and the shipped
+    /// lifecycle performs everything else: run construction from the pinned unlock profile,
+    /// native act-map generation, entering the real starting Ancient map point, and the Neow
+    /// event itself. The returned decision is the Neow event choice, not a synthesized state.
+    public async Task<EnvironmentResult> NeowRunResetAsync(NeowRunStartRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Seed)) throw new ProtocolException("invalid_reset", "neow_run_reset requires a seed.");
+        if (string.IsNullOrWhiteSpace(request.Character)) throw new ProtocolException("invalid_reset", "neow_run_reset requires a character.");
+        return await ResetToAsync(new ResetProvenance(ResetMode.NeowRun), ToNeowResetRequest(request),
+            new { kind = "neow_run_reset", unlock_profile = NeowUnlockProfile, starting_event = "NEOW", replayed_actions = 0 });
+    }
+
+    /// Projects the run-start contract onto the internal reset request that every lifecycle reads.
+    /// Only a character starting loadout survives: deck, relic, potion, hand, enemy, and RNG
+    /// inputs are not expressible on the wire and stay at their constructed defaults.
+    private static ResetRequest ToNeowResetRequest(NeowRunStartRequest request) => new(
+        GameBuild: request.GameBuild,
+        Seed: request.Seed,
+        RngCounters: null,
+        Character: request.Character,
+        Ascension: request.Ascension,
+        Encounter: "",
+        CurrentHp: 1,
+        MaxHp: 1,
+        Deck: [],
+        InitialHand: null,
+        Relics: null,
+        Potions: null,
+        Gold: 0,
+        UseCharacterStartingLoadout: true);
+
     /// Shared reset prologue: install the reset provenance, reconstruct the exact lifecycle that
     /// provenance names, and only then run the mode-specific initialization. The previous run's
     /// rewards synchronizer is told the run is leaving between the two, which is where the shipped
@@ -225,7 +271,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         switch (provenance.Mode)
         {
             case ResetMode.Run:
+            case ResetMode.NeowRun:
                 // A composed run owns the run and its map; it never builds a synthetic combat.
+                // A faithful run start owns exactly the same objects and additionally enters the
+                // shipped starting Ancient event room during its own initialization.
                 ConstructRunOnly(state);
                 break;
             case ResetMode.Combat:
@@ -271,6 +320,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 break;
             case ResetMode.CustomReward:
             case ResetMode.Event:
+            case ResetMode.NeowRun:
                 throw new ProtocolException("invalid_reset_mode", $"Reset mode '{provenance.Mode.Wire()}' has an asynchronous lifecycle.");
             default:
                 throw new ProtocolException("unknown_reset_mode", $"Reset mode '{provenance.Mode}' has no initialization lifecycle.");
@@ -289,6 +339,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 _eventMode = true;
                 _eventId = provenance.EventId ?? throw new ProtocolException("invalid_reset_mode", "Event provenance is missing event_id.");
                 await InitializeEventAsync();
+                break;
+            case ResetMode.NeowRun:
+                _runMode = true; _runStage = "neow";
+                await InitializeNeowRunAsync();
                 break;
             default:
                 InitializeMode(provenance);
@@ -340,6 +394,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else if (action.Kind == "choose_reward") await ChooseRewardAsync(Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "choose_rest") await ChooseRestAsync((string)action.Parameters["option_id"]!);
         else if (action.Kind == "choose_event") await ChooseEventAsync(Convert.ToInt32(action.Parameters["option_index"]));
+        else if (action.Kind == "proceed_neow") ProceedNeow();
         else if (action.Kind == "generate_room_rewards") await GenerateRoomRewardsAsync();
         else if (action.Kind == "choose_room_reward") await ChooseRoomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "leave_room_rewards") await LeaveRoomRewardsAsync();
@@ -371,7 +426,22 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     public string Fork() => GetOrAddCurrentBranch();
-    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, last_construction = _lastConstructionAudit, last_restore = _lastRestoreAudit, reset_mode = _provenance?.Mode.Wire() };
+    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, last_construction = _lastConstructionAudit, last_restore = _lastRestoreAudit, reset_mode = _provenance?.Mode.Wire(), run_identity = RunIdentity() };
+
+    /// Identity seam for the run-start contract. The Neow slice must keep the same `Player`,
+    /// `RunState`, and player `Creature` from the Neow decision through the first combat, so a
+    /// validation run can compare these identity hashes across RPCs instead of trusting that no
+    /// reassignment happened. Identity hashes are diagnostic only and never enter a canonical
+    /// observation or the state hash. `RuntimeHelpers.GetHashCode` is the same identity evidence
+    /// the E0 probe recorded; it is stable while the referenced objects stay alive, which these
+    /// fields guarantee.
+    private object? RunIdentity() => _run is null || _player is null ? null : new
+    {
+        run_state = RuntimeHelpers.GetHashCode(_run),
+        player = RuntimeHelpers.GetHashCode(_player),
+        creature = ReflectionTools.Get(_player, "Creature") is { } creature ? RuntimeHelpers.GetHashCode(creature) : (int?)null,
+        unlock_profile = _provenance?.Mode == ResetMode.NeowRun ? NeowUnlockProfile : null
+    };
 
     public async Task<EnvironmentResult> RestoreAsync(string id)
     {
@@ -501,6 +571,11 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private RunConstruction ConstructRun(ResetRequest r)
     {
         Type db = T("MegaCrit.Sts2.Core.Models.ModelDb"), playerType = T("MegaCrit.Sts2.Core.Entities.Players.Player");
+        // A faithful run start must reproduce production's own start seam: the pinned unlock
+        // profile that reveals NEOW_EPOCH, and `RunState.CreateForNewRun`, which is what
+        // `NGame.StartNewSingleplayerRun` calls. Every other mode keeps the synthetic unlock
+        // profile and `CreateForTest` so their reset contracts stay bit-identical.
+        bool runStart = _provenance!.Mode == ResetMode.NeowRun;
         // Cancel and detach every shipped combat continuation before replacing the
         // singleton's state. Without the native reset lifecycle, a completion from
         // the prior reconstructed combat can end the newly installed combat.
@@ -510,7 +585,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         // Composed runs use it to start real combats from the map without ever constructing one.
         _manager = nativeCombatManager;
         object character = Find(ReflectionTools.GetStatic(db, "AllCharacters")!, r.Character);
-        object unlock = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), new List<string>(), List(T("MegaCrit.Sts2.Core.Models.ModelId"), []), 0);
+        object unlock = runStart
+            ? ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), "all")
+                ?? throw new ProtocolException("unsupported_build_contract", "Pinned UnlockState has no `all` profile.")
+            : ReflectionTools.Create(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), new List<string>(), List(T("MegaCrit.Sts2.Core.Models.ModelId"), []), 0);
         _player = playerType.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForNewRun" && x.GetParameters().Length == 3).Invoke(null, [character, unlock, (ulong)1])!;
         _cardInstanceIds.Clear();
         _deckInstanceIds.Clear();
@@ -553,8 +631,12 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object acts = ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Models.ActModel"), "GetDefaultList")!;
         object modifiers = List(T("MegaCrit.Sts2.Core.Models.ModifierModel"), []);
         object mode = Enum.GetValues(T("MegaCrit.Sts2.Core.Runs.GameMode")).GetValue(0)!;
-        _run = T("MegaCrit.Sts2.Core.Runs.RunState").GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForTest")
-            .Invoke(null, [List(playerType, [_player]), acts, modifiers, mode, r.Ascension, r.Seed])!;
+        _run = runStart
+            ? T("MegaCrit.Sts2.Core.Runs.RunState").GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Single(x => x.Name == "CreateForNewRun" && x.GetParameters().Length == 6)
+                .Invoke(null, [List(playerType, [_player]), MutableActs(acts), modifiers, mode, r.Ascension, r.Seed])!
+            : T("MegaCrit.Sts2.Core.Runs.RunState").GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForTest")
+                .Invoke(null, [List(playerType, [_player]), acts, modifiers, mode, r.Ascension, r.Seed])!;
         object runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!;
         if (_runServicesInitialized)
         {
@@ -849,6 +931,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (_customRewardMode) return CaptureCustomRewards(transition);
         if (_runMode && _runStage == "run_terminal") return CaptureRunTerminal(transition);
         if (_runMode && _runStage == "act_transition") return CaptureActTransition(transition);
+        if (_runMode && _runStage == "neow") return CaptureNeow(transition);
+        if (_runMode && _runStage == "neow_map") return CaptureMap(transition);
         if (_runMode && _runStage == "map") return CaptureMap(transition);
         if (_runMode && _runStage == "rewards") return CaptureRoomRewards(transition);
         if (_runMode && _runStage == "treasure") return CaptureTreasure(transition);
@@ -936,6 +1020,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
         if (_runMode && _runStage == "run_terminal") return [];
         if (_runMode && _runStage == "act_transition") return [new("advance_act", "advance_act", new Dictionary<string, object?>())];
+        if (_runMode && _runStage == "neow") return BuildNeowActions();
+        if (_runMode && _runStage == "neow_map") return BuildMapActions();
         if (_runMode && _runStage == "map") return BuildMapActions();
         if (_runMode && _runStage == "rewards") return BuildRoomRewardActions();
         if (_runMode && _runStage == "treasure") return BuildTreasureActions();
@@ -993,13 +1079,173 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         task.GetAwaiter().GetResult();
     }
 
+    /// The faithful run start, in the order the E0 launch contract fixed: the run is already
+    /// constructed, so generate the Act 1 world, enter the real starting Ancient map point, and
+    /// let the shipped event room begin Neow. Nothing here reimplements a Neow blessing; the
+    /// event and every nested choice it opens run through shipped machinery.
+    private async Task InitializeNeowRunAsync()
+    {
+        // The same combat-manager cleanup the composed-run map path performs. Shipped
+        // `CombatManager.Reset(graceful: false)` deliberately keeps the previous run's stale
+        // `CombatState` reference, and a stale reference makes the next `SetUpCombat` fail; without
+        // this, a worker could serve only one run start per process.
+        ReflectionTools.Invoke(_manager!, "Reset", true);
+        object runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!;
+        ReflectionTools.Invoke(runManager, "GenerateRooms");
+        object generated = ReflectionTools.Invoke(runManager, "GenerateMap")!;
+        if (generated is not Task map) throw new ProtocolException("invalid_state", "Native map generation did not return a task.");
+        await map.ConfigureAwait(false);
+        AssertNeowStartContract();
+        await EnterStartingAncientAsync().ConfigureAwait(false);
+    }
+
+    /// `EnterMapPointInternal` does not record the coordinate; production's `EnterMapCoord` adds it
+    /// first, and the whole later route depends on `CurrentMapCoord` starting at the Ancient point.
+    private async Task EnterStartingAncientAsync()
+    {
+        object startingPoint = StartingMapPoint();
+        object coord = ReflectionTools.Get(startingPoint, "coord")
+            ?? throw new ProtocolException("unsupported_build_contract", "The native starting map point has no coordinate.");
+        if (!(bool)ReflectionTools.Invoke(_run!, "AddVisitedMapCoord", coord)!)
+            throw new ProtocolException("invalid_state", "The native starting map coordinate was already visited.");
+        object runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!;
+        object pointType = ContractEnum(T("MegaCrit.Sts2.Core.Map.MapPointType"), "Ancient");
+        // The shipped event start is fire-and-forget (`TaskHelper.RunSafely`), so the presentation
+        // scope both suppresses the event scene node and captures the scheduled task to await.
+        _eventPresentationScope = true; _scopedScheduledTask = null;
+        try
+        {
+            if (ReflectionTools.Invoke(runManager, "EnterMapPointInternal", 1, pointType, null, false) is Task entry)
+                await entry.ConfigureAwait(false);
+            BindNeowEvent();
+            if (_scopedScheduledTask is { } scheduled) await scheduled.ConfigureAwait(false);
+        }
+        finally
+        {
+            _eventPresentationScope = false; _scopedScheduledTask = null;
+        }
+        // Belt and braces for the same fire-and-forget seam: if any later scheduled task was
+        // captured instead of `BeginEvent`, keep yielding to the shipped continuation until the
+        // event exposes a decision. Failing to reach one is loud, never a silent empty event.
+        for (int attempt = 0; attempt < 1024 && !NeowDecisionReady(); attempt++) await Task.Yield();
+        AssertNeowStartEvent();
+    }
+
+    /// Binds the mutable event instance the shipped `EventSynchronizer` created for this player.
+    private void BindNeowEvent()
+    {
+        object room = ReflectionTools.Get(_run!, "CurrentRoom")
+            ?? throw new ProtocolException("invalid_state", "Entering the native starting Ancient point produced no room.");
+        string roomType = Convert.ToString(ReflectionTools.Get(room, "RoomType"))!;
+        if (!StringComparer.Ordinal.Equals(roomType, "Event"))
+            throw new ProtocolException("unsupported_build_contract", $"The native starting Ancient point produced room type '{roomType}', not Event.");
+        _event = ReflectionTools.Get(room, "LocalMutableEvent")
+            ?? throw new ProtocolException("invalid_state", "The native starting Ancient event room exposed no local event instance.");
+        _eventId = Entry(_event);
+        if (!StringComparer.Ordinal.Equals(_eventId, "NEOW"))
+            throw new ProtocolException("neow_unavailable",
+                $"The pinned starting Ancient event is '{_eventId}', not NEOW. The pinned unlock profile must reveal NEOW_EPOCH and allow the Ancient start.");
+    }
+
+    /// The E0 launch contract's fail-loud preconditions, read from shipped state rather than
+    /// re-derived: the run must have started with Neow, the starting point must be the Ancient
+    /// map point, and every first-floor node must be a combat node.
+    private void AssertNeowStartContract()
+    {
+        object extraFields = ReflectionTools.Get(_run!, "ExtraFields")
+            ?? throw new ProtocolException("unsupported_build_contract", "The pinned RunState exposes no ExtraFields.");
+        if (ReflectionTools.Get(extraFields, "StartedWithNeow") is not true)
+            throw new ProtocolException("neow_unavailable",
+                "The pinned unlock profile did not set ExtraRunFields.StartedWithNeow, so this run start would silently skip Neow and force the starting point to Monster.");
+        string pointType = Convert.ToString(ReflectionTools.Get(StartingMapPoint(), "PointType"))!;
+        if (!StringComparer.Ordinal.Equals(pointType, "Ancient"))
+            throw new ProtocolException("neow_unavailable", $"The native starting map point is '{pointType}', not Ancient.");
+        AssertFirstFloorIsCombat();
+    }
+
+    private void AssertNeowStartEvent()
+    {
+        if (ReflectionTools.Enumerate(ReflectionTools.Get(_event!, "CurrentOptions")).Count == 0 && ReflectionTools.Get(_event!, "IsFinished") is not true)
+            throw new ProtocolException("neow_unavailable", "The native NEOW event exposed no options after its scheduled begin task was awaited.");
+        if (!ShouldAllowAncient())
+            throw new ProtocolException("neow_unavailable", "The shipped Hook.ShouldAllowAncient rejected NEOW in this run state.");
+    }
+
+    private bool NeowDecisionReady() => _event is not null
+        && (ReflectionTools.Get(_event, "IsFinished") is true
+            || ReflectionTools.Enumerate(ReflectionTools.Get(_event, "CurrentOptions")).Count > 0);
+
+    private object StartingMapPoint() => ReflectionTools.Get(ReflectionTools.Get(_run!, "Map")!, "StartingMapPoint")
+        ?? throw new ProtocolException("invalid_state", "The generated native act map exposes no starting map point.");
+
+    /// The shipped travel seam the map screen itself uses. It is not the same as `Children`: a
+    /// relic such as Winged Boots makes the whole next row travelable, and Neow can grant it.
+    private IEnumerable<object?> NeowTravelablePoints() => ReflectionTools.Enumerate(
+        ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Map.MapTravel"), "GetTravelablePointsFrom", _run!, StartingMapPoint()));
+
+    private void AssertFirstFloorIsCombat()
+    {
+        foreach (object? point in NeowTravelablePoints())
+        {
+            if (point is null) continue;
+            string pointType = Convert.ToString(ReflectionTools.Get(point, "PointType"))!;
+            if (!StringComparer.Ordinal.Equals(pointType, "Monster"))
+                throw new ProtocolException("unsupported_neow_first_floor",
+                    $"The travelable first map floor contains '{pointType}'. The first-combat route only supports an all-Monster first floor.");
+        }
+    }
+
+    /// The shipped hook decision for the Ancient event this room is actually running. The
+    /// canonical model comes from the room itself rather than a name lookup, because Ancients live
+    /// in `ModelDb.AllAncients`, not in the `AllEvents` collection a standalone event reset uses.
+    private bool ShouldAllowAncient()
+    {
+        object? canonical = ReflectionTools.Get(_run!, "CurrentRoom") is { } room ? ReflectionTools.Get(room, "CanonicalEvent") : null;
+        if (canonical is null || !T("MegaCrit.Sts2.Core.Models.AncientEventModel").IsInstanceOfType(canonical)) return false;
+        return ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Hooks.Hook"), "ShouldAllowAncient", _run!, _player!, canonical) is true;
+    }
+
+    /// An enum member of the pinned build by name, failing loudly when the pin no longer has it.
+    private object ContractEnum(Type type, string name) => Enum.IsDefined(type, name)
+        ? Enum.Parse(type, name)
+        : throw new ProtocolException("unsupported_build_contract", $"Pinned {type.Name} has no member '{name}'.");
+
+    /// The decision actions of the Neow stage: the shipped event options, any nested native choice
+    /// or reward set the chosen blessing opened, and one explicit completion action once the event
+    /// is finished. Completion is a coordinator transition only; the room exit is left to the next
+    /// native `EnterMapPointInternal`, exactly as the production map screen leaves it.
+    private IReadOnlyList<LegalAction> BuildNeowActions()
+    {
+        if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
+        if (_pendingChoice is not null) return BuildChoiceActions(_pendingChoice);
+        if (_event is null) throw new ProtocolException("invalid_state", "The Neow stage has no native event instance.");
+        if (ReflectionTools.Get(_event, "IsFinished") is true) return [new("proceed_neow", "proceed_neow", new Dictionary<string, object?>())];
+        return BuildEventOptions(_event);
+    }
+
+    /// Returns the map decision of the same run. The production equivalent is
+    /// `NEventRoom.Proceed` -> `NMapScreen`, which is presentation only: no room is popped and no
+    /// `Player`/`RunState` is replaced.
+    private void ProceedNeow()
+    {
+        if (!_runMode || _runStage != "neow") throw new ProtocolException("invalid_action", $"Cannot proceed past Neow during run stage '{_runStage}'.");
+        if (_event is null || ReflectionTools.Get(_event, "IsFinished") is not true)
+            throw new ProtocolException("invalid_action", "The native NEOW event has not finished yet.");
+        AssertFirstFloorIsCombat();
+        _runStage = "neow_map";
+    }
+
     private IReadOnlyList<LegalAction> BuildMapActions()
     {
         object map = ReflectionTools.Get(_run!, "Map")!;
         object? current = ReflectionTools.Get(_run!, "CurrentMapPoint");
-        IEnumerable<object?> candidates = current is null
-            ? ReflectionTools.Enumerate(ReflectionTools.Get(map, "startMapPoints"))
-            : ReflectionTools.Enumerate(ReflectionTools.Get(current, "Children"));
+        // The post-Neow decision comes from the shipped travel seam, which is what the map screen
+        // itself calls; every other map stage enumerates the current point's children.
+        IEnumerable<object?> candidates = _runStage == "neow_map"
+            ? NeowTravelablePoints()
+            : current is null
+                ? ReflectionTools.Enumerate(ReflectionTools.Get(map, "startMapPoints"))
+                : ReflectionTools.Enumerate(ReflectionTools.Get(current, "Children"));
         return candidates.Where(point => point is not null).Select(point => point!).Select(point =>
         {
             object coord = ReflectionTools.Get(point, "coord")!;
@@ -1020,7 +1266,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private async Task EnterRunMapCoordAsync(int col, int row)
     {
-        if (_runStage != "map") throw new ProtocolException("invalid_action", $"Cannot enter a map coordinate during run stage '{_runStage}'.");
+        // `neow_map` is the post-Neow map decision of the same run; it advances exactly like the
+        // composed-run map stage and never returns to it, so the Neow-only travel seam cannot leak
+        // into a later act-1 map decision.
+        if (_runStage is not ("map" or "neow_map")) throw new ProtocolException("invalid_action", $"Cannot enter a map coordinate during run stage '{_runStage}'.");
         object map = ReflectionTools.Get(_run!, "Map")!, coord = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Map.MapCoord"), col, row);
         object point = ReflectionTools.Invoke(map, "GetPoint", coord)!;
         if (!(bool)ReflectionTools.Invoke(_run!, "AddVisitedMapCoord", coord)!)
@@ -1033,7 +1282,13 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         _mapMode = false; _rewardMode = false; _restMode = false; _eventMode = false;
         if (roomType is "Monster" or "Elite" or "Boss")
         {
-            if (ReflectionTools.Invoke(_manager!, "StartCombatInternal") is Task startCombat) await startCombat.ConfigureAwait(false);
+            // Combat entry runs shipped `AfterRoomEntered`/turn-start hooks, and a relic such as
+            // Gambling Chip opens a native card choice from `AfterPlayerTurnStart` while the combat
+            // is starting. Neow can grant exactly that relic, so map entry must be suspendable like
+            // any other native transition; awaiting the raw task would sit silently on an
+            // unresolved choice instead of exposing a `card_choice` decision.
+            await StartTransitionAsync(() => ReflectionTools.Invoke(_manager!, "StartCombatInternal") as Task
+                ?? throw new ProtocolException("invalid_state", "Native combat start did not return a task.")).ConfigureAwait(false);
             _runStage = "combat";
             RebindEnteredCombat(room);
         }
@@ -1330,18 +1585,23 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (_event is null) return [];
         EnsureHeadlessArchitectOption();
         if ((bool)ReflectionTools.Get(_event, "IsFinished")!) return _runMode ? [new("leave_event", "leave_event", new Dictionary<string, object?>())] : [];
-        return ReflectionTools.Enumerate(ReflectionTools.Get(_event, "CurrentOptions"))
-            .Select((option, index) => (option, index))
-            .Where(pair => pair.option is not null && !(bool)ReflectionTools.Get(pair.option, "IsLocked")! && !(bool)ReflectionTools.Get(pair.option, "WasChosen")!)
-            .Select(pair =>
-            {
-                string textKey = (string)ReflectionTools.Get(pair.option!, "TextKey")!;
-                return new LegalAction($"choose_event:{pair.index}:{Uri.EscapeDataString(textKey)}", "choose_event", new Dictionary<string, object?>
-                {
-                    ["option_index"] = pair.index, ["text_key"] = textKey, ["is_proceed"] = ReflectionTools.Get(pair.option!, "IsProceed")
-                });
-            }).ToArray();
+        return BuildEventOptions(_event);
     }
+
+    /// The shipped event's current selectable options as stable legal actions. The action id and
+    /// its `text_key` parameter carry the option's semantic identity, so two environments can be
+    /// compared on the option that was chosen rather than on a filtered ordinal.
+    private IReadOnlyList<LegalAction> BuildEventOptions(object nativeEvent) => ReflectionTools.Enumerate(ReflectionTools.Get(nativeEvent, "CurrentOptions"))
+        .Select((option, index) => (option, index))
+        .Where(pair => pair.option is not null && !(bool)ReflectionTools.Get(pair.option, "IsLocked")! && !(bool)ReflectionTools.Get(pair.option, "WasChosen")!)
+        .Select(pair =>
+        {
+            string textKey = (string)ReflectionTools.Get(pair.option!, "TextKey")!;
+            return new LegalAction($"choose_event:{pair.index}:{Uri.EscapeDataString(textKey)}", "choose_event", new Dictionary<string, object?>
+            {
+                ["option_index"] = pair.index, ["text_key"] = textKey, ["is_proceed"] = ReflectionTools.Get(pair.option!, "IsProceed")
+            });
+        }).ToArray();
 
     private void EnsureHeadlessArchitectOption()
     {
@@ -1413,11 +1673,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (_event is null) throw new ProtocolException("invalid_state", "Event mode has no native event instance.");
         LegalAction[] actions = BuildEventActions().ToArray();
         object creature = ReflectionTools.Get(_player!, "Creature")!, deck = ReflectionTools.Get(_player!, "Deck")!;
-        object[] options = ReflectionTools.Enumerate(ReflectionTools.Get(_event, "CurrentOptions")).Select((option, index) => option is null ? null : new
-        {
-            option_index = index, text_key = ReflectionTools.Get(option, "TextKey"), locked = ReflectionTools.Get(option, "IsLocked"),
-            chosen = ReflectionTools.Get(option, "WasChosen"), is_proceed = ReflectionTools.Get(option, "IsProceed")
-        }).Where(option => option is not null).ToArray()!;
+        object[] options = EventOptionSnapshot(_event);
         bool finished = (bool)ReflectionTools.Get(_event, "IsFinished")!;
         object observation = new
         {
@@ -1439,6 +1695,56 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
         return new(observation, _hash, actions, false, false, handle, transition, ScoringFeatures());
     }
+
+    /// The Neow decision state. It reuses the shipped event's option projection, and it carries the
+    /// run-start provenance the E0 contract requires to be observable: the pinned unlock profile,
+    /// `StartedWithNeow`, the starting map point type, the hook decision, and the first-floor node
+    /// types. Those provenance fields belong to this decision observation; they are not part of a
+    /// training root, whose boundary stays `combat.turn == 1 && phase == Play`.
+    private EnvironmentResult CaptureNeow(object? transition)
+    {
+        EnsureReset();
+        if (_event is null) throw new ProtocolException("invalid_state", "The Neow stage has no native event instance.");
+        LegalAction[] actions = BuildNeowActions().ToArray();
+        object creature = ReflectionTools.Get(_player!, "Creature")!, deck = ReflectionTools.Get(_player!, "Deck")!;
+        object[] options = EventOptionSnapshot(_event);
+        bool finished = ReflectionTools.Get(_event, "IsFinished") is true;
+        object observation = new
+        {
+            schema_version = ProtocolConstants.ObservationSchemaVersion,
+            game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
+            run = new
+            {
+                seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = RunRngCounters(),
+                current_hp = ReflectionTools.Get(creature, "CurrentHp"), max_hp = ReflectionTools.Get(creature, "MaxHp"),
+                deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => new { model_id = Entry(card!), upgrades = ReflectionTools.Get(card!, "CurrentUpgradeLevel") }).ToArray(),
+                relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(),
+                potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray()
+            },
+            run_start = new
+            {
+                unlock_profile = NeowUnlockProfile,
+                started_with_neow = ReflectionTools.Get(ReflectionTools.Get(_run!, "ExtraFields")!, "StartedWithNeow"),
+                starting_point_type = Convert.ToString(ReflectionTools.Get(StartingMapPoint(), "PointType")),
+                act_floor = ReflectionTools.Get(_run!, "ActFloor"),
+                should_allow_ancient = ShouldAllowAncient(),
+                first_floor_types = NeowTravelablePoints().Where(point => point is not null).Select(point => Convert.ToString(ReflectionTools.Get(point!, "PointType"))).ToArray()
+            },
+            @event = new { model_id = _eventId, options, finished },
+            outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
+            decision = new { kind = _pendingRewardsSet is not null ? "custom_reward_choice" : _pendingChoice is not null ? _pendingChoice.DecisionKind : finished ? "neow_complete" : "event_choice", legal_actions = actions },
+            terminal = false, victory = false
+        };
+        _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
+        return new(observation, _hash, actions, false, false, handle, transition, ScoringFeatures());
+    }
+
+    private static object[] EventOptionSnapshot(object nativeEvent) => ReflectionTools.Enumerate(ReflectionTools.Get(nativeEvent, "CurrentOptions"))
+        .Select((option, index) => option is null ? null : new
+        {
+            option_index = index, text_key = ReflectionTools.Get(option, "TextKey"), locked = ReflectionTools.Get(option, "IsLocked"),
+            chosen = ReflectionTools.Get(option, "WasChosen"), is_proceed = ReflectionTools.Get(option, "IsProceed")
+        }).Where(option => option is not null).ToArray()!;
 
     private void EnsureRewardsSetViewing(object synchronizer, object rewardsSet)
     {
@@ -2207,6 +2513,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private static string Entry(object model) => Convert.ToString(ReflectionTools.Get(ReflectionTools.Get(model, "Id") ?? ReflectionTools.Get(model, "ModelId")!, "Entry"))!;
     private Type T(string name) => _context.RequireType(name);
     private static object List(Type type, IReadOnlyList<object?> items) { IList list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!; foreach (object? item in items) list.Add(item); return list; }
+    /// `RunState.CreateForNewRun` requires callers to pass mutable acts; `CreateForTest` mutates the
+    /// canonical list itself. Cloning here keeps the world both factories go on to generate identical.
+    private object MutableActs(object acts) => List(T("MegaCrit.Sts2.Core.Models.ActModel"),
+        ReflectionTools.Enumerate(acts).Where(act => act is not null).Select(act => ReflectionTools.Invoke(act!, "ToMutable")!).ToArray());
     private void EnsureReset() { if (_reset is null || _provenance is null) throw new ProtocolException("not_reset", "Call reset first."); }
     private void Validate(ResetRequest r)
     {

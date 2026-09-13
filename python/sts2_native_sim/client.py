@@ -34,6 +34,7 @@ PORTABLE_BRANCH_SCHEMA_VERSION = 1
 RESET_METHOD_PROVENANCE = {
     "reset": "combat",
     "run_reset": "run",
+    "neow_run_reset": "neow_run",
     "map_reset": "map",
     "reward_reset": "card_reward",
     "item_reward_reset": "item_reward",
@@ -276,6 +277,17 @@ class NativeWorker:
         return result
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
         result = self.request("run_reset", state); self._record_reset("run_reset", state, state, result)
+        return result
+    def neow_run_reset(self, run_start: dict[str, Any]) -> dict[str, Any]:
+        """Begin one real run at the shipped starting Ancient (Neow) event room.
+
+        The run-start record carries only build, seed, character, and ascension; the worker owns
+        the pinned unlock profile and the whole Neow lifecycle. The returned decision is the Neow
+        event choice, and the worker's own `step` walks it to the first map decision and first
+        combat. `run_start` doubles as the reset request for portable replay, because the reset RPC
+        takes that record directly instead of wrapping it in a `state` field.
+        """
+        result = self.request("neow_run_reset", run_start); self._record_reset("neow_run_reset", run_start, run_start, result)
         return result
     def map_reset(self, state: dict[str, Any]) -> dict[str, Any]:
         result = self.request("map_reset", state); self._record_reset("map_reset", state, state, result)

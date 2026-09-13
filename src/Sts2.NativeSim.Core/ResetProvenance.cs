@@ -14,6 +14,12 @@ public enum ResetMode
     Map,
     /// <summary>Composed run reset: run construction plus native rooms and act map, no combat.</summary>
     Run,
+    /// <summary>
+    /// Faithful run-start reset: run construction from the pinned unlock profile plus native
+    /// rooms and act map, then the shipped starting Ancient (Neow) event room. Neow is resolved
+    /// through shipped option/nested-choice machinery before the first map decision appears.
+    /// </summary>
+    NeowRun,
     /// <summary>Card reward reset.</summary>
     CardReward,
     /// <summary>Item (relic or potion) reward reset.</summary>
@@ -38,6 +44,7 @@ public static class ResetModes
         [ResetMode.Combat] = "combat",
         [ResetMode.Map] = "map",
         [ResetMode.Run] = "run",
+        [ResetMode.NeowRun] = "neow_run",
         [ResetMode.CardReward] = "card_reward",
         [ResetMode.ItemReward] = "item_reward",
         [ResetMode.CustomReward] = "custom_reward",

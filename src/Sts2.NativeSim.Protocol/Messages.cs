@@ -42,6 +42,16 @@ public sealed record ResetRequest(
     [property: JsonPropertyName("invoke_combat_entry_hooks")] bool InvokeCombatEntryHooks = false,
     [property: JsonPropertyName("capture_orbs")] bool CaptureOrbs = true,
     [property: JsonPropertyName("use_character_starting_loadout")] bool UseCharacterStartingLoadout = false);
+/// A real run start for the `neow_run_reset` vertical slice. It deliberately carries only the
+/// parameters a new run actually begins with: the build it must match, the seed, the character,
+/// and the ascension level. A composed `ResetRequest` can express a post-Neow state (custom deck,
+/// relics, potions, hand, enemies, RNG counters); this DTO cannot, so a caller cannot forge the
+/// result of the Neow decision it is asking the shipped lifecycle to make.
+public sealed record NeowRunStartRequest(
+    [property: JsonPropertyName("game_build")] GameBuildSpec GameBuild,
+    [property: JsonPropertyName("seed")] string Seed,
+    [property: JsonPropertyName("character")] string Character,
+    [property: JsonPropertyName("ascension")] int Ascension);
 public sealed record StepRequest([property: JsonPropertyName("action_id")] string ActionId);
 public sealed record EventResetRequest(
     [property: JsonPropertyName("state")] ResetRequest State,

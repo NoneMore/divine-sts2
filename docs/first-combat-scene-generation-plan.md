@@ -1,6 +1,6 @@
 # 第一战战斗场景生成模块执行计划
 
-状态：**E0 已关闭；E1、E2 实施完成，待项目维护者复核合并；E3 起待实施**  
+状态：**E0 已关闭；E1、E2、E3 实施完成，待项目维护者复核合并；E4 起待实施**  
 规划日期：**2026-09-13**  
 治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)
 
@@ -200,6 +200,21 @@ E7 真正跨 worker combat keyframe 调查
 - 负向断言：restore 期间无 synthetic combat；篡改 mode/history/hash/build 均 fail closed。
 
 ### E3 — `neow_run_reset` 原生垂直切片
+
+**状态：实施完成（2026-09-13），Neow gate 证据见本节；合并决定由项目维护者复核。**
+
+结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment.md`）：
+
+1. 新增 `neow_run_reset` RPC 与独立 run-start DTO `NeowRunStartRequest`，线上只接受 `game_build`、`seed`、`character`、`ascension`；没有 deck/relic/potion/hand/enemy/RNG 字段，因此无法表达伪造的 post-Neow 状态。RPC 出现在 `hello.methods`、两个 host dispatch、`hello.run_start` 与 Python client 的 `RESET_METHOD_PROVENANCE`（`neow_run_reset → neow_run`）。
+2. 固定序列按 E0 §7 执行：run-only 构造（`Player.CreateForNewRun` + `RunState.CreateForNewRun` + pinned unlock profile）→ `GenerateRooms` → `GenerateMap` → `AddVisitedMapCoord(StartingMapPoint.coord)` → `EnterMapPointInternal(1, Ancient, null, saveGame: false)` → 捕获并 await fire-and-forget `BeginEvent` → Neow 决策态。开始序列前执行与 `run_reset` 相同的 `CombatManager.Reset(graceful: true)` 清理，否则 shipped `Reset(false)` 留下的 stale `CombatState` 会让下一次 `SetUpCombat` 失败，一个 worker 只能服务一次 run start。
+3. unlock profile 固定为 shipped `UnlockState.all`（`unlock_profile: "unlock_state_all"`，`docs/persistent-environment.md` 记录选择理由），该固定选择已由项目维护者确认（2026-09-13），并发布在 `hello.run_start`、Neow 观测的 `run_start` 块与 `diagnostics.run_identity`。所有 E0 前置条件以 shipped 状态 fail-loud 断言：`StartedWithNeow`、起始点 `Ancient`、事件 id `NEOW`、选项数 > 0、`Hook.ShouldAllowAncient`、首层 travelable 节点全为 `Monster`；pinned enum 成员漂移报 `unsupported_build_contract`，profile 无法产生 Neow 报 `neow_unavailable`，都不降级为 direct reset 或合成 post-Neow 状态。
+4. Neow 与全部嵌套选择都走 shipped 机制，无遗物 ID 分支：`choose_event`（身份为 shipped `text_key`）、`choose_cards`（New Leaf / Precise Scissors / Pomander / Hefty Tablet / Lead Paperweight / Massive Scroll）、`choose_option`（Scroll Boxes bundle 屏）、`choose_custom_reward`/`skip_custom_rewards`（Lost Coffer / Small Capsule / Large Capsule / Kaleidoscope / Neow's Bones）。事件 `IsFinished` 后由显式 `proceed_neow` 动作转入 map 决策，合法选项来自 `MapTravel.GetTravelablePointsFrom(run, StartingMapPoint)`；该动作不改动游戏状态，finished 的 EventRoom 留在 room stack 上，交由下一次原生 `EnterMapPointInternal` 退出，与生产路径一致。
+5. 正向证据（`python/neow_run_acceptance.py`，四 worker，12 fixtures：Ironclad A0 × Large Capsule / Phial Holster / Small Capsule / New Leaf / Leafy Poultice / Precise Scissors / Scroll Boxes / Neow's Bones / Lost Coffer、Defect A0 Winged Boots、Silent A0 Lost Coffer、Ironclad A10 Scroll Boxes）：每个 fixture 的 Neow 决策在四 worker 上 hash、`choose_event` 动作、`event`/`run_start`/run inventory 完全一致；每条分支都到 `combat.turn == 1 && phase == Play`，根 hash/观测/合法动作/决策序列四 worker 一致；同一 worker 内 Neow 决策态与根的 `diagnostics.run_identity` 完全相同；A10 起始牌组 `ASCENDERS_BANE` 恰好一次、A0 为 0；决策态八个 combat RNG 流全为 0，run-start 构造审计 `combat_phase_constructed: false`。
+6. fork 隔离：Neow 决策态 handle 在另一分支推进后 restore，hash/观测/合法动作逐字节复现，路径为 `replay`（非 resident-prefix），`synthetic_combat_installed: false`、`player_has_combat_state: false`、combat RNG 全 0；被污染 worker 上推进的分支与从未见过另一分支的 worker 上同一分支 hash/观测相同，决策态 RNG counters 不变。
+7. 重放：把 resident 状态移离 run-start 根后 restore 该根会真正重建（`replayed_actions > 0`）；导出 branch 的 `provenance` 为 `neow_run`、reset request 恰为四个开局字段，跨 worker portable restore 复现 hash/观测/合法动作。
+8. 负向证据：篡改 assembly hash / version、`ascension: 11`、空 seed 分别以 `build_mismatch`/`invalid_reset` 拒绝且不影响 resident run；未知角色在构造期以 `unknown_model` 拒绝，下一次合法 run start 即恢复；带伪造 deck/relic/potion/HP/gold/RNG/enemy 字段的记录产生与普通记录逐字节相同的决策，证明协议上无法伪造 post-Neow 状态。
+9. 两次临时故障注入证明断言可判别：Neow 模式改用合成空 unlock profile → `neow_unavailable`（`StartedWithNeow` 未置位）；`MapPointType.Ancient` 改用改名成员 → `unsupported_build_contract: Pinned MapPointType has no member 'AncientRenamed'`。注入已完全回滚。
+10. 一处顺带修复与两处记录在案的边界：map 进入战斗的 start 现在走可挂起的 transition coordinator —— Neow's Bones 可给出 Large Capsule，进而给出 Gambling Chip，其 `AfterPlayerTurnStart` 弃牌选择原本让 combat start 静默挂起（客户端仅超时、无协议错误），现在暴露为 `card_choice`（`phase == Start`）并在解析后到达 turn 1 / Play；另外在 pinned Act 1 样本上起始 Ancient 点连接全部 row 1 节点，`MapTravel` 与 `Children` 返回同一集合，因此该样本无法区分两者，Winged Boots 的 free travel 在起始 Ancient 点不可观测。
 
 **结果**
 

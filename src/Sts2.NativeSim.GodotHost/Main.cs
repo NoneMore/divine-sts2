@@ -207,6 +207,7 @@ public partial class Main : Node
                     "catalog" => environment.Catalog(),
                     "reset" => environment.Reset(Read<ResetRequest>(request.Parameters)),
                     "run_reset" => environment.RunReset(Read<ResetRequest>(request.Parameters)),
+                    "neow_run_reset" => await environment.NeowRunResetAsync(Read<NeowRunStartRequest>(request.Parameters)),
                     "map_reset" => environment.MapReset(Read<ResetRequest>(request.Parameters)),
                     "reward_reset" => environment.RewardReset(Read<ResetRequest>(request.Parameters)),
                     "item_reward_reset" => environment.ItemRewardReset(Read<ItemRewardResetRequest>(request.Parameters)),

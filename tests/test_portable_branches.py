@@ -39,6 +39,22 @@ def test_versioned_branch_resolves_its_recorded_mode():
     assert (method, params, provenance) == ("run_reset", {"seed": "TEST"}, "run")
 
 
+def test_run_start_branch_resolves_to_its_own_provenance():
+    record = branch(
+        reset={"seed": "TEST", "character": "IRONCLAD", "ascension": 0},
+        reset_request={"method": "neow_run_reset", "params": {"seed": "TEST", "character": "IRONCLAD", "ascension": 0}},
+        provenance="neow_run",
+    )
+    method, params, provenance = _portable_reset_request(WORKER, record)
+    assert (method, params, provenance) == ("neow_run_reset", {"seed": "TEST", "character": "IRONCLAD", "ascension": 0}, "neow_run")
+    # The run-start record is its own reset params, not a wrapped `state` payload.
+    assert "state" not in params
+
+
+def test_run_start_branch_provenance_must_match_its_method():
+    assert error_code(branch(reset_request={"method": "neow_run_reset", "params": {}}, provenance="run")) == "reset_provenance_mismatch"
+
+
 def test_provenance_must_match_the_reset_method():
     assert error_code(branch(provenance="map")) == "reset_provenance_mismatch"
     assert error_code(branch(reset_request={"method": "map_reset", "params": {}})) == "reset_provenance_mismatch"
