@@ -1,7 +1,7 @@
 # Project status and review guide
 
 Last evidence review: **2026-08-29**
-Latest environment-program evidence recorded: **2026-09-13** (first-combat program E1–E4; see `docs/persistent-environment-evidence.md`)
+Latest environment-program evidence recorded: **2026-09-13** (first-combat program E1–E5; see `docs/persistent-environment-evidence.md`)
 Shipped build under test: **`0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314`**
 
 This is the required starting point for architectural reviews. Its purpose is to keep useful outside criticism flowing without allowing proposals, old benchmark numbers, or one successful gate to be mistaken for current proof. Update this document whenever a milestone changes materially.
@@ -52,9 +52,9 @@ When documents disagree, use this order:
 
 ## Active milestone order
 
-The first two items are the outstanding gates of the first-combat corpus program currently in flight (E1–E4 are implemented in the tree); the remainder is the policy-quality sequence that consumes its output.
+The first two items are the outstanding gates of the first-combat corpus program currently in flight (E1–E5 are implemented in the tree); the remainder is the policy-quality sequence that consumes its output.
 
-1. **E5 FullApp authority projection and golden differential:** complete the read-only `full_application_native` first-combat root projection (including the native ascension seam), then require zero mismatches on a frozen manifest for roots and representative complete first combats (`docs/first-combat-scene-generation-plan.md` §5 E5).
+1. **E5 FullApp authority projection and golden differential:** the read-only `full_application_native` first-combat root projection (including the native ascension seam) and the frozen-manifest differential are implemented. The targeted half of the gate passes on the pinned build (39/39 entries, zero error/mismatch/cap, with one reported unsupported action kind); the 100-seed breadth manifest is frozen and its report is still outstanding, so the E5 authority gate is not yet closed (`docs/first-combat-scene-generation-plan.md` §5 E5, `docs/persistent-environment-evidence.md`).
 2. **E6 first-combat corpus farm:** queue-based shard generation, schema, seed-level split, resume and soak gates, and public-tree validation (`docs/first-combat-scene-generation-plan.md` §5 E6).
 3. **Differential coverage scheduler:** build-keyed scheduler that consumes the coverage inventory and emits deterministic character/seed/route manifests targeted at the missing encounters and mechanic sets (currently 14 of the 40+ target encounters).
 4. **Phase 3D Network-Guided PUCT Evaluation:** Validate Combat V2 policy priors inside shallow MCTS ($B=8, 16$) to eliminate rollout compounding error and evaluate combat lift.

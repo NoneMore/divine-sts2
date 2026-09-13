@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.AutoSlay.Handlers.Rooms;
 using MegaCrit.Sts2.Core.AutoSlay.Handlers.Screens;
 using MegaCrit.Sts2.Core.AutoSlay.Helpers;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
@@ -21,6 +22,7 @@ using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Events;
@@ -36,6 +38,9 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.TestSupport;
+using MegaCrit.Sts2.Core.Timeline;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
@@ -59,7 +64,13 @@ public static class FullAppBridgeMod
         Harmony harmony = new("sts2-native-sim.full-app-bridge");
         PresentationSuppression.Apply(harmony);
 
+        FullAppBuildIdentity.Prime();
+
         TryPatchPostfix(harmony, typeof(NGame), "LaunchMainMenu", nameof(OnMainMenuLaunched));
+        // Postfix: `InitProgressData` is what loads the profile into `SaveManager.Progress`, so the
+        // pin has to run after it, and still before the main menu or any lobby reads unlock state.
+        TryPatchPostfix(harmony, typeof(SaveManager), "InitProgressData", nameof(OnProgressDataInitialized));
+        TryPatchPrefix(harmony, typeof(CardSelectCmd), "UseSelector", nameof(OnCardSelectorUsed));
         TryPatchPrefix(harmony, typeof(StartRunLobby), "BeginRunForAllPlayersIfAllReady", nameof(OnBeginRunForAllPlayers));
 
         TryPatchPrefix(harmony, typeof(CombatRoomHandler), nameof(CombatRoomHandler.HandleAsync), nameof(HandleCombatAsync));
@@ -70,6 +81,7 @@ public static class FullAppBridgeMod
         TryPatchPrefix(harmony, typeof(DeckUpgradeScreenHandler), nameof(DeckUpgradeScreenHandler.HandleAsync), nameof(HandleDeckUpgradeScreenAsync));
         TryPatchPrefix(harmony, typeof(DeckCardSelectScreenHandler), nameof(DeckCardSelectScreenHandler.HandleAsync), nameof(HandleDeckCardSelectScreenAsync));
         TryPatchPrefix(harmony, typeof(SimpleCardSelectScreenHandler), nameof(SimpleCardSelectScreenHandler.HandleAsync), nameof(HandleSimpleCardSelectScreenAsync));
+        TryPatchPrefix(harmony, typeof(ChooseABundleScreenHandler), nameof(ChooseABundleScreenHandler.HandleAsync), nameof(HandleChooseABundleScreenAsync));
         TryPatchPrefix(harmony, typeof(ShopRoomHandler), nameof(ShopRoomHandler.HandleAsync), nameof(HandleShopRoomAsync));
         TryPatchPrefix(harmony, typeof(EventRoomHandler), nameof(EventRoomHandler.HandleAsync), nameof(HandleEventRoomAsync));
         TryPatchPrefix(harmony, typeof(TreasureRoomHandler), nameof(TreasureRoomHandler.HandleAsync), nameof(HandleTreasureRoomAsync));
@@ -134,6 +146,75 @@ public static class FullAppBridgeMod
         _autoSlayer.Start(seed, logFile);
     }
 
+    /// <summary>The highest ascension this pinned profile unlocks; covers every supported A&gt;0 sample.</summary>
+    private const int PinnedMaxAscension = 20;
+
+    /// <summary>
+    /// Pin the sandbox profile the moment the progress save has loaded, before the main menu or any
+    /// lobby reads unlock state.
+    ///
+    /// A fresh sandbox has no revealed epochs, so it has no Neow (the starting map point is forced to
+    /// `Monster`) and every requested ascension is clamped to 0. The reconstructed environment starts
+    /// its faithful runs from the shipped `UnlockState.all` profile, so the equivalent pinned profile
+    /// here reveals every epoch, records every encounter as seen, keeps the run count non-zero (a
+    /// zero run count swaps Act 1's room order), and unlocks ascension for every character.
+    /// </summary>
+    private static void OnProgressDataInitialized()
+    {
+        if (!FullAppBridgeServer.PinProfile) return;
+        try
+        {
+            SaveManager saveManager = SaveManager.Instance;
+            if (saveManager is null) return;
+            ProgressState progress = saveManager.Progress;
+            int epochs = 0;
+            foreach (string epochId in EpochModel.AllEpochIds)
+            {
+                saveManager.ObtainEpochOverride(epochId, EpochState.Revealed);
+                epochs++;
+            }
+            foreach (EncounterModel encounter in ModelDb.AllEncounters)
+            {
+                progress.GetOrCreateEncounterStats(encounter.Id);
+            }
+            foreach (CharacterModel character in ModelDb.AllCharacters)
+            {
+                CharacterStats stats = progress.GetOrCreateCharacterStats(character.Id);
+                stats.MaxAscension = Math.Max(stats.MaxAscension, PinnedMaxAscension);
+                if (stats.TotalWins + stats.TotalLosses == 0) stats.TotalWins = 1;
+            }
+            FullAppBridgeServer.RunStartProvenance["unlock_profile"] = "pinned_all_epochs_revealed";
+            FullAppBridgeServer.RunStartProvenance["revealed_epochs"] = epochs;
+            FullAppBridgeServer.RunStartProvenance["run_count"] = progress.NumberOfRuns;
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"[FullAppBridge] Failed to pin the sandbox profile: {ex}");
+        }
+    }
+
+    /// <summary>Report the pinned profile's Neow and ascension preconditions, so a failed run start fails loudly.</summary>
+    private static void LogRunStartPreconditions()
+    {
+        SaveManager saveManager = SaveManager.Instance;
+        if (saveManager is null) return;
+        FullAppBridgeServer.RunStartProvenance["started_with_neow"] = saveManager.IsEpochRevealed<MegaCrit.Sts2.Core.Timeline.Epochs.NeowEpoch>();
+        FullAppBridgeServer.RunStartProvenance["requested_seed"] = FullAppBridgeServer.RequestedSeed;
+        FullAppBridgeServer.RunStartProvenance["requested_character"] = FullAppBridgeServer.RequestedCharacter;
+        FullAppBridgeServer.RunStartProvenance["requested_ascension"] = FullAppBridgeServer.RequestedAscension;
+    }
+
+    /// <summary>
+    /// Wrap the card selector AutoSlay installs, so nested card choices become protocol decisions.
+    /// Harmony binds this by parameter name, matching `CardSelectCmd.UseSelector(ICardSelector selector)`.
+    /// </summary>
+    private static void OnCardSelectorUsed(ref MegaCrit.Sts2.Core.TestSupport.ICardSelector selector)
+    {
+        if (!FullAppBridgeServer.ProtocolNestedChoices) return;
+        if (selector is BridgeCardSelector) return;
+        selector = new BridgeCardSelector(selector);
+    }
+
     private static void OnBeginRunForAllPlayers(StartRunLobby __instance)
     {
         if (NGame.Instance is not null)
@@ -141,18 +222,34 @@ public static class FullAppBridgeMod
             NGame.Instance.DebugSeedOverride = FullAppBridgeServer.RequestedSeed;
         }
 
+        // Pin Act 1 to the act the reconstructed environment always uses. Without this the lobby
+        // rolls between the unlocked Act-1 candidates from the seed hash, so the two environments
+        // could describe different worlds for the same seed.
+        if (FullAppBridgeServer.PinProfile)
+        {
+            __instance.Act1 = FullAppBridgeServer.RequestedAct1;
+        }
+
         string requested = FullAppBridgeServer.RequestedCharacter;
+        CharacterModel? targetChar = null;
         if (!string.IsNullOrWhiteSpace(requested))
         {
             try
             {
-                CharacterModel? targetChar = ModelDb.AllCharacters.FirstOrDefault(c =>
+                targetChar = ModelDb.AllCharacters.FirstOrDefault(c =>
                     c.Id.Entry.Equals(requested, StringComparison.OrdinalIgnoreCase) ||
                     c.Id.Entry.Equals($"CHARACTER.{requested}", StringComparison.OrdinalIgnoreCase) ||
                     c.Id.Entry.EndsWith(requested, StringComparison.OrdinalIgnoreCase));
 
                 if (targetChar != null)
                 {
+                    if (FullAppBridgeServer.PinProfile)
+                    {
+                        // Must happen before SetLocalCharacter: the lobby derives its ascension cap
+                        // from this save's per-character stats.
+                        CharacterStats stats = SaveManager.Instance.Progress.GetOrCreateCharacterStats(targetChar.Id);
+                        stats.MaxAscension = Math.Max(stats.MaxAscension, PinnedMaxAscension);
+                    }
                     __instance.SetLocalCharacter(targetChar);
                 }
             }
@@ -160,6 +257,16 @@ public static class FullAppBridgeMod
             {
                 GD.PrintErr($"[FullAppBridge] Failed to set character {requested}: {ex.Message}");
             }
+        }
+
+        if (FullAppBridgeServer.PinProfile && targetChar is not null)
+        {
+            // The shipped lobby seam (E0 §6, seam 2). `BeginRunLocally` still clamps to the profile's
+            // per-character maximum, which is why the profile is pinned above.
+            __instance.SyncAscensionChange(FullAppBridgeServer.RequestedAscension);
+            FullAppBridgeServer.RunStartProvenance["lobby_ascension"] = __instance.Ascension;
+            FullAppBridgeServer.RunStartProvenance["lobby_act1"] = __instance.Act1;
+            LogRunStartPreconditions();
         }
     }
 
@@ -263,8 +370,26 @@ public static class FullAppBridgeMod
                     runManager.ActionQueueSynchronizer.RequestEnqueue(usePotion);
                     await runManager.ActionExecutor.FinishedExecutingActions();
                 }
+
+                if (FullAppBridgeServer.EmitCombatCompleteBoundary && EncounterCleared(player, manager))
+                {
+                    // The comparator's unified terminal state: the encounter has no living enemy and
+                    // the player is alive, before the run generates room rewards. Reported as one
+                    // terminal boundary so the last combat state is compared, not skipped.
+                    await FullAppBridgeServer.WaitForCoordinatorActionAsync("combat_complete", isTerminal: true, isVictory: false);
+                    return;
+                }
             }
         }
+    }
+
+    private static bool EncounterCleared(Player player, CombatManager manager)
+    {
+        ICombatState? state = manager.DebugOnlyGetState() ?? player.Creature.CombatState;
+        return state is not null
+            && state.Enemies.Count > 0
+            && state.Enemies.All(enemy => !enemy.IsAlive)
+            && player.Creature.IsAlive;
     }
 
     private static bool HandleMapAsync(Rng random, CancellationToken ct, ref Task __result)
@@ -364,6 +489,27 @@ public static class FullAppBridgeMod
         var cardHolders = UiHelper.FindAll<NCardHolder>(screen);
         List<CardModel> cardModels = cardHolders.Select(h => h.CardModel).Where(c => c != null).ToList()!;
 
+        // A fused `choose_reward:{reward}:Card:{option}:{card}` already named the card, so the shipped
+        // sub-screen is resolved directly instead of asking the caller a second time.
+        FusedCardRewardClaim? fused = FullAppBridgeServer.TakeFusedCardRewardClaim();
+        if (fused is not null)
+        {
+            if (fused.OptionIndex < 0 || fused.OptionIndex >= cardHolders.Count)
+            {
+                throw new InvalidOperationException(
+                    $"fused card reward claim {fused.CardId} has no holder at option {fused.OptionIndex} ({cardHolders.Count} offered)");
+            }
+            NCardHolder fusedHolder = cardHolders[fused.OptionIndex];
+            if (fusedHolder.CardModel?.Id.Entry != fused.CardId)
+            {
+                throw new InvalidOperationException(
+                    $"fused card reward claim {fused.CardId} does not match offered option {fused.OptionIndex} ({fusedHolder.CardModel?.Id.Entry})");
+            }
+            fusedHolder.EmitSignal(NCardHolder.SignalName.Pressed, fusedHolder);
+            await WaitHelper.Until(() => GetTopScreen<NCardRewardSelectionScreen>() == null, ct, TimeSpan.FromSeconds(15), "Card reward screen did not close");
+            return;
+        }
+
         string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("card_reward", isTerminal: false, isVictory: false, cardModels);
 
         if (actionId == "skip_card" || actionId.StartsWith("skip", StringComparison.OrdinalIgnoreCase))
@@ -408,7 +554,15 @@ public static class FullAppBridgeMod
             var rewardButtons = UiHelper.FindAll<NRewardButton>(screen).Where(b => b.Reward != null && !b.Reward.SuccessfullySelected).ToList();
             var proceedBtn = UiHelper.FindFirst<NProceedButton>(screen);
 
-            string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("rewards", isTerminal: false, isVictory: false, rewardButtons.Select(b => b.Reward).ToList());
+            // The proceed/skip button is only a legal action while the shipped game enables it: a
+            // reward set offered with `WithSkippingDisallowed` (the Neow's Bones blessing) disables it
+            // so every reward in the set must be claimed.
+            var rewardsContext = new FullAppStateTracker.RewardsRoomContext(
+                rewardButtons.Select(b => (object)b.Reward!).ToList(),
+                proceedBtn is { IsEnabled: true },
+                proceedBtn?.IsSkip ?? false);
+
+            string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("rewards", isTerminal: false, isVictory: false, rewardsContext);
 
             if (actionId == "proceed" || actionId.StartsWith("skip", StringComparison.OrdinalIgnoreCase))
             {
@@ -422,8 +576,15 @@ public static class FullAppBridgeMod
             {
                 string[] parts = actionId.Split(':');
                 int rewardIdx = int.Parse(parts[1]);
+                // Only the fused `choose_reward:{reward}:{type}:{option}:{card}` form names a card; the
+                // unfused `choose_reward:{reward}:{type}` form leaves the sub-screen choice to the caller.
+                int optionIdx = parts.Length >= 5 ? int.Parse(parts[3]) : -1;
                 if (rewardIdx >= 0 && rewardIdx < rewardButtons.Count)
                 {
+                    if (optionIdx >= 0)
+                    {
+                        FullAppBridgeServer.SetFusedCardRewardClaim(new FusedCardRewardClaim(optionIdx, parts[4]));
+                    }
                     NRewardButton chosenBtn = rewardButtons[rewardIdx];
                     await UiHelper.Click(chosenBtn, 0);
                     await Task.Delay(50);
@@ -626,6 +787,54 @@ public static class FullAppBridgeMod
         await WaitHelper.Until(() => GetTopScreen<NSimpleCardSelectScreen>() == null, ct, TimeSpan.FromSeconds(15), "Simple card select screen did not close");
     }
 
+    private static bool HandleChooseABundleScreenAsync(Rng random, CancellationToken ct, ref Task __result)
+    {
+        __result = RunChooseABundleLoopAsync(random, ct);
+        return false;
+    }
+
+    /// <summary>
+    /// Drive the bundle selection a Neow blessing such as Scroll Boxes opens. `CardSelectCmd` has no
+    /// selector branch for bundles, so this screen is the only seam and it always appears.
+    /// </summary>
+    private static async Task RunChooseABundleLoopAsync(Rng random, CancellationToken ct)
+    {
+        await WaitHelper.Until(() => GetTopScreen<NChooseABundleSelectionScreen>() != null, ct, TimeSpan.FromSeconds(15), "Bundle selection screen not open");
+        NChooseABundleSelectionScreen screen = GetTopScreen<NChooseABundleSelectionScreen>()!;
+        List<NCardBundle> bundles = UiHelper.FindAll<NCardBundle>(screen).ToList();
+        if (bundles.Count == 0)
+        {
+            throw new InvalidOperationException("The native bundle selection exposed zero bundles.");
+        }
+
+        var options = bundles.Select(bundle => new ChoiceOptionDto
+        {
+            Cards = (bundle.Bundle ?? Array.Empty<CardModel>())
+                .Select(card => new CardRefDto { ModelId = card.Id.Entry })
+                .ToList(),
+        }).ToList();
+
+        int[] selected = await FullAppBridgeServer.CoordinateOptionChoiceAsync(options, minSelect: 1, maxSelect: 1);
+        NCardBundle chosen = bundles[selected[0]];
+
+        if (chosen.Hitbox is not null)
+        {
+            await UiHelper.Click(chosen.Hitbox, 0);
+            await Task.Delay(50, ct);
+        }
+
+        NConfirmButton? confirmButton = UiHelper.FindFirst<NConfirmButton>(screen);
+        if (confirmButton is not null)
+        {
+            await WaitHelper.Until(() => confirmButton.IsEnabled, ct, TimeSpan.FromSeconds(10), "Bundle confirm button not enabled");
+            await UiHelper.Click(confirmButton, 0);
+        }
+
+        await WaitHelper.Until(
+            () => !GodotObject.IsInstanceValid(screen) || !screen.IsVisibleInTree(),
+            ct, TimeSpan.FromSeconds(15), "Bundle selection screen did not close");
+    }
+
     private static bool HandleShopRoomAsync(Rng random, CancellationToken ct, ref Task __result)
     {
         __result = RunShopRoomLoopAsync(random, ct);
@@ -704,7 +913,17 @@ public static class FullAppBridgeMod
             var optionButtons = UiHelper.FindAll<NEventOptionButton>(eventRoom).Where(b => b.Option != null && !b.Option.IsLocked).ToList();
             if (optionButtons.Count == 0) break;
 
-            string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("event", isTerminal: false, isVictory: false, optionButtons.Select(b => b.Option).ToList());
+            EventModel? eventModel = optionButtons[0].Event;
+            var eventContext = new FullAppStateTracker.EventRoomContext(
+                eventModel?.Id.Entry ?? runState.BaseRoom?.ToString() ?? "",
+                eventModel?.IsFinished ?? false,
+                optionButtons.Select(b => new FullAppStateTracker.EventRoomOption(
+                    b.Option.TextKey,
+                    b.Option.IsProceed,
+                    b.Option.IsLocked,
+                    b.Option.WasChosen)).ToList());
+
+            string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("event", isTerminal: false, isVictory: false, eventContext);
 
             int choiceIdx = 0;
             if (actionId.StartsWith("choose_event:", StringComparison.Ordinal))

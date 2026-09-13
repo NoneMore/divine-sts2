@@ -1,9 +1,9 @@
 # 第一战战斗场景生成模块执行计划
 
-状态：**E0 已关闭；E1、E2、E3、E4 实施完成，待项目维护者复核合并；E5 起待实施**  
+状态：**E0 已关闭；E1、E2、E3、E4 与 E5 的实施均已完成，待项目维护者复核合并；E5 的 targeted authority gate 已通过，breadth gate 已冻结待运行**  
 规划日期：**2026-09-13**  
 治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)  
-证据归属：E1–E4 的持久证据同时记录在 [persistent-environment-evidence.md](persistent-environment-evidence.md)；本计划内的逐单元证据用于维护者复核，计划退役后以证据文档为准。
+证据归属：E1–E5 的持久证据同时记录在 [persistent-environment-evidence.md](persistent-environment-evidence.md)；本计划内的逐单元证据用于维护者复核，计划退役后以证据文档为准。
 
 ## 1. 目标与完成定义
 
@@ -300,6 +300,8 @@ E7 真正跨 worker combat keyframe 调查
 
 ### E5 — FullApp 权威投影与 golden differential
 
+**状态：实施完成；targeted authority gate 已通过（2026-09-13），breadth gate 已冻结待运行。**
+
 **结果**
 
 补齐只读、无桌面操作的 FullApp 第一战根投影，并建立 fast path 对 shipped application 的冻结差分门。
@@ -325,6 +327,14 @@ E7 真正跨 worker combat keyframe 调查
 2. breadth manifest：至少 100 个冻结 seed，交叉五角色与代表 ascension；
 3. breadth 全量比较根；每个 character/ascension cell 及每个高风险结果至少一条完整战斗逐步 replay；
 4. 报告 error/cap/unsupported 数量，并固定 exact game build。任何 mismatch 都保留原始 seed/branch/action 以复现。
+
+**实现与证据（2026-09-13）**
+
+- 运行器：`python/first_combat_differential_acceptance.py`（比较器 `python/sts2_native_sim/first_combat_differential.py`，离线测试 `tests/test_first_combat_differential.py`，一键脚本 `scripts/run-e5-differential.ps1`）。
+- targeted manifest（13 个 fixture × 3 个抽样 root = 39 条，全部逐步走到统一终点）：**39/39 match、0 error、0 mismatch、0 cap**，共比较 504 个 boundary / 355 个 combat step，全部终点为 `player_death`。A0/A10 与五角色均由 fixture 覆盖。
+- breadth manifest 已冻结为 **100 个不同 seed**，每个 seed 钉定一个 (角色, ascension) 单元，十个单元各 10 个 seed；前十条（每单元一条）带完整第一战逐步 replay，其余只比根。运行命令与结果见 [persistent-environment-evidence.md](persistent-environment-evidence.md)。
+- 唯一 unsupported 项：`discard_potion`（reconstruction 会暴露丢弃药水动作，bridge 的回合决策面没有该动作）。比较器把它列入 `unsupported_kinds` 而不是静默丢弃；所有已比较轨迹都未取用该动作。
+- E5 期间在 bridge 只读投影中修正了三处真实缺陷（均为投影缺口，不是 reconstruction 行为差异）：Neow 遗物在战斗开始时打开的嵌套卡牌选择会丢失 combat 投影；`NRewardsScreen` 在 `WithSkippingDisallowed`（Neow's Bones）时禁用的 skip 按钮曾被当作合法 `proceed`；`CardReward` 的候选卡改为融合动作 `choose_reward:{r}:Card:{i}:{CARD}` 暴露。三处都记录在 [full-application-control-bridge.md](full-application-control-bridge.md)。
 
 **声明边界**
 

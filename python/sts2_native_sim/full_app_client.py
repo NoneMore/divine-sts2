@@ -40,17 +40,26 @@ class FullAppBridgeClient:
 
         self.sandbox_dir.mkdir(parents=True, exist_ok=True)
 
-        # Hardlink top-level files if missing
+        # Link every top-level file into the sandbox: the launcher, the PCK, the crash
+        # handler, and the GDExtension native libraries (`libspine_godot.*`, `fmod*`, ...).
+        # The GDExtension libraries are required: without them shipped custom resource
+        # classes such as SpineSkeletonDataResource fail to parse, character select never
+        # resolves, and the AutoSlayer run start times out with "Room type not assigned".
+        # Symlinks work across volumes; hardlinks do not, and the game install commonly sits
+        # on a different drive than the workspace, so symlink first and copy only as a
+        # fallback (a copy of the 850 MB executable and the 1.8 GB PCK per worker is very
+        # slow). Nothing is ever written back into the game install.
         for item in game_root.iterdir():
             if item.is_file():
                 dest = self.sandbox_dir / item.name
                 if not dest.exists():
                     try:
-                        os.link(item, dest)
+                        dest.symlink_to(item)
                     except OSError:
-                        # Hardlinks cannot cross volumes (a common Steam/C: temp layout).
-                        # Copy only the top-level launcher/resources as a safe fallback.
-                        shutil.copy2(item, dest)
+                        try:
+                            os.link(item, dest)
+                        except OSError:
+                            shutil.copy2(item, dest)
 
         for required in ("SlayTheSpire2.exe", "SlayTheSpire2.pck"):
             if not (self.sandbox_dir / required).is_file():
@@ -219,8 +228,28 @@ class FullAppBridgeClient:
     def hello(self) -> Dict[str, Any]:
         return self.call("hello")
 
-    def start_run(self, seed: str = "A1B2C3D4E5", character: str = "IRONCLAD", ascension: int = 0) -> Dict[str, Any]:
-        return self.call("start_run", {"seed": seed, "character": character, "ascension": ascension})
+    def start_run(
+        self,
+        seed: str = "A1B2C3D4E5",
+        character: str = "IRONCLAD",
+        ascension: int = 0,
+        act1: str = "overgrowth",
+        pin_profile: bool = True,
+        nested_choices: bool = True,
+        combat_complete: bool = False,
+    ) -> Dict[str, Any]:
+        return self.call(
+            "start_run",
+            {
+                "seed": seed,
+                "character": character,
+                "ascension": ascension,
+                "act1": act1,
+                "pin_profile": pin_profile,
+                "nested_choices": nested_choices,
+                "combat_complete": combat_complete,
+            },
+        )
 
     def observe(self) -> Dict[str, Any]:
         return self.call("observe")

@@ -24,10 +24,11 @@
 | `python/combat_breadth_acceptance.py` | upgrades, enchantments, saved mutable card/relic state, RNG counters, potions, multi-enemy targeting, death/removal, terminal victory, fork, restore |
 | `python/neow_run_acceptance.py` | run-start (E3) gate |
 | `python/first_combat_root_acceptance.py` | first-combat root (E4) gate |
+| `python/first_combat_differential_acceptance.py` | first-combat golden differential against the shipped application (E5 authority gate) |
 | `python/search_coordinator_acceptance.py` | multi-ply native beam expansion and dedup |
 | `python/differential_campaign.py` | exact shipped-game differential aggregation |
 
-`tests/test_portable_branches.py` and `tests/test_first_combat.py` cover the same validation and enumeration rules offline, without a game process or the pinned build, so schema, build, provenance, mode rejection, branch scheduling, failure reasons, caps, ordering, and canonical byte stability stay covered in a plain test run.
+`tests/test_portable_branches.py`, `tests/test_first_combat.py` and `tests/test_first_combat_differential.py` cover the same validation, enumeration and comparison rules offline, without a game process or the pinned build, so schema, build, provenance, mode rejection, branch scheduling, failure reasons, caps, ordering, canonical byte stability, action-key translation, wrapper normalization and divergence reporting stay covered in a plain test run.
 
 ## Construction boundary (run-only vs combat-only)
 
@@ -95,6 +96,46 @@ The caps fail closed: `max_actions_per_branch=1` and `max_roots=2` both mark the
 The root record is a replay recipe, not a native memory snapshot: restoring it currently replays the Neow prefix and cannot be described as keyframe or low-cost restore. This gate says nothing about mechanical fidelity against `full_application_native` (E5's differential) and nothing about policy quality.
 
 ## Exact shipped-game differential evidence
+
+### First-combat golden differential (E5, 2026-09-13)
+
+`python/first_combat_differential_acceptance.py` replays one frozen manifest on the reconstructed
+environment (`reconstructed_native`) and on the shipped application (`full_application_native`,
+`SlayTheSpire2.exe --headless --force-steam=off` plus the Harmony bridge), one sandboxed game process
+per entry because the shipped game serves exactly one run start per process. Both sides follow the same
+recorded branch or, where a branch is not recorded, the same deterministic smallest-semantic-key
+policy. Every boundary compares the semantic legal-action sets and the schema-aligned state projection
+(build, run RNG counters, deck and combat piles with upgrades and native state, relics, potions,
+encounter, creatures, intents, powers, resources, native `combat.turn` and `PlayerCombatState.Phase`),
+and the comparison ends at the unified endpoint — player death, or the encounter cleared before
+`generate_room_rewards`. Every root comparison asserts native `turn == 1` and phase `Play`, that the run
+started with Neow, and that the requested seed/character/ascension were honoured.
+
+Targeted manifest on the pinned build (`python scripts/run-e5-differential.ps1 -Mode targeted`), thirteen
+fixtures — the seven high-risk blessings, an Ironclad A10 case, and one further run start per character —
+sampled three roots each: **39/39 match, 0 error, 0 mismatch, 0 cap**, 504 compared boundaries and 355
+compared combat steps in 516.9 s at two workers, every endpoint `player_death`. The report pins
+`assembly_sha256 A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52`,
+`pck_sha256 42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587`,
+`version 0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314`, and lists `discard_potion` as the single
+unsupported action kind: the reconstructed environment exposes a potion discard in the turn decision
+surface and the bridge does not, so the comparator reports it instead of silently dropping it. No
+compared trajectory took that action.
+
+The breadth manifest is frozen at 100 distinct seeds, each pinning one (character, ascension) cell so the
+ten cells hold ten seeds each; every entry compares its root, and the first ten (one per cell) compare the
+complete first combat. Run it with `python scripts/run-e5-differential.ps1 -Mode breadth`; the report lands
+in `artifacts/e5-differential/breadth.json`. Until that report exists, the breadth half of the E5
+authority gate is unproven.
+
+Three projection defects were found and fixed while building this gate, all of them on the shipped side
+and all strictly read-only (`docs/full-application-control-bridge.md`): a nested card choice opened by a
+Neow relic during combat start dropped the live combat projection; the `NRewardsScreen` skip button that
+`RewardsSet.WithSkippingDisallowed()` disables (Neow's Bones) was advertised as a legal `proceed`; and a
+`CardReward`'s offered cards needed a fused `choose_reward:{reward}:Card:{option}:{CARD}` action to line
+up with the reconstructed environment's claims. The rejected alternative — matching the reconstructed
+side's fused claims against the shipped side's opaque reward screen — was discarded because it would have
+required the comparator to compare across two different decision granularities.
 
 Local-invariant and independent-worker validation is supplemented by exact shipped-game differential traces. The original manual `NIBBITS_WEAK` trace matched reset, nine native card plays, three complete turns, and terminal victory across 13 checkpoints, with final hash `1FEA2F670B6BE0064F0510C2402B823BA5010F7FC322F38BDAC74B3153A327CA`; this exact replay still passes after the room-lifecycle correction. The strict replay comparator and the opt-in read-only shipped-game exporter are implemented; the system remains non-certifying outside those checkpoints.
 
