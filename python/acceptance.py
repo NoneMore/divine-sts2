@@ -41,9 +41,30 @@ def audit_construction_boundary(worker) -> dict:
     run_counters = audit["run_phase_rng_counters"]
     consumed = {s: run_counters.get(s, 0) for s in COMBAT_RNG_STREAMS if run_counters.get(s, 0) != 0}
     assert not consumed, f"run-only construction consumed combat RNG: {consumed}"
+    assert audit["combat_phase_constructed"] is True, audit
     assert audit["combat_phase_created_combat_state"] is True, audit
     assert audit["combat_phase_player_has_combat_state"] is True, audit
     assert audit["combat_phase_rng_counters"].get("Shuffle", 0) > 0, audit
+    return audit
+
+
+def assert_run_only_construction(worker) -> dict:
+    """Negative evidence that one reset mode owns no combat at all.
+
+    Reads the same audited boundary as `audit_construction_boundary`, but from the run-phase half:
+    the mode must not construct a combat phase, must not install a `CombatManager` combat state,
+    must not give the freshly built player a `PlayerCombatState`, and must not consume any combat
+    RNG stream. A composed run is the mode this protects.
+    """
+    audit = worker.diagnostics()["last_construction"]
+    assert audit is not None, "diagnostics did not report a construction audit"
+    assert audit["mode"] == "run", audit
+    assert audit["combat_phase_constructed"] is False, audit
+    assert audit["run_phase_created_combat_state"] is False, audit
+    assert audit["run_phase_player_has_combat_state"] is False, audit
+    run_counters = audit["run_phase_rng_counters"]
+    consumed = {s: run_counters.get(s, 0) for s in COMBAT_RNG_STREAMS if run_counters.get(s, 0) != 0}
+    assert not consumed, f"composed run construction consumed combat RNG: {consumed}"
     return audit
 
 

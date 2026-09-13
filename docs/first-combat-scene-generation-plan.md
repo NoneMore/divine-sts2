@@ -1,6 +1,6 @@
 # 第一战战斗场景生成模块执行计划
 
-状态：**待实施**  
+状态：**E0 已关闭；E1、E2 实施完成，待项目维护者复核合并；E3 起待实施**  
 规划日期：**2026-09-13**  
 治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)
 
@@ -43,6 +43,8 @@
 - 数据划分单位固定为 seed，而不是 branch/root。
 
 ## 3. 已确认的实现缺口
+
+本节保留 E0 规划时的现场诊断。缺口 1–4（`Construct()` 既造 run 又造 combat、resident/portable restore 走合成战斗路径、`Branch` 缺少一等 provenance、`export_branch()` 只导出 reset/history/hash）已分别由 E1 与 E2 关闭，证据见第 5 节；缺口 5–8 仍归 E3/E5。
 
 1. `PersistentNativeCombatEnvironment.Construct()` 同时构造 run 与 combat；`RunReset()` 先调用它，再生成地图。
 2. Core resident restore 仍通过 `Construct(reset) → InitializeRunMap() → replay history` 重建 run 分支；只改 `RunReset()` 会留下同类合成战斗路径。
@@ -153,6 +155,22 @@ E7 真正跨 worker combat keyframe 调查
 - 构建：Protocol、Core、Host、GodotHost 受影响项目。
 
 ### E2 — 清理 `run_reset`、restore 与初始化 provenance
+
+**状态：实施完成（2026-09-13），Run lifecycle gate 证据见本节；合并决定由项目维护者复核。**
+
+结果与证据摘要：
+
+1. 新增一等、可枚举的 `ResetMode`（`combat`/`run`/`map`/`card_reward`/`item_reward`/`custom_reward`/`rest`/`event`）与 wire 名映射；每个 reset RPC 只声明一个 mode，reset、resident restore、cross-worker portable restore 都由该值选择重建路径。`Branch` 用 provenance 加上该 mode 需要的参数替代原先的 mode 布尔组合；`diagnostics` 新增 `reset_mode` 与 `last_restore`。
+2. `run_reset` 现在只执行 `ConstructRun → GenerateRooms → GenerateMap`：`last_construction` 报告 `combat_phase_constructed: false`、无 `CombatState` 安装、新玩家无 `PlayerCombatState`、八个 combat RNG 流计数全为 0。resident restore 对 run mode 分支同样只走 run-only 路径，不再 `Construct → InitializeRunMap`（E3 的 `neow_run_reset` 将复用同一 provenance 分派）。
+3. run-only 阶段新增 run 级 deck→card instance 映射（原映射由被丢弃的合成战斗建立）。进入原生 combat 时卡片 instance ID 词表与 E2 前完全一致（实例集合相等，见 §5）。
+4. 负向证据（pinned build）：把 `ResetMode.Run` 临时改成战斗构造路径后，reset 断言报 `combat_phase_constructed: true` + `Shuffle: 9`，restore 断言报 `synthetic_combat_installed: true` + `Shuffle: 9`/`Niche: 1`；健康路径为 `false`/`false`/0。注入已完全回滚。
+5. 语义差分（同 seed、custom 10 张牌与 A10 原生起始负载各一）：map 观测的非 RNG 字段差异为 **0**（map 点、visited、legal actions 完全一致），差异仅在 `run.rng_counters`（`Shuffle` 9/10→0、`Niche` 1→0）以及随后第一场真实战斗的洗牌顺序与怪物 HP——即被删除的合成战斗原先消耗的两条流。map/房间生成使用 `UpFront`，因此路线与房间内容不变。
+6. 正向回归：16 个 acceptance 脚本前后对比，所有不观测 composed run 的脚本（direct combat、choice、bundle、card/item reward、reward option、rest、event、map reset）退出码与 hash 集合完全相同，direct reset hash 保持 `CEE9B22A0D5E3FC2B3A0C66E2C5E694E54540059B9C27E9EEA77F3D840DBEF7B`；composed-run 脚本保留全部内容/路线/奖励/事件断言，仅 hash 变化（run 观测含 RNG counters）。`run_room_entry_acceptance.py` 原先把 seed `NATIVE-COMPOSED-ROOM-ENTRY` 的遭遇硬编码为 `NIBBIT`（shipped build 实际为 `TWIG_SLIME_S`/`LEAF_SLIME_M`/`LEAF_SLIME_S`），现改为四 worker 一致 + 真实敌人 + 牌数守恒 + instance ID 集合相等，脚本转为通过。
+7. `portable_modes_acceptance.py` 覆盖 8 个 mode 的 reset→step→portable export→cross-worker restore，另覆盖 map、event 内嵌 `card_choice`、run combat 三阶段的 local restore 与 portable restore，并对 provenance / method / 未知 method / build / schema / history / expected hash 逐一篡改要求 fail closed（`reset_provenance_mismatch`、`unknown_reset_mode`、`build_mismatch`、`unsupported_portable_branch_schema`、`replay_divergence`），校验发生在任何 reset RPC 之前。无 schema 字段的 v0 记录仍经明确兼容路径精确重放（combat 与 run 各一）。
+8. `run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在 E1 之前即已失败，E2 未改变其观测值与失败原因，仍按 `docs/persistent-environment.md` 记录保留。
+9. 构建：Protocol、Core、Host、GodotHost 的 Release 与 Debug 均 0 警告 0 错误。
+
+**迁移说明**：pre-E2 的 run-mode portable branch 在删除合成战斗后不再产生相同状态，重放会以 `replay_divergence` fail closed（不静默降级）；其余七个 mode 的旧记录（含无 schema 的 v0 记录）保持可重放。
 
 **结果**
 

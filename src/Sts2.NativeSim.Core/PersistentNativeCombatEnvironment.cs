@@ -26,6 +26,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private readonly Dictionary<string, Branch> _branches = new(StringComparer.Ordinal);
     private readonly LinkedList<string> _branchOrder = new();
     private readonly Dictionary<object, string> _cardInstanceIds = new(ReferenceEqualityComparer.Instance);
+    // Deck cards own their stable instance identity for the whole run. A run that never builds a
+    // synthetic combat still has to label the cards the native combat later clones from the deck,
+    // so the deck-level map is maintained independently of any combat's card copies.
+    private readonly Dictionary<object, string> _deckInstanceIds = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<uint, object> _combatCreaturesById = new();
     private string _lastSnapshotDebug = "";
     private int _dynamicCardOrdinal;
@@ -36,6 +40,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private TaskCompletionSource? _choiceBegun;
     private int _choiceOrdinal;
     private ResetRequest? _reset;
+    private ResetProvenance? _provenance;
     private readonly List<string> _history = [];
     private string? _currentBranchHandle;
     private string? _lastActionId;
@@ -45,6 +50,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private string _hash = "";
     private bool _runServicesInitialized;
     private ConstructionAudit? _lastConstructionAudit;
+    private RestoreAudit? _lastRestoreAudit;
     private bool _mapMode;
     private bool _rewardMode;
     private object? _cardReward;
@@ -156,16 +162,145 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         };
     }
 
-    public EnvironmentResult Reset(ResetRequest request)
+    public EnvironmentResult Reset(ResetRequest request) => ResetTo(new ResetProvenance(ResetMode.Combat), request, new { kind = "reset", replayed_actions = 0 });
+    public EnvironmentResult RunReset(ResetRequest request) => ResetTo(new ResetProvenance(ResetMode.Run), request, new { kind = "run_reset", replayed_actions = 0 });
+    public EnvironmentResult MapReset(ResetRequest request) => ResetTo(new ResetProvenance(ResetMode.Map), request, new { kind = "map_reset", replayed_actions = 0 });
+    public EnvironmentResult RewardReset(ResetRequest request) => ResetTo(new ResetProvenance(ResetMode.CardReward), request, new { kind = "reward_reset", replayed_actions = 0 });
+    public EnvironmentResult ItemRewardReset(ItemRewardResetRequest request)
+    {
+        if (request.RewardKind is not ("relic" or "potion")) throw new ProtocolException("invalid_reward_kind", request.RewardKind);
+        return ResetTo(new ResetProvenance(ResetMode.ItemReward, RewardKind: request.RewardKind, RewardModelId: request.ModelId), request.State,
+            new { kind = "item_reward_reset", reward_kind = request.RewardKind, model_id = request.ModelId, replayed_actions = 0 });
+    }
+    public async Task<EnvironmentResult> CustomRewardResetAsync(CustomRewardResetRequest request)
+        => await ResetToAsync(new ResetProvenance(ResetMode.CustomReward, CustomRewardKinds: request.RewardKinds.ToArray(), CustomRewardsLinked: request.Linked), request.State,
+            new { kind = "custom_reward_reset", linked = request.Linked, replayed_actions = 0 });
+    public EnvironmentResult RestReset(ResetRequest request) => ResetTo(new ResetProvenance(ResetMode.Rest), request, new { kind = "rest_reset", replayed_actions = 0 });
+    public async Task<EnvironmentResult> EventResetAsync(EventResetRequest request)
+        => await ResetToAsync(new ResetProvenance(ResetMode.Event, EventId: request.EventId), request.State,
+            new { kind = "event_reset", event_id = request.EventId, replayed_actions = 0 });
+
+    /// Shared reset prologue: install the reset provenance, reconstruct the exact lifecycle that
+    /// provenance names, and only then run the mode-specific initialization. The previous run's
+    /// rewards synchronizer is told the run is leaving between the two, which is where the shipped
+    /// lifecycle expects it; no reset RPC may construct a phase the mode does not own.
+    private EnvironmentResult ResetTo(ResetProvenance provenance, ResetRequest state, object transition)
+    {
+        BeginReset(provenance, state);
+        ConstructBase(provenance, state);
+        NotifyLeavingPreviousRoom();
+        InitializeMode(provenance);
+        return Capture(transition);
+    }
+
+    private async Task<EnvironmentResult> ResetToAsync(ResetProvenance provenance, ResetRequest state, object transition)
+    {
+        BeginReset(provenance, state);
+        ConstructBase(provenance, state);
+        NotifyLeavingPreviousRoom();
+        await InitializeModeAsync(provenance);
+        return Capture(transition);
+    }
+
+    /// Clears worker state and installs the provenance every later reconstruction reads.
+    /// The request is validated first so a rejected reset cannot destroy resident state.
+    private void BeginReset(ResetProvenance provenance, ResetRequest state)
     {
         ThrowIfPoisoned();
+        Validate(state);
         QuiesceOutstandingTransition();
         _branches.Clear();
         _branchOrder.Clear();
         _cardInstanceIds.Clear();
+        _deckInstanceIds.Clear();
         _combatCreaturesById.Clear();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-        _runMode = false; _runStage = "map"; _runWon = false; _roomRewardsSet = null; _resolvedRoomRewards.Clear(); _pendingRoomRewardIndex = null; _pendingRewardsSet = null; _pendingRewardSelection = null; _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = []; _treasureRoom = null; _treasureSynchronizer = null; _treasureOpened = false; _treasureResolved = false; _merchantRoom = null; _merchantInventory = null; _merchantEntryIdentities.Clear(); _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _cardReward = null; _restMode = false; _eventMode = false; _eventId = null; _event = null; Validate(request); _reset = request; _history.Clear(); _currentBranchHandle = null; _lastActionId = null; Construct(request);
+        _runMode = false; _runStage = "map"; _runWon = false; _roomRewardsSet = null; _resolvedRoomRewards.Clear(); _pendingRoomRewardIndex = null; _pendingRewardsSet = null; _pendingRewardSelection = null; _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = []; _treasureRoom = null; _treasureSynchronizer = null; _treasureOpened = false; _treasureResolved = false; _merchantRoom = null; _merchantInventory = null; _merchantEntryIdentities.Clear(); _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _cardReward = null; _restMode = false; _eventMode = false; _eventId = null; _event = null; _provenance = provenance; _reset = state; _history.Clear(); _currentBranchHandle = null; _lastActionId = null;
+    }
+
+    /// The construction phase of a mode. A composed run builds the run and nothing else; every
+    /// other mode builds the run and then its own combat, exactly as the pre-provenance resets did.
+    private void ConstructBase(ResetProvenance provenance, ResetRequest state)
+    {
+        switch (provenance.Mode)
+        {
+            case ResetMode.Run:
+                // A composed run owns the run and its map; it never builds a synthetic combat.
+                ConstructRunOnly(state);
+                break;
+            case ResetMode.Combat:
+            case ResetMode.Map:
+            case ResetMode.CardReward:
+            case ResetMode.ItemReward:
+            case ResetMode.CustomReward:
+            case ResetMode.Rest:
+            case ResetMode.Event:
+                Construct(state);
+                break;
+            default:
+                throw new ProtocolException("unknown_reset_mode", $"Reset mode '{provenance.Mode}' has no construction lifecycle.");
+        }
+    }
+
+    /// The mode-specific initialization, run after construction. Only the modes with a synchronous
+    /// initializer are accepted here; <see cref="ResetMode.CustomReward"/> and
+    /// <see cref="ResetMode.Event"/> require their awaitable initializers and must come through
+    /// <see cref="InitializeModeAsync"/>.
+    private void InitializeMode(ResetProvenance provenance)
+    {
+        switch (provenance.Mode)
+        {
+            case ResetMode.Combat:
+                break;
+            case ResetMode.Map:
+                _mapMode = true; InitializeMap();
+                break;
+            case ResetMode.Run:
+                _runMode = true; _runStage = "map"; InitializeRunMap();
+                break;
+            case ResetMode.CardReward:
+                _rewardMode = true; _rewardKind = "card"; _rewardModelId = null; InitializeReward();
+                break;
+            case ResetMode.ItemReward:
+                _rewardMode = true;
+                _rewardKind = provenance.RewardKind ?? throw new ProtocolException("invalid_reset_mode", "Item reward provenance is missing reward_kind.");
+                _rewardModelId = provenance.RewardModelId; InitializeReward();
+                break;
+            case ResetMode.Rest:
+                _restMode = true; InitializeRestSite();
+                break;
+            case ResetMode.CustomReward:
+            case ResetMode.Event:
+                throw new ProtocolException("invalid_reset_mode", $"Reset mode '{provenance.Mode.Wire()}' has an asynchronous lifecycle.");
+            default:
+                throw new ProtocolException("unknown_reset_mode", $"Reset mode '{provenance.Mode}' has no initialization lifecycle.");
+        }
+    }
+
+    private async Task InitializeModeAsync(ResetProvenance provenance)
+    {
+        switch (provenance.Mode)
+        {
+            case ResetMode.CustomReward:
+                _customRewardMode = true; _customRewardsLinked = provenance.CustomRewardsLinked; _customRewardKinds = provenance.CustomRewardKinds ?? [];
+                await InitializeCustomRewardsAsync();
+                break;
+            case ResetMode.Event:
+                _eventMode = true;
+                _eventId = provenance.EventId ?? throw new ProtocolException("invalid_reset_mode", "Event provenance is missing event_id.");
+                await InitializeEventAsync();
+                break;
+            default:
+                InitializeMode(provenance);
+                break;
+        }
+    }
+
+    /// Tells the previous run's rewards synchronizer that this worker is leaving its room. Runs
+    /// between construction and the mode-specific initialization, exactly where the shipped
+    /// lifecycle expects it; restores deliberately do not repeat it.
+    private void NotifyLeavingPreviousRoom()
+    {
         try
         {
             object? runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance");
@@ -177,51 +312,6 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
         }
         catch { }
-        return Capture(new { kind = "reset", replayed_actions = 0 });
-    }
-    public EnvironmentResult RunReset(ResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request); _runMode = true; _runStage = "map"; InitializeRunMap();
-        return Capture(new { kind = "run_reset", replayed_actions = 0 });
-    }
-    public EnvironmentResult MapReset(ResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request); _mapMode = true; InitializeMap();
-        return Capture(new { kind = "map_reset", replayed_actions = 0 });
-    }
-    public EnvironmentResult RewardReset(ResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request); _rewardMode = true; _rewardKind = "card"; _rewardModelId = null; InitializeReward();
-        return Capture(new { kind = "reward_reset", replayed_actions = 0 });
-    }
-    public EnvironmentResult ItemRewardReset(ItemRewardResetRequest request)
-    {
-        ThrowIfPoisoned();
-        if (request.RewardKind is not ("relic" or "potion")) throw new ProtocolException("invalid_reward_kind", request.RewardKind);
-        Reset(request.State); _rewardMode = true; _rewardKind = request.RewardKind; _rewardModelId = request.ModelId; InitializeReward();
-        return Capture(new { kind = "item_reward_reset", reward_kind = _rewardKind, model_id = _rewardModelId, replayed_actions = 0 });
-    }
-    public async Task<EnvironmentResult> CustomRewardResetAsync(CustomRewardResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request.State); _customRewardMode = true; _customRewardsLinked = request.Linked; _customRewardKinds = request.RewardKinds.ToArray();
-        await InitializeCustomRewardsAsync();
-        return Capture(new { kind = "custom_reward_reset", linked = _customRewardsLinked, replayed_actions = 0 });
-    }
-    public EnvironmentResult RestReset(ResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request); _restMode = true; InitializeRestSite();
-        return Capture(new { kind = "rest_reset", replayed_actions = 0 });
-    }
-    public async Task<EnvironmentResult> EventResetAsync(EventResetRequest request)
-    {
-        ThrowIfPoisoned();
-        Reset(request.State); _eventMode = true; _eventId = request.EventId; await InitializeEventAsync();
-        return Capture(new { kind = "event_reset", event_id = _eventId, replayed_actions = 0 });
     }
     public EnvironmentResult Observe() { ThrowIfPoisoned(); return Capture(null); }
     public IReadOnlyList<LegalAction> LegalActions() { ThrowIfPoisoned(); return BuildActions(); }
@@ -281,7 +371,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     public string Fork() => GetOrAddCurrentBranch();
-    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, last_construction = _lastConstructionAudit };
+    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, last_construction = _lastConstructionAudit, last_restore = _lastRestoreAudit, reset_mode = _provenance?.Mode.Wire() };
 
     public async Task<EnvironmentResult> RestoreAsync(string id)
     {
@@ -291,6 +381,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (StringComparer.Ordinal.Equals(_hash, branch.ExpectedHash) && _history.SequenceEqual(branchHistory, StringComparer.Ordinal))
         {
             _currentBranchHandle = id;
+            _lastRestoreAudit = new RestoreAudit(branch.Provenance.Mode.Wire(), "resident_prefix", false, false, new SortedDictionary<string, int>(StringComparer.Ordinal), 0);
             return Capture(new { kind = "restore", replayed_actions = 0, resident_prefix_hit = true, elapsed_ms = 0.0 });
         }
         QuiesceOutstandingTransition();
@@ -308,6 +399,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 {
                     timer.Stop();
                     _lastSnapshotDebug = "snapshot_success";
+                    _lastRestoreAudit = new RestoreAudit(branch.Provenance.Mode.Wire(), "combat_snapshot", false, false, new SortedDictionary<string, int>(StringComparer.Ordinal), 0);
                     return snapResult with { Transition = new { kind = "snapshot_restore", replayed_actions = 0, elapsed_ms = timer.Elapsed.TotalMilliseconds } };
                 }
                 else
@@ -325,15 +417,26 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             _lastSnapshotDebug = "snapshot_was_null";
         }
 
-        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null; Construct(branch.Reset); _runMode = branch.RunMode; _runStage = "map"; _pendingRewardsSet = null; _pendingRewardSelection = null;
-        _mapMode = !_runMode && branch.MapMode; _rewardMode = !_runMode && branch.RewardMode; _rewardKind = branch.RewardKind; _rewardModelId = branch.RewardModelId; _restMode = !_runMode && branch.RestMode; _eventMode = !_runMode && branch.EventMode; _eventId = branch.EventId;
-        _customRewardMode = branch.CustomRewardMode; _customRewardsLinked = branch.CustomRewardsLinked; _customRewardKinds = branch.CustomRewardKinds;
-        if (_runMode) InitializeRunMap();
-        else if (_mapMode) InitializeMap();
-        if (_rewardMode) InitializeReward();
-        if (_restMode) InitializeRestSite();
-        if (_eventMode) await InitializeEventAsync();
-        if (_customRewardMode) await InitializeCustomRewardsAsync();
+        // Rebuild exactly the lifecycle the branch's provenance names. A composed-run branch must
+        // never pass through combat construction, or the reconstruction would install and discard
+        // a synthetic combat just like the reset it is replaying.
+        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _deckInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null;
+        _runMode = false; _runStage = "map"; _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _restMode = false; _eventMode = false; _eventId = null;
+        _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = [];
+        _pendingRewardsSet = null; _pendingRewardSelection = null; _provenance = branch.Provenance;
+        // Sample the shipped CombatManager boundary around the construction phase only: the mode
+        // initialization that follows (for a composed run, map generation) legitimately clears a
+        // stale combat-state reference, which is not a synthetic combat construction.
+        object? combatStateBeforeRebuild = NativeCombatState();
+        ConstructBase(branch.Provenance, branch.Reset);
+        RestoreAudit audit = new(
+            branch.Provenance.Mode.Wire(), "replay",
+            SyntheticCombatInstalled: !ReferenceEquals(combatStateBeforeRebuild, NativeCombatState()),
+            PlayerHasCombatState: ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
+            RngCounters: RunRngCounters(),
+            ReplayedActions: branchHistory.Count);
+        await InitializeModeAsync(branch.Provenance);
+        _lastRestoreAudit = audit;
         foreach (string action in branchHistory) { await StepAsync(action, false); _history.Add(action); }
         _currentBranchHandle = id;
         EnvironmentResult result = Capture(null);
@@ -360,22 +463,36 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object? combatStateBeforeRun = NativeCombatState();
         RunConstruction run = ConstructRun(r);
         object? combatStateAfterRun = NativeCombatState();
-        ConstructionAudit runPhaseAudit = new(
-            RunPhaseCreatedCombatState: !ReferenceEquals(combatStateBeforeRun, combatStateAfterRun),
-            RunPhasePlayerHasCombatState: ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
-            RunPhaseRngCounters: RunRngCounters(),
-            CombatPhaseCreatedCombatState: false,
-            CombatPhasePlayerHasCombatState: false,
-            CombatPhaseRngCounters: new SortedDictionary<string, int>(StringComparer.Ordinal));
-        _lastConstructionAudit = runPhaseAudit;
+        _lastConstructionAudit = RunPhaseAudit(combatStateBeforeRun);
         ConstructCombat(r, run);
-        _lastConstructionAudit = runPhaseAudit with
+        _lastConstructionAudit = _lastConstructionAudit with
         {
+            CombatPhaseConstructed = true,
             CombatPhaseCreatedCombatState = !ReferenceEquals(combatStateAfterRun, NativeCombatState()),
             CombatPhasePlayerHasCombatState = ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
             CombatPhaseRngCounters = RunRngCounters()
         };
     }
+
+    /// Run-only construction followed by the run-phase audit. Modes that legitimately own no
+    /// combat (composed runs) use this instead of <see cref="Construct"/>, so the boundary
+    /// evidence still shows that no `CombatState` was installed and no combat RNG was consumed.
+    private void ConstructRunOnly(ResetRequest r)
+    {
+        object? combatStateBeforeRun = NativeCombatState();
+        ConstructRun(r);
+        _lastConstructionAudit = RunPhaseAudit(combatStateBeforeRun);
+    }
+
+    private ConstructionAudit RunPhaseAudit(object? combatStateBeforeRun) => new(
+        Mode: _provenance!.Mode.Wire(),
+        RunPhaseCreatedCombatState: !ReferenceEquals(combatStateBeforeRun, NativeCombatState()),
+        RunPhasePlayerHasCombatState: ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
+        RunPhaseRngCounters: RunRngCounters(),
+        CombatPhaseConstructed: false,
+        CombatPhaseCreatedCombatState: false,
+        CombatPhasePlayerHasCombatState: false,
+        CombatPhaseRngCounters: new SortedDictionary<string, int>(StringComparer.Ordinal));
 
     /// Run-only construction: the player, starting or custom deck, relic/potion state, the
     /// native `RunState`, run services, ascension effects, and stable card instance identities.
@@ -389,10 +506,14 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         // the prior reconstructed combat can end the newly installed combat.
         object nativeCombatManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance")!;
         if (_runServicesInitialized) ReflectionTools.Invoke(nativeCombatManager, "Reset", false);
+        // The run owns the shipped combat manager singleton as a run service, so bind it here.
+        // Composed runs use it to start real combats from the map without ever constructing one.
+        _manager = nativeCombatManager;
         object character = Find(ReflectionTools.GetStatic(db, "AllCharacters")!, r.Character);
         object unlock = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), new List<string>(), List(T("MegaCrit.Sts2.Core.Models.ModelId"), []), 0);
         _player = playerType.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForNewRun" && x.GetParameters().Length == 3).Invoke(null, [character, unlock, (ulong)1])!;
         _cardInstanceIds.Clear();
+        _deckInstanceIds.Clear();
         _choiceOrdinal = 0; _dynamicCardOrdinal = 0; _pendingChoice = null; _continuationTask = null;
         object deck = ReflectionTools.Get(_player, "Deck")!;
         if (!r.UseCharacterStartingLoadout) ReflectionTools.Invoke(deck, "Clear", true);
@@ -476,6 +597,9 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             object result = ReflectionTools.Invoke(_player, "AddPotionInternal", Mutable("AllPotions", potion.ModelId), potion.Slot, true)!;
             if (!(bool)ReflectionTools.Get(result, "success")!) throw new ProtocolException("invalid_reset", $"Could not place potion {potion.ModelId} in slot {potion.Slot}.");
         }
+        // Publish the run-owned deck identity map. Combat construction and any later native
+        // combat started from the map both resolve their cloned cards through it.
+        foreach ((string instanceId, object deckCard) in deckVersions) _deckInstanceIds.TryAdd(deckCard, instanceId);
         return new RunConstruction(deck, deckVersions, modifiers);
     }
 
@@ -942,12 +1066,6 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private void RebindEnteredCombat(object room)
     {
-        Dictionary<object, string> deckIds = new(ReferenceEqualityComparer.Instance);
-        foreach ((object card, string id) in _cardInstanceIds)
-        {
-            object? deckVersion = ReflectionTools.Get(card, "DeckVersion");
-            if (deckVersion is not null) deckIds.TryAdd(deckVersion, id);
-        }
         _combat = ReflectionTools.Get(room, "CombatState")!;
         _manager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance")!;
         _pcs = ReflectionTools.Get(_player!, "PlayerCombatState")!;
@@ -959,7 +1077,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             {
                 if (card is null) continue;
                 object? deckVersion = ReflectionTools.Get(card, "DeckVersion");
-                if (deckVersion is not null && deckIds.TryGetValue(deckVersion, out string? id)) _cardInstanceIds[card] = id;
+                if (deckVersion is not null && _deckInstanceIds.TryGetValue(deckVersion, out string? id)) _cardInstanceIds[card] = id;
                 else GetCardInstanceId(card);
             }
         }
@@ -2089,7 +2207,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private static string Entry(object model) => Convert.ToString(ReflectionTools.Get(ReflectionTools.Get(model, "Id") ?? ReflectionTools.Get(model, "ModelId")!, "Entry"))!;
     private Type T(string name) => _context.RequireType(name);
     private static object List(Type type, IReadOnlyList<object?> items) { IList list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(type))!; foreach (object? item in items) list.Add(item); return list; }
-    private void EnsureReset() { if (_reset is null) throw new ProtocolException("not_reset", "Call reset first."); }
+    private void EnsureReset() { if (_reset is null || _provenance is null) throw new ProtocolException("not_reset", "Call reset first."); }
     private void Validate(ResetRequest r)
     {
         if (r.GameBuild.AssemblySha256 is { Length: > 0 } h && !h.Equals(_assemblyHash, StringComparison.OrdinalIgnoreCase)) throw new ProtocolException("build_mismatch", h);
@@ -2637,6 +2755,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             action_id = _lastActionId,
             expected_hash = _hash,
             reset = _reset,
+            provenance = _provenance!.Snapshot(),
             kernel = TransitionKernelSnapshot()
         });
         string id = "s:" + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload)));
@@ -2663,18 +2782,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             _lastActionId,
             _hash,
             _reset!,
+            _provenance!,
             history,
-            _runMode,
-            _mapMode,
-            _rewardMode,
-            _rewardKind,
-            _rewardModelId,
-            _restMode,
-            _eventMode,
-            _eventId,
-            _customRewardMode,
-            _customRewardKinds,
-            _customRewardsLinked,
             combatSnapshot);
         _branchOrder.AddLast(id);
         _currentBranchHandle = id;
@@ -3284,31 +3393,56 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     /// Diagnostics-only record of the run-only/combat-only construction boundary. Every field is
     /// read from shipped native state, so it can only be produced while the boundary is real.
+    /// `CombatPhaseConstructed` is false for the modes that own no combat at all.
     private sealed record ConstructionAudit(
+        string Mode,
         bool RunPhaseCreatedCombatState,
         bool RunPhasePlayerHasCombatState,
         SortedDictionary<string, int> RunPhaseRngCounters,
+        bool CombatPhaseConstructed,
         bool CombatPhaseCreatedCombatState,
         bool CombatPhasePlayerHasCombatState,
         SortedDictionary<string, int> CombatPhaseRngCounters);
+
+    /// Diagnostics-only record of how the last restore rebuilt its branch. `SyntheticCombatInstalled`
+    /// compares the shipped `CombatManager` combat-state reference across the reconstruction, so a
+    /// restore that built and discarded a combat for a mode that owns none is observable here.
+    private sealed record RestoreAudit(
+        string Mode,
+        string Path,
+        bool SyntheticCombatInstalled,
+        bool PlayerHasCombatState,
+        SortedDictionary<string, int> RngCounters,
+        int ReplayedActions);
+
+    /// First-class initialization provenance for a branch. The mode alone selects the
+    /// reconstruction lifecycle; the remaining fields are the parameters that mode needs.
+    private sealed record ResetProvenance(
+        ResetMode Mode,
+        string? EventId = null,
+        string? RewardKind = null,
+        string? RewardModelId = null,
+        string[]? CustomRewardKinds = null,
+        bool CustomRewardsLinked = false)
+    {
+        public object Snapshot() => new
+        {
+            mode = Mode.Wire(),
+            event_id = EventId,
+            reward_kind = RewardKind,
+            reward_model_id = RewardModelId,
+            custom_reward_kinds = CustomRewardKinds,
+            custom_rewards_linked = CustomRewardsLinked
+        };
+    }
 
     private sealed record Branch(
         string? ParentHandle,
         string? ActionId,
         string ExpectedHash,
         ResetRequest Reset,
+        ResetProvenance Provenance,
         string[] History,
-        bool RunMode,
-        bool MapMode,
-        bool RewardMode,
-        string RewardKind,
-        string? RewardModelId,
-        bool RestMode,
-        bool EventMode,
-        string? EventId,
-        bool CustomRewardMode,
-        string[] CustomRewardKinds,
-        bool CustomRewardsLinked,
         CombatSnapshot? CombatSnapshot = null);
     private sealed record PendingRewardSelection(object TopReward, object SelectedReward, Task OfferTask, bool IsLinked);
     private sealed class PendingNativeChoice(

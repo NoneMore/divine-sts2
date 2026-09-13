@@ -23,6 +23,25 @@ _SEM_FAILCRITICALERRORS = 0x0001
 _SEM_NOGPFAULTERRORBOX = 0x0002
 _SEM_NOOPENFILEERRORBOX = 0x8000
 
+# Portable branch records. Version 0 is the implicit pre-provenance format whose reconstruction
+# mode can only be read from the recorded reset method; version 1 states the provenance, the
+# build identity, and the schema version explicitly.
+PORTABLE_BRANCH_SCHEMA_VERSION = 1
+
+# Each reset RPC names exactly one reconstruction provenance. A portable branch may only replay
+# through the method that its recorded provenance selects, so a tampered or unknown mode fails
+# closed instead of silently reconstructing a different lifecycle.
+RESET_METHOD_PROVENANCE = {
+    "reset": "combat",
+    "run_reset": "run",
+    "map_reset": "map",
+    "reward_reset": "card_reward",
+    "item_reward_reset": "item_reward",
+    "custom_reward_reset": "custom_reward",
+    "rest_reset": "rest",
+    "event_reset": "event",
+}
+
 
 def _spawn_without_windows_error_dialogs(command: list[str], **options: Any) -> subprocess.Popen[str]:
     """Spawn one child that inherits suppressed Windows fault/open-file dialogs."""
@@ -47,6 +66,50 @@ class NativeSimError(RuntimeError):
     def __init__(self, code: str, message: str, details: Any = None):
         super().__init__(f"{code}: {message}")
         self.code, self.details = code, details
+
+
+def _portable_reset_request(worker: "NativeWorker", branch: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+    """Resolve the reset RPC a portable branch must replay through, failing closed.
+
+    A schema-versioned record must state its provenance, its reset request, and the build
+    identity it was captured on; a record without a schema version takes the explicit version-0
+    compatibility path, where the reset method alone names the reconstruction mode.
+    """
+    if not isinstance(branch, dict) or not isinstance(branch.get("history"), list) or "expected_hash" not in branch:
+        raise NativeSimError("invalid_portable_branch", "A portable branch requires an action history and an expected hash.")
+    schema = branch.get("schema_version")
+    recorded_provenance: str | None
+    if schema is None:
+        recorded_provenance = None
+        reset_request = branch.get("reset_request")
+        if reset_request is None and branch.get("reset") is not None:
+            reset_request = {"method": "reset", "params": branch["reset"]}
+    elif schema == PORTABLE_BRANCH_SCHEMA_VERSION:
+        recorded_provenance = branch.get("provenance")
+        if recorded_provenance is None:
+            raise NativeSimError("invalid_portable_branch", "A versioned portable branch must record its reset provenance.")
+        reset_request = branch.get("reset_request")
+    else:
+        raise NativeSimError("unsupported_portable_branch_schema", f"portable branch schema {schema!r} is not supported by this client")
+    if not isinstance(reset_request, dict) or not isinstance(reset_request.get("method"), str) or not isinstance(reset_request.get("params"), dict):
+        raise NativeSimError("invalid_portable_branch", "A portable branch requires a reset request with a method and params.")
+    recorded_build = branch.get("game_build")
+    if isinstance(recorded_build, dict):
+        for key in ("version", "assembly_sha256", "pck_sha256"):
+            expected, actual = recorded_build.get(key), worker.build.get(key)
+            if expected and actual and expected != actual:
+                raise NativeSimError("build_mismatch", f"portable branch {key} {expected} does not match worker build {actual}")
+    method = reset_request["method"]
+    if method not in RESET_METHOD_PROVENANCE:
+        raise NativeSimError("unknown_reset_mode", f"portable branch reset method '{method}' is not a supported reset mode")
+    expected_provenance = RESET_METHOD_PROVENANCE[method]
+    if recorded_provenance is not None and recorded_provenance != expected_provenance:
+        raise NativeSimError(
+            "reset_provenance_mismatch",
+            f"portable branch provenance '{recorded_provenance}' does not match reset method '{method}' ('{expected_provenance}')",
+            {"provenance": recorded_provenance, "method": method, "expected_provenance": expected_provenance},
+        )
+    return method, reset_request["params"], recorded_provenance
 
 
 def _defaults() -> tuple[Path, Path, Path]:
@@ -82,6 +145,7 @@ class NativeWorker:
             raise ValueError("request_timeout must be positive")
         self._reset_state: dict[str, Any] | None = None
         self._reset_request: dict[str, Any] | None = None
+        self._reset_mode: str | None = None
         self._history: list[str] = []
         self._handle_histories: OrderedDict[str, list[str]] = OrderedDict()
         self.process: subprocess.Popen[str]
@@ -235,8 +299,16 @@ class NativeWorker:
         params = {"state": state, "event_id": event_id}; result = self.request("event_reset", params); self._record_reset("event_reset", params, state, result)
         return result
     def _record_reset(self, method: str, params: dict[str, Any], state: dict[str, Any], result: dict[str, Any]) -> None:
+        if method not in RESET_METHOD_PROVENANCE:
+            raise NativeSimError("unknown_reset_mode", f"Reset method '{method}' has no reconstruction provenance.")
         self._reset_request = {"method": method, "params": copy.deepcopy(params)}
+        self._reset_mode = RESET_METHOD_PROVENANCE[method]
         self._reset_state = copy.deepcopy(state); self._history = []; self._remember_handle(result["state_handle"])
+
+    @property
+    def reset_mode(self) -> str | None:
+        """Provenance of the reset RPC this worker's resident state descends from."""
+        return self._reset_mode
     def observe(self) -> dict[str, Any]: return self.request("observe")
     def observe_agent(self) -> dict[str, Any]:
         from .observations import extract_agent_observation
@@ -288,7 +360,15 @@ class NativeWorker:
     def export_branch(self) -> dict[str, Any]:
         if self._reset_state is None or self._reset_request is None: raise NativeSimError("not_reset", "Call reset before exporting a branch")
         state = self.observe()
-        return {"reset": copy.deepcopy(self._reset_state), "reset_request": copy.deepcopy(self._reset_request), "history": list(self._history), "expected_hash": state["state_hash"]}
+        return {
+            "schema_version": PORTABLE_BRANCH_SCHEMA_VERSION,
+            "game_build": copy.deepcopy(self.build),
+            "reset": copy.deepcopy(self._reset_state),
+            "reset_request": copy.deepcopy(self._reset_request),
+            "provenance": self._reset_mode,
+            "history": list(self._history),
+            "expected_hash": state["state_hash"],
+        }
 
     @property
     def memory_bytes(self) -> int:
@@ -356,8 +436,9 @@ class NativeWorkerPool:
 
     def restore_portable(self, worker_index: int, branch: dict[str, Any]) -> dict[str, Any]:
         worker = self._replace_if_dead(worker_index)
-        reset_request = branch.get("reset_request", {"method": "reset", "params": branch["reset"]})
-        method, params = reset_request["method"], reset_request["params"]
+        # Validate the whole record -- schema, build identity, provenance, and method -- before any
+        # reset RPC can touch the target worker, so a tampered branch cannot leave it half-rebuilt.
+        method, params, _ = _portable_reset_request(worker, branch)
         result = worker.request(method, params)
         state = params.get("state", params)
         worker._record_reset(method, params, state, result)
