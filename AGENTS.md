@@ -51,4 +51,6 @@ pwsh scripts/test-public-tree.ps1
 
 Build affected C# projects when C# code or shared build configuration changes. Run game-dependent, differential, rollout, or benchmark checks only when relevant and when the required local game installation and pinned build are available; otherwise report that limitation rather than weakening or bypassing the check.
 
+In a sandboxed session that may only write inside the checkout, keep engine and .NET CLI state inside it: Godot needs a writable `user://` directory (without one it aborts before serving a request), the .NET CLI needs a writable home, and MSBuild needs in-process project-reference builds. `.env` carries those redirects and switches (see `.env.example` for the keys and why they exist). They reach a process only through the loaders — the Python entry points and the PowerShell scripts that dot-source `scripts/common.ps1` — so prefer `pwsh scripts/*.ps1` over bare `dotnet`/`godot` invocations, and note that leftovers such as unreadable `pytest-cache-files-*` directories can still require `python -m pytest -q -p no:cacheprovider --ignore-glob='pytest-cache-files-*'`.
+
 A task is complete when the requested change is present, relevant validation passes, maintained status or design documentation reflects any material decision or claim change, and no prohibited local or generated artifacts have been introduced.

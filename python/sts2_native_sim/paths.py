@@ -14,6 +14,14 @@ GAME_DIRECTORY_NAME = "Slay the Spire 2"
 GAME_DATA_DIRECTORY_NAME = "data_sts2_windows_x86_64"
 ENV_FILE_NAME = ".env"
 
+# Windows always defines these two variables, so the normal "a real environment variable
+# wins over the file" rule would make `.env` unable to redirect them. A sandboxed session
+# may only write inside the checkout, while Godot needs a writable `user://` directory and
+# the full-application sandbox root derives from `LOCALAPPDATA`; both are therefore
+# explicitly overridable from the file when the file names them. Every other key keeps
+# process precedence, so CI and explicit shell exports still win.
+ENV_FILE_OVERRIDE_KEYS: frozenset[str] = frozenset({"APPDATA", "LOCALAPPDATA"})
+
 _ENV_FILE_LOADED = False
 
 
@@ -44,7 +52,10 @@ def load_env_file(path: str | Path | None = None) -> list[str]:
     """Apply repository `.env` overrides to `os.environ`.
 
     A real process environment variable always wins over the file, so CI and
-    explicit shell exports keep precedence. Returns the names applied.
+    explicit shell exports keep precedence. The two Windows-managed keys in
+    `ENV_FILE_OVERRIDE_KEYS` are the documented exception, because they are
+    always defined and would otherwise be impossible to redirect. Returns the
+    names applied.
     """
     global _ENV_FILE_LOADED
     default_file = path is None
@@ -61,7 +72,7 @@ def load_env_file(path: str | Path | None = None) -> list[str]:
         return []
     applied: list[str] = []
     for key, value in parse_env_file(text).items():
-        if os.environ.get(key):
+        if os.environ.get(key) and key not in ENV_FILE_OVERRIDE_KEYS:
             continue
         os.environ[key] = value
         applied.append(key)

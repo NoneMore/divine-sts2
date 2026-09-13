@@ -4,6 +4,13 @@ function Get-DivineRepositoryRoot {
     return (Split-Path -Parent $PSScriptRoot)
 }
 
+# Windows always defines these, so `.env` could never redirect them under the normal
+# "a real environment variable wins" rule. Keep this list identical to
+# sts2_native_sim.paths.ENV_FILE_OVERRIDE_KEYS: Godot needs a writable user:// directory and
+# the full-application sandbox root derives from LOCALAPPDATA, neither of which a sandboxed
+# session can create outside the checkout.
+$DivineEnvFileOverrideKeys = @('APPDATA', 'LOCALAPPDATA')
+
 function Import-DivineEnvFile {
     # Repository `.env` supplies local overrides; a real environment variable wins.
     $path = Join-Path (Get-DivineRepositoryRoot) '.env'
@@ -15,7 +22,9 @@ function Import-DivineEnvFile {
         if ($index -lt 1) { continue }
         $key = $trimmed.Substring(0, $index).Trim()
         $value = $trimmed.Substring($index + 1).Trim().Trim('"').Trim("'")
-        if ($key -and [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($key))) {
+        if (-not $key) { continue }
+        $current = [Environment]::GetEnvironmentVariable($key)
+        if ([string]::IsNullOrEmpty($current) -or $DivineEnvFileOverrideKeys -contains $key) {
             Set-Item -Path "env:$key" -Value $value
         }
     }

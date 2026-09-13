@@ -74,6 +74,28 @@ def test_load_env_file_does_not_override_process_environment(
     assert os.environ["GODOT"] == "D:\\from-file"
 
 
+def test_load_env_file_overrides_only_the_documented_windows_keys(
+    scratch_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`APPDATA`/`LOCALAPPDATA` are always defined, so a sandboxed session can only redirect
+    engine user data into the checkout through this documented exception."""
+    env_file = scratch_dir / ".env"
+    env_file.write_text(
+        "APPDATA=D:\\redirected\\roaming\nLOCALAPPDATA=D:\\redirected\\local\nSTS2_GAME_ROOT=D:\\from-file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", "D:\\profile\\AppData\\Roaming")
+    monkeypatch.setenv("LOCALAPPDATA", "D:\\profile\\AppData\\Local")
+    monkeypatch.setenv("STS2_GAME_ROOT", "E:\\from-process")
+
+    applied = load_env_file(env_file)
+
+    assert applied == ["APPDATA", "LOCALAPPDATA"]
+    assert os.environ["APPDATA"] == "D:\\redirected\\roaming"
+    assert os.environ["LOCALAPPDATA"] == "D:\\redirected\\local"
+    assert os.environ["STS2_GAME_ROOT"] == "E:\\from-process"
+
+
 def test_load_env_file_missing_file_is_noop(scratch_dir: Path) -> None:
     assert load_env_file(scratch_dir / "absent.env") == []
 
