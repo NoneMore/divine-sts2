@@ -51,3 +51,5 @@ knowledge_database/
 !.env.example
 config.local.*
 secrets.*
+
+.agents/
