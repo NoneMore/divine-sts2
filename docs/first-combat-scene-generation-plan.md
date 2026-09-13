@@ -1,6 +1,6 @@
 # 第一战战斗场景生成模块执行计划
 
-状态：**E0 已关闭；E1、E2、E3、E4 与 E5 的实施均已完成，待项目维护者复核合并；E5 的 targeted authority gate 已通过，breadth gate 已冻结待运行**  
+状态：**E0 已关闭；E1、E2、E3、E4 与 E5 的实施均已完成，待项目维护者复核合并；E5 比较器的根比较缺陷已发现并修复（离线测试通过），但两份 manifest 尚未在修复后的实现上重跑：磁盘上 targeted 的 39/39 记录由修复前的实现产出、breadth 报告仍缺失，因此游戏侧 authority gate 未关闭**  
 规划日期：**2026-09-13**  
 治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)  
 证据归属：E1–E5 的持久证据同时记录在 [persistent-environment-evidence.md](persistent-environment-evidence.md)；本计划内的逐单元证据用于维护者复核，计划退役后以证据文档为准。
@@ -300,7 +300,7 @@ E7 真正跨 worker combat keyframe 调查
 
 ### E5 — FullApp 权威投影与 golden differential
 
-**状态：实施完成；targeted authority gate 已通过（2026-09-13），breadth gate 已冻结待运行。**
+**状态：实施完成；根比较缺陷已发现并修复（2026-09-13，离线测试通过）；两份 manifest 尚未在修复后的实现上重跑，磁盘上 targeted 的 39/39 记录由修复前的实现产出，breadth gate 未关闭。**
 
 **结果**
 
@@ -331,14 +331,16 @@ E7 真正跨 worker combat keyframe 调查
 **实现与证据（2026-09-13）**
 
 - 运行器：`python/first_combat_differential_acceptance.py`（比较器 `python/sts2_native_sim/first_combat_differential.py`，离线测试 `tests/test_first_combat_differential.py`，一键脚本 `scripts/run-e5-differential.ps1`）。
-- targeted manifest（13 个 fixture × 3 个抽样 root = 39 条，全部逐步走到统一终点）：**39/39 match、0 error、0 mismatch、0 cap**，共比较 504 个 boundary / 355 个 combat step，全部终点为 `player_death`。A0/A10 与五角色均由 fixture 覆盖。
-- breadth manifest 已冻结为 **100 个不同 seed**，每个 seed 钉定一个 (角色, ascension) 单元，十个单元各 10 个 seed；前十条（每单元一条）带完整第一战逐步 replay，其余只比根。运行命令与结果见 [persistent-environment-evidence.md](persistent-environment-evidence.md)。
+- targeted manifest（13 个 fixture × 3 个抽样 root = 39 条，全部逐步走到统一终点）：修复前的实现记录到 **39/39 match、0 error、0 mismatch、0 cap**，共比较 504 个 boundary / 355 个 combat step，全部终点为 `player_death`。**该记录由修复前的比较器产出**（`compared_roots` 为空、未在根边界显式断言），重跑前不得作为最终证据引用；A0/A10 与五角色均由 fixture 覆盖。
+- breadth manifest 已冻结为 **100 个不同 seed**，每个 seed 钉定一个 (角色, ascension) 单元，十个单元各 10 个 seed。十条（每单元一条）以 `stop=endpoint` 走到统一终点（计划要求的"每 cell 一条完整第一战逐步 replay"），其余 90 条以 `stop=root` 沿同一确定性策略走到第一战根，并在两侧显式断言 `combat.turn == 1 && combat.phase == Play`（`assert_root_boundary`，含出厂侧的 declared == observed encounter）。**重跑待做**；磁盘上无 breadth 报告，运行命令见 [persistent-environment-evidence.md](persistent-environment-evidence.md)。
+- 决策策略：有录制 trace 时按 trace，否则取字典序最小的语义动作键（wrapper 除外），两侧取同一决定；战斗因此由该策略驱动而不是出厂侧自己的偏好——实测在战斗内恒取 `end_turn`（`tests/test_first_combat_differential.py` 固定该行为）。因此"完整第一战"证明的是根边界、每边界合法性/投影与终点分类，**不覆盖打牌/药水效果的真实执行**（那一轴属于 `differential_campaign.py`）。每条记录用 `stop` 与 `decision_kinds`、汇总用 `stops`/`compared_roots`/`decision_kind_counts` 明示实际执行了什么。
+- 比较器缺陷与修复（2026-09-13，修复后离线测试通过、游戏侧待重跑）：`run_entry` 原来在 `trajectory=False` 时于**第一个非 wrapper 边界**即返回，而一次全新 run start 的首个此类边界是 **Neow 事件决策**，于是 breadth 的 90 条"比根"实际只比了 Neow 选项，从未到达第一战根，与本单元 Fixed 第 1 条"根比较必须显式证明 `turn == 1 && phase == Play`"相矛盾。修复：`run_entry` 改为 `stop="root" | "endpoint"`，到达根边界时两侧都调用 `assert_root_boundary`（`root` 模式在此收束，`endpoint` 模式记录 `root_status` 后继续到统一终点），到不了根则以 `budget` 阶段 fail loud。离线回归测试覆盖该缺陷、收侧未证根、根不可达、以及 endpoint 轨迹同样要自证根。
 - 唯一 unsupported 项：`discard_potion`（reconstruction 会暴露丢弃药水动作，bridge 的回合决策面没有该动作）。比较器把它列入 `unsupported_kinds` 而不是静默丢弃；所有已比较轨迹都未取用该动作。
 - E5 期间在 bridge 只读投影中修正了三处真实缺陷（均为投影缺口，不是 reconstruction 行为差异）：Neow 遗物在战斗开始时打开的嵌套卡牌选择会丢失 combat 投影；`NRewardsScreen` 在 `WithSkippingDisallowed`（Neow's Bones）时禁用的 skip 按钮曾被当作合法 `proceed`；`CardReward` 的候选卡改为融合动作 `choose_reward:{r}:Card:{i}:{CARD}` 暴露。三处都记录在 [full-application-control-bridge.md](full-application-control-bridge.md)。
 
 **声明边界**
 
-通过只证明列入 manifest 的 Neow→第一战前缀和第一战轨迹；不扩展为全局 simulator certification，也不证明策略质量。
+通过只证明列入 manifest 的 Neow→第一战前缀和第一战轨迹；每条根比较在两侧显式断言 Turn 1 / Play，每条轨迹的终点为"玩家死亡，或清场且未执行 `generate_room_rewards`"。战斗由两侧同一确定性最小语义键策略执行，实际动作种类由报告字段固定，因此不构成打牌/药水效果覆盖。不扩展为全局 simulator certification，也不证明策略质量。
 
 ### E6 — 队列式语料 farm、schema 与发布门
 

@@ -13,6 +13,13 @@ authority for the first-combat program. This module is the comparator half of th
   loudly.
 * It drives one enumerated fast-path branch on one shipped-application worker and requires the
   semantic legal-action set to agree at every decision boundary, then compares the root projections.
+* It settles where the caller asks: `stop="root"` ends at the plan's first-combat root, proven on
+  both environments by `assert_root_boundary`, while `stop="endpoint"` plays the first combat out to
+  the unified endpoint. A root comparison cannot settle at an earlier coordinator boundary.
+* Which decisions it takes is fixed and deterministic: the recorded trace where one is supplied,
+  otherwise the smallest semantic action key with coordinator wrappers excluded. Both environments
+  take the same decision, and each record lists the kinds actually taken (`decision_kinds`), so a
+  report never implies more action coverage than the run exercised.
 
 What this module does not claim
 -------------------------------
@@ -26,10 +33,10 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
 
-from .first_combat import run_start_request
+from .first_combat import FIRST_COMBAT_ROOT_BOUNDARY, is_first_combat_root, run_start_request
 
 # Canonical record schema for one differential report. Bump when the report changes shape.
-DIFFERENTIAL_SCHEMA_VERSION = 1
+DIFFERENTIAL_SCHEMA_VERSION = 2
 
 FAST = "reconstructed_native"
 FULL = "full_application_native"
@@ -91,6 +98,20 @@ ROOT_SCHEMA: dict[str, Any] = {
         "Wrapper-only boundaries carry no decision and are consumed on whichever side exposes them "
         "(the reconstructed `proceed_neow`, the shipped event PROCEED, and a claimable reward button "
         "whose content is chosen on the next screen). Every consumed wrapper is listed in the report."
+    ),
+    "stops": {
+        "root": "follow the shared decision policy, or the recorded trace where one is supplied, to the plan's "
+                "first-combat root and require combat.turn == 1 && combat.phase == Play on BOTH environments "
+                "(assert_root_boundary) before comparing there; a comparison may never settle at an earlier "
+                "coordinator boundary such as the Neow decision",
+        "endpoint": "continue from the root to the unified endpoint: player death, or the cleared encounter "
+                    "before room rewards",
+    },
+    "decision_policy": (
+        "Recorded trace where one is supplied, otherwise the smallest semantic action key with wrappers "
+        "excluded. The combat is driven by that policy on both sides, not by the shipped application's own "
+        "preference; each record's `decision_kinds` lists the kinds actually taken, so a report states what "
+        "was executed rather than only how far it ran."
     ),
 }
 
@@ -600,7 +621,7 @@ def smallest_key_policy(actions: Sequence[SemanticAction]) -> SemanticAction | N
 
 @dataclass
 class EntryResult:
-    """One manifest entry: a root comparison plus its first-combat trajectory."""
+    """One manifest entry: a comparison that settles at the first-combat root or at the endpoint."""
 
     seed: str
     character: str
@@ -611,9 +632,11 @@ class EntryResult:
     error: str = ""
     difference: dict[str, Any] | None = None
     root_status: str = ""
+    stop: str = ""
     boundaries: int = 0
     combat_steps: int = 0
     endpoint: str = ""
+    decision_kinds: list[str] = field(default_factory=list)
     fast_wrappers: list[str] = field(default_factory=list)
     full_wrappers: list[str] = field(default_factory=list)
     unsupported: list[str] = field(default_factory=list)
@@ -629,10 +652,12 @@ class EntryResult:
             "ascension": self.ascension,
             "label": self.label,
             "status": self.status,
+            "stop": self.stop,
             "boundaries": self.boundaries,
             "combat_steps": self.combat_steps,
             "endpoint": self.endpoint,
             "root_status": self.root_status,
+            "decision_kinds": list(self.decision_kinds),
             "fast_wrappers": list(self.fast_wrappers),
             "full_wrappers": list(self.full_wrappers),
             "unsupported": sorted(set(self.unsupported)),
@@ -680,16 +705,30 @@ def run_entry(
     label: str = "",
     trace: Sequence[str] | None = None,
     run_start: dict[str, Any] | None = None,
-    trajectory: bool = True,
+    stop: str = "endpoint",
     max_combat_steps: int = 60,
 ) -> EntryResult:
-    """Compare one run start on both environments, down to the unified first-combat endpoint.
+    """Compare one run start on both environments, down to `stop`.
+
+    `stop="root"` follows the shared decision policy (or the recorded trace) through the Neow ->
+    first-combat prefix and settles only at the plan's first-combat root, which **both** environments
+    must prove with `assert_root_boundary` (`combat.turn == 1 && combat.phase == Play`, plus the
+    shipped side's declared encounter). A root comparison therefore cannot silently stop at an earlier
+    coordinator boundary such as the Neow decision.
+
+    `stop="endpoint"` continues from the root to the unified endpoint (player death, or the cleared
+    encounter before room rewards).
 
     With `trace` the fast path follows a recorded branch; without it both environments follow the
-    deterministic semantic policy. Every civil boundary compares the semantic legal-action sets and
-    the state projection, so a divergence is reported at the step that caused it.
+    deterministic semantic policy. Every boundary compares the semantic legal-action sets and the
+    state projection, so a divergence is reported at the step that caused it. The decisions actually
+    taken are recorded in `EntryResult.decision_kinds`.
     """
-    result = EntryResult(seed=seed, character=character, ascension=ascension, label=label or f"{seed}|{character}|A{ascension}")
+    if stop not in ("root", "endpoint"):
+        raise DifferentialError(f"unknown differential stop {stop!r}; expected 'root' or 'endpoint'")
+    result = EntryResult(
+        seed=seed, character=character, ascension=ascension, label=label or f"{seed}|{character}|A{ascension}", stop=stop
+    )
     result.build = dict(getattr(fast_worker, "build", {}) or {})
     try:
         full_client = full_client_factory()
@@ -699,7 +738,9 @@ def run_entry(
         result.status = "error"
         return result
     try:
-        started = full_client.start_run(seed=seed, character=character, ascension=ascension, combat_complete=trajectory)
+        started = full_client.start_run(
+            seed=seed, character=character, ascension=ascension, combat_complete=(stop == "endpoint")
+        )
         full_state = started.get("observation") or {}
         fast_state = fast_worker.neow_run_reset(run_start or run_start_request(seed, character, ascension, fast_worker.build))
         remainder = list(trace or [])
@@ -780,12 +821,22 @@ def run_entry(
                 result.status = "mismatch"
                 return result
 
-            if not trajectory:
-                result.status = "match"
+            if is_first_combat_root(fast_state["observation"]):
+                # The plan's root comparison: prove the boundary on both environments instead of
+                # settling at whatever coordinator boundary came first (the Neow decision). An
+                # endpoint trajectory passes through this boundary too, so every entry states here
+                # that the root was reached, not only an entry that stops at it.
+                try:
+                    assert_root_boundary(fast_state["observation"], FAST, result.label)
+                    assert_root_boundary(full_state, FULL, result.label)
+                except DifferentialError as error:
+                    return _fail(result, "root_boundary", str(error), fast_state, full_state)
                 result.root_status = "match"
-                result.fast_hash = str(fast_state.get("state_hash") or "")
-                result.full_hash = str(full_state.get("state_hash") or "")
-                return result
+                if stop == "root":
+                    result.status = "match"
+                    result.fast_hash = str(fast_state.get("state_hash") or "")
+                    result.full_hash = str(full_state.get("state_hash") or "")
+                    return result
 
             chosen = _recorded_or_policy(fast_supported, remainder)
             if chosen is None:
@@ -804,6 +855,7 @@ def run_entry(
                 result.status = "error"
                 return result
 
+            result.decision_kinds.append(chosen.kind)
             if chosen.kind in COMBAT_DECISION_KINDS:
                 result.combat_steps += 1
             fast_state = fast_worker.step(chosen.local_id)
@@ -811,7 +863,8 @@ def run_entry(
             full_state = step_result.get("observation") or {}
 
         result.stage = "budget"
-        result.error = f"the entry did not settle within {budget} boundaries"
+        wanted = FIRST_COMBAT_ROOT_BOUNDARY if stop == "root" else "the unified first-combat endpoint"
+        result.error = f"the entry did not reach {wanted} within {budget} boundaries"
         result.status = "error"
         return result
     finally:
@@ -855,7 +908,7 @@ def _fail(result: EntryResult, stage: str, error: str, fast_state: dict[str, Any
 
 
 def aggregate(results: Sequence[EntryResult]) -> dict[str, Any]:
-    """Error/cap/unsupported accounting and per-cell coverage for the differential report."""
+    """Error/cap/unsupported accounting, per-cell coverage and what each entry actually executed."""
     counts: dict[str, int] = {}
     for result in results:
         counts[result.status] = counts.get(result.status, 0) + 1
@@ -864,19 +917,32 @@ def aggregate(results: Sequence[EntryResult]) -> dict[str, Any]:
         cell = cells.setdefault(f"{result.character}|A{result.ascension}", {})
         cell[result.status] = cell.get(result.status, 0) + 1
     unsupported = sorted({kind for result in results for kind in result.unsupported})
+    decision_kinds: dict[str, int] = {}
+    for result in results:
+        for kind in result.decision_kinds:
+            decision_kinds[kind] = decision_kinds.get(kind, 0) + 1
+    stops: dict[str, int] = {}
+    for result in results:
+        stops[result.stop or "unspecified"] = stops.get(result.stop or "unspecified", 0) + 1
+    compared_roots = sum(1 for result in results if result.root_status == "match")
     return {
         "entries": len(results),
         "status_counts": dict(sorted(counts.items())),
+        "stops": dict(sorted(stops.items())),
+        "compared_roots": compared_roots,
         "character_ascension_cells": {cell: dict(sorted(value.items())) for cell, value in sorted(cells.items())},
         "unsupported_kinds": unsupported,
         "compared_boundaries": sum(result.boundaries for result in results),
         "compared_combat_steps": sum(result.combat_steps for result in results),
+        "decision_kind_counts": dict(sorted(decision_kinds.items())),
+        "decision_policy": ROOT_SCHEMA["decision_policy"],
         "endpoints": dict(sorted({endpoint: sum(1 for r in results if r.endpoint == endpoint) for endpoint in {r.endpoint for r in results if r.endpoint}}.items())),
         "global_certification": False,
         "scope": (
             "Only the manifest entries listed in this report were compared. A pass covers the Neow -> "
             "first-combat prefix and the first combat of those entries on the pinned build; it is not a "
-            "simulator certification and says nothing about policy quality."
+            "simulator certification and says nothing about policy quality. `stops`, `compared_roots` and "
+            "`decision_kind_counts` state where each entry settled and which action kinds it actually took."
         ),
     }
 

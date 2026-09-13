@@ -6,11 +6,20 @@
     `docs/first-combat-scene-generation-plan.md` E5 requires two manifests on the pinned build:
 
     * targeted — thirteen fixtures (the seven high-risk Neow blessings, A10, and one more run start per
-      character); each compares a bounded sample of its enumerated first-combat roots all the way to the
-      unified first-combat endpoint (player death, or the cleared encounter before room rewards).
-    * breadth — a frozen manifest of 100 distinct seeds, one (character, ascension) cell per seed; every
-      entry compares its root, and the first ten entries (one per cell) also compare the whole first
-      combat.
+      character); each compares a bounded sample of its enumerated first-combat roots, following the
+      recorded branch to the root and then out to the unified first-combat endpoint (player death, or
+      the cleared encounter before room rewards).
+    * breadth — a frozen manifest of 100 distinct seeds, one (character, ascension) cell per seed. Every
+      entry drives the shared deterministic decision policy to the first-combat root and compares there,
+      with `combat.turn == 1 && combat.phase == Play` proven on both environments; the first ten entries
+      (one per cell) continue to the unified endpoint.
+
+    Both modes take the same decision on both environments (the recorded trace where one is supplied,
+    otherwise the smallest semantic action key with coordinator wrappers excluded), so in combat they
+    execute `end_turn` whenever it is legal. Each report record states where the entry settled (`stop`)
+    and which action kinds it actually took (`decision_kinds`), and the aggregate reports
+    `stops`/`compared_roots`/`decision_kind_counts`, so a report never implies more coverage than the run
+    exercised.
 
     Every entry runs its own sandboxed `SlayTheSpire2.exe --headless` process, because the shipped game
     serves exactly one run start per process. Reports land under artifacts/ (git-ignored) and every

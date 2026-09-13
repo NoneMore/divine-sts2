@@ -106,10 +106,19 @@ per entry because the shipped game serves exactly one run start per process. Bot
 recorded branch or, where a branch is not recorded, the same deterministic smallest-semantic-key
 policy. Every boundary compares the semantic legal-action sets and the schema-aligned state projection
 (build, run RNG counters, deck and combat piles with upgrades and native state, relics, potions,
-encounter, creatures, intents, powers, resources, native `combat.turn` and `PlayerCombatState.Phase`),
-and the comparison ends at the unified endpoint — player death, or the encounter cleared before
-`generate_room_rewards`. Every root comparison asserts native `turn == 1` and phase `Play`, that the run
-started with Neow, and that the requested seed/character/ascension were honoured.
+encounter, creatures, intents, powers, resources, native `combat.turn` and `PlayerCombatState.Phase`).
+Each entry settles where it says it settles: `stop=root` ends at the first-combat root after both
+environments prove `combat.turn == 1 && combat.phase == Play` (including the shipped side's declared ==
+observed encounter), and `stop=endpoint` continues from that same asserted root to the unified endpoint —
+player death, or the encounter cleared before `generate_room_rewards`. Every entry reports the action
+kinds it actually took, and the aggregate reports `stops`, `compared_roots` and `decision_kind_counts`.
+
+The decision policy is fixed and symmetric, not the shipped application's own preference: the recorded
+trace where one is supplied, otherwise the lexicographically smallest semantic action key with
+coordinator wrappers excluded. In combat that policy selects `end_turn` whenever it is legal, so the
+trajectories compare root boundary, per-boundary legality/projection and endpoint classification but do
+**not** execute card or potion effects on the shipped side; that axis belongs to
+`differential_campaign.py` (49/49 traces) and to the optional E7 work.
 
 Targeted manifest on the pinned build (`python scripts/run-e5-differential.ps1 -Mode targeted`), thirteen
 fixtures — the seven high-risk blessings, an Ironclad A10 case, and one further run start per character —
@@ -120,13 +129,45 @@ compared combat steps in 516.9 s at two workers, every endpoint `player_death`. 
 `version 0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314`, and lists `discard_potion` as the single
 unsupported action kind: the reconstructed environment exposes a potion discard in the turn decision
 surface and the bridge does not, so the comparator reports it instead of silently dropping it. No
-compared trajectory took that action.
+compared trajectory took that action. **This 39/39 run predates the root-comparison fix recorded below**:
+it was produced by a comparator whose `trajectory=False` path settled at the first non-wrapper boundary
+and whose trajectory path never asserted the root boundary, so it must not be cited as the E5 authority
+result until the manifests are re-run.
 
 The breadth manifest is frozen at 100 distinct seeds, each pinning one (character, ascension) cell so the
-ten cells hold ten seeds each; every entry compares its root, and the first ten (one per cell) compare the
-complete first combat. Run it with `python scripts/run-e5-differential.ps1 -Mode breadth`; the report lands
-in `artifacts/e5-differential/breadth.json`. Until that report exists, the breadth half of the E5
-authority gate is unproven.
+ten cells hold ten seeds each; ten entries (one per cell) run `stop=endpoint` for the plan's
+"one step-by-step replay per character/ascension cell" requirement, and the remaining 90 run `stop=root`,
+which drives the shared policy to the first-combat root and proves the boundary there. Run it with
+`python scripts/run-e5-differential.ps1 -Mode breadth`; the report lands in
+`artifacts/e5-differential/breadth.json`. Until that report exists on the fixed comparator, the breadth
+half of the E5 authority gate is unproven, and any report already on disk was produced by the pre-fix
+comparator and is superseded.
+
+### Root-comparison defect in the E5 comparator (found and fixed 2026-09-13)
+
+`run_entry` returned at the first non-wrapper boundary whenever `trajectory=False`. For a fresh run start
+that boundary is the **Neow event decision**, so the 90 breadth entries that were supposed to compare a
+first-combat root compared only the three Neow options: both sides took zero steps, `combat.turn` was
+`None`, and the result was still reported as a match. The breadth description above, and E5's own
+requirement that a root comparison explicitly prove `turn == 1 && phase == Play`, were therefore not met
+by the code, and the frozen 100-seed breadth manifest could not have closed the gate as written. Two
+further consequences of the same driver were measured rather than assumed: the recorded traces produced
+by `FirstCombatEnumerator.expand` stop at the root (the enumerator returns there and never steps inside
+combat), and the smallest-semantic-key policy picks `end_turn` over any `play_card`, so every compared
+combat trajectory consisted of `end_turn` decisions only — the targeted run's 355 combat steps are 355
+`end_turn`s.
+
+The fix renames the mode to `run_entry(..., stop="root" | "endpoint")`. Reaching the root is now proven
+with `assert_root_boundary` on **both** environments (`stop="root"` settles there, `stop="endpoint"`
+records `root_status` and continues), an unknown `stop` fails loudly, an unreachable root fails at the
+`budget` stage instead of reporting a match, and each record carries `stop` and `decision_kinds` so a
+report states what was executed. Offline tests
+(`tests/test_first_combat_differential.py`: root-stop settling, shipped-side root proof, unreachable
+root, endpoint root proof, `end_turn` policy pinning, schema/stops declaration) pass, together with the
+full suite and `scripts/test-public-tree.ps1`. Game-dependent verification is partial and outstanding:
+a 13-entry breadth smoke (ten endpoint cells plus the first three root entries) and a 2-entry endpoint
+smoke with the root assertion both matched, but neither frozen manifest has been re-run on the fixed
+comparator, so no breadth report exists and the E5 authority gate remains open.
 
 Three projection defects were found and fixed while building this gate, all of them on the shipped side
 and all strictly read-only (`docs/full-application-control-bridge.md`): a nested card choice opened by a

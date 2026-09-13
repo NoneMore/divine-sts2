@@ -251,6 +251,23 @@ def test_unknown_action_kinds_fail_loudly():
         raise AssertionError("an unmapped action kind was accepted")
 
 
+def test_schema_declares_both_stops_and_the_decision_policy():
+    assert set(ROOT_SCHEMA["stops"]) == {"root", "endpoint"}
+    assert "combat.turn == 1" in ROOT_SCHEMA["stops"]["root"]
+    assert "smallest semantic action key" in ROOT_SCHEMA["decision_policy"]
+
+
+def test_smallest_key_policy_ends_the_turn_whenever_end_turn_is_legal():
+    """The documented consequence of "smallest semantic key": combat is driven by end_turn."""
+    observation = fast_root_observation()
+    actions = [
+        {"action_id": "play:0", "kind": "play_card", "parameters": {"instance_id": "starter-0-STRIKE_IRONCLAD", "target_id": 1}},
+        {"action_id": "end_turn", "kind": "end_turn", "parameters": {}},
+    ]
+    chosen = smallest_key_policy(semantic_action_keys(FAST, observation, actions))
+    assert chosen is not None and chosen.kind == "end_turn"
+
+
 def test_decision_key_set_drops_wrappers_and_smallest_key_policy_is_deterministic():
     observation = fast_root_observation()
     actions = [
@@ -263,7 +280,7 @@ def test_decision_key_set_drops_wrappers_and_smallest_key_policy_is_deterministi
 
 
 def test_schema_declares_every_compared_field_and_reason():
-    assert ROOT_SCHEMA["schema_version"] == 1
+    assert ROOT_SCHEMA["schema_version"] == 2
     assert "combat.piles" in ROOT_SCHEMA["compared_at_combat_boundaries"]
     assert "run.rng_counters" in ROOT_SCHEMA["compared_at_every_boundary"]
     for field, reason in ROOT_SCHEMA["environment_only"].items():
@@ -361,16 +378,44 @@ def _combat_states() -> tuple[list[dict], list[dict]]:
 
 def test_run_entry_matches_a_full_first_combat_trajectory():
     fast_states, full_states = _combat_states()
-    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, trajectory=True)
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="endpoint")
     assert result.status == "match", result.as_record()
     assert result.endpoint == "encounter_cleared"
     assert result.combat_steps == 1
+    assert result.stop == "endpoint"
+    assert result.root_status == "match"
+    assert result.decision_kinds == ["end_turn"]
+
+
+def test_endpoint_trajectory_proves_the_root_boundary_on_both_sides():
+    """An entry that plays the combat out still has to prove the root it passed through."""
+    fast_states, full_states = _combat_states()
+    full_root = full_states[0]["observation"]
+    full_states[0] = {
+        **full_states[0],
+        "observation": {**full_root, "phase": "map", "decision": {"kind": "map_choice"}},
+    }
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="endpoint")
+    assert result.status == "error", result.as_record()
+    assert result.stage == "root_boundary"
+    assert "not combat" in result.error
+
+
+def test_endpoint_trajectory_reports_a_root_projection_divergence_at_the_root():
+    fast_states, full_states = _combat_states()
+    fast_states[0] = {
+        **fast_states[0],
+        "observation": {**fast_states[0]["observation"], "combat": {**fast_states[0]["observation"]["combat"], "energy": 99}},
+    }
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="endpoint")
+    assert result.status == "mismatch" and result.stage == "projection"
+    assert result.difference is not None and result.difference["path"] == "$.combat.energy"
 
 
 def test_run_entry_reports_the_step_that_diverges():
     fast_states, full_states = _combat_states()
     full_states[1] = {**full_states[1], "observation": {**full_states[1]["observation"], "combat": {**full_states[1]["observation"]["combat"], "energy": 99}}}
-    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, trajectory=True)
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="endpoint")
     assert result.status == "mismatch"
     assert result.difference is not None and result.difference["path"] == "$.combat.energy"
 
@@ -378,14 +423,136 @@ def test_run_entry_reports_the_step_that_diverges():
 def test_run_entry_reports_a_legal_action_set_divergence():
     fast_states, full_states = _combat_states()
     full_states[0] = {**full_states[0], "legal_actions": full_states[0]["legal_actions"][:1]}
-    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, trajectory=True)
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="endpoint")
     assert result.status == "mismatch" and result.stage == "legal_actions"
+
+
+class RepeatingFast(FakeFast):
+    def step(self, action_id: str) -> dict:
+        self.index = min(self.index + 1, len(self.states) - 1)
+        return self.states[self.index]
+
+
+class RepeatingFull(FakeFull):
+    def step(self, action_id: str) -> dict:
+        self.steps.append(action_id)
+        self.index = min(self.index + 1, len(self.states) - 1)
+        return {"observation": self.states[self.index]["observation"]}
+
+
+def _neow_state(environment: str) -> dict:
+    """The first coordinator boundary of a run start: the Neow event choice, not a combat root."""
+    observation = {
+        "schema_version": 2,
+        "game_build": BUILD,
+        "run": {"seed": "SEED", "ascension": 0, "rng_counters": {"Shuffle": 0}},
+        "decision": {"kind": "event_choice"},
+    }
+    if environment == FULL:
+        observation["phase"] = "event"
+        observation["room"] = {"room_type": "Event"}
+        observation["run"] = {**observation["run"], "character": "IRONCLAD"}
+        observation["legal_actions"] = [
+            {"action_id": "choose_event:0", "action_type": "choose_event", "metadata": {"text_key": "NEOW.pages.INITIAL.options.WINGED_BOOTS"}},
+            {"action_id": "choose_event:1", "action_type": "choose_event", "metadata": {"text_key": "NEOW.pages.INITIAL.options.BOOMING_CONCH"}},
+        ]
+    else:
+        observation["legal_actions"] = [
+            {"action_id": "choose_event:0", "kind": "choose_event", "parameters": {"text_key": "NEOW.pages.INITIAL.options.WINGED_BOOTS"}},
+            {"action_id": "choose_event:1", "kind": "choose_event", "parameters": {"text_key": "NEOW.pages.INITIAL.options.BOOMING_CONCH"}},
+        ]
+    return observation
+
+
+def _map_state(environment: str) -> dict:
+    observation = {
+        "schema_version": 2,
+        "game_build": BUILD,
+        "run": {"seed": "SEED", "ascension": 0, "rng_counters": {"Shuffle": 0}},
+        "decision": {"kind": "map_choice"},
+    }
+    if environment == FULL:
+        observation["phase"] = "map"
+        observation["room"] = {"room_type": "Map"}
+        observation["run"] = {**observation["run"], "character": "IRONCLAD"}
+        observation["legal_actions"] = [
+            {"action_id": "choose_map:0", "action_type": "choose_map", "metadata": {"col": 1, "row": 1, "room_type": "Monster"}},
+        ]
+    else:
+        observation["legal_actions"] = [
+            {"action_id": "choose_map:0", "kind": "choose_map", "parameters": {"col": 1, "row": 1, "point_type": "Monster"}},
+        ]
+    return observation
+
+
+def _root_corridor() -> tuple[list[dict], list[dict]]:
+    """Neow decision -> map point -> first-combat root, which is where a root comparison must settle."""
+    fast_states, full_states = _combat_states()
+    fast_states = [{"observation": _neow_state(FAST), "state_hash": "F-2", "legal_actions": _neow_state(FAST)["legal_actions"]},
+                   {"observation": _map_state(FAST), "state_hash": "F-1", "legal_actions": _map_state(FAST)["legal_actions"]},
+                   *fast_states]
+    full_states = [{"observation": _neow_state(FULL), "state_hash": "H-2", "legal_actions": _neow_state(FULL)["legal_actions"]},
+                   {"observation": _map_state(FULL), "state_hash": "H-1", "legal_actions": _map_state(FULL)["legal_actions"]},
+                   *full_states]
+    return fast_states, full_states
+
+
+def test_root_stop_settles_at_the_first_combat_root_not_at_the_first_boundary():
+    """Regression: a root comparison used to settle at the Neow decision and never reach the root."""
+    fast_states, full_states = _root_corridor()
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="root")
+    assert result.status == "match", result.as_record()
+    assert result.stop == "root"
+    assert result.root_status == "match"
+    assert result.endpoint == ""
+    assert result.combat_steps == 0
+    assert result.boundaries == 3, result.as_record()
+    assert result.decision_kinds == ["event_option", "map_node"]
+
+
+def test_root_stop_requires_the_shipped_side_to_prove_the_root_boundary():
+    """The shipped side must be at the root too, not merely agree field by field."""
+    fast_states, full_states = _root_corridor()
+    full_root = full_states[2]["observation"]
+    full_states[2] = {
+        **full_states[2],
+        "observation": {**full_root, "phase": "map", "decision": {"kind": "map_choice"}},
+    }
+    result = run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="root")
+    assert result.status == "error", result.as_record()
+    assert result.stage == "root_boundary"
+    assert "not combat" in result.error
+
+
+def test_root_stop_fails_loudly_when_the_root_is_never_reached():
+    fast_states, full_states = _root_corridor()
+    turn_two_fast = fast_root_observation()
+    turn_two_fast["combat"]["turn"] = 2
+    turn_two_full = full_root_observation()
+    turn_two_full["combat"]["turn"] = 2
+    states_fast = [fast_states[0], {"observation": turn_two_fast, "state_hash": "F2", "legal_actions": [{"action_id": "end_turn", "kind": "end_turn", "parameters": {}}]}]
+    states_full = [full_states[0], {"observation": turn_two_full, "state_hash": "H2", "legal_actions": [{"action_id": "end_turn", "action_type": "end_turn", "metadata": {}}]}]
+    result = run_entry(RepeatingFast(states_fast), lambda: RepeatingFull(states_full), seed="SEED", character="IRONCLAD", ascension=0, stop="root")
+    assert result.status == "error" and result.stage == "budget"
+    assert "combat.turn == 1" in result.error
+
+
+def test_run_entry_rejects_an_unknown_stop():
+    from sts2_native_sim.first_combat_differential import DifferentialError
+
+    fast_states, full_states = _combat_states()
+    try:
+        run_entry(FakeFast(fast_states), lambda: FakeFull(full_states), seed="SEED", character="IRONCLAD", ascension=0, stop="first_boundary")
+    except DifferentialError as error:
+        assert "unknown differential stop" in str(error)
+    else:  # pragma: no cover - an unmapped stop must fail closed
+        raise AssertionError("an unknown stop was accepted")
 
 def test_aggregate_accounts_for_every_status_and_cell():
     results = [
-        EntryResult(seed="a", character="IRONCLAD", ascension=0, status="match", boundaries=3, combat_steps=2, endpoint="encounter_cleared"),
-        EntryResult(seed="b", character="IRONCLAD", ascension=0, status="mismatch", stage="projection", unsupported=["discard_potion"]),
-        EntryResult(seed="c", character="SILENT", ascension=10, status="error", stage="worker"),
+        EntryResult(seed="a", character="IRONCLAD", ascension=0, status="match", stop="root", root_status="match", boundaries=3, combat_steps=2, endpoint="encounter_cleared", decision_kinds=["event_option", "map_node"]),
+        EntryResult(seed="b", character="IRONCLAD", ascension=0, status="mismatch", stage="projection", stop="endpoint", unsupported=["discard_potion"], decision_kinds=["end_turn"]),
+        EntryResult(seed="c", character="SILENT", ascension=10, status="error", stage="worker", stop="root"),
     ]
     report = aggregate(results)
     assert report["entries"] == 3
@@ -395,3 +562,7 @@ def test_aggregate_accounts_for_every_status_and_cell():
     assert report["unsupported_kinds"] == ["discard_potion"]
     assert report["global_certification"] is False
     assert "not a simulator certification" in report["scope"]
+    assert report["stops"] == {"endpoint": 1, "root": 2}
+    assert report["compared_roots"] == 1
+    assert report["decision_kind_counts"] == {"end_turn": 1, "event_option": 1, "map_node": 1}
+    assert report["decision_policy"] == ROOT_SCHEMA["decision_policy"]

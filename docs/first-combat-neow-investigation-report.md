@@ -996,6 +996,14 @@ same action sequence
 same entire first-combat trajectory
 ```
 
+**Implementation note (2026-09-13):** "the same deterministic action policy" is realized as the recorded
+branch where one exists, otherwise the lexicographically smallest semantic action key with coordinator
+wrappers excluded. Both environments therefore take the same decision, but that policy selects
+`end_turn` in preference to any `play_card`, so an E5 trajectory proves the root boundary, per-boundary
+legality/projection and the endpoint classification without executing card or potion effects on the
+shipped side. Card-play mechanics are covered by `differential_campaign.py` trace replay, not by this
+policy; the E5 report's `decision_kinds` field records the kinds each entry actually took.
+
 ---
 
 ## 19. Combat-Entry Hooks Are Important

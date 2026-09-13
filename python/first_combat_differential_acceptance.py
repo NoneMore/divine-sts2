@@ -6,12 +6,18 @@
 
 * **targeted** — the plan's thirteen fixtures: the seven high-risk blessings, an A10 case, and one
   run start for each remaining character. Each fixture enumerates its fast-path roots and compares a
-  bounded, evenly spaced sample of them on the shipped application, following the recorded branch all
-  the way to the unified first-combat endpoint.
+  bounded, evenly spaced sample of them on the shipped application, following the recorded branch to
+  the root and then out to the unified first-combat endpoint.
 * **breadth** — a frozen manifest of 100 distinct seeds, one (character, ascension) cell per seed so
-  the ten cells are covered evenly. Every entry compares its root with the deterministic semantic
-  policy; the first ten entries (one per cell) additionally compare the complete first combat, which
-  is the plan's "one step-by-step replay per character/ascension cell" requirement.
+  the ten cells are covered evenly. Every entry drives the shared deterministic decision policy to
+  the first-combat root and compares there, with `combat.turn == 1 && combat.phase == Play` proven on
+  both environments; the first ten entries (one per cell) continue to the unified endpoint, which is
+  the plan's "one step-by-step replay per character/ascension cell" requirement.
+
+Both modes settle where they say they settle: the entry's `stop` field is `root` or `endpoint`, and
+`decision_kinds` lists the action kinds actually taken. The combat is executed by the same deterministic
+semantic policy on both sides (the smallest legal semantic key, wrappers excluded), which in combat
+selects `end_turn` whenever it is legal — the report states that rather than implying card-play coverage.
 
 Every entry uses its own isolated shipped-application process: the game serves exactly one run start
 per process, so a fresh sandbox worker is part of the measurement, not an implementation detail.
@@ -103,7 +109,7 @@ def compare_root_sample(
     labels: dict[str, str],
     fixture_index: int,
     workers: int,
-    trajectory: bool,
+    stop: str,
 ) -> list[EntryResult]:
     """Enumerate one fixture's roots and compare an evenly spaced sample on the shipped application."""
     results: list[EntryResult] = []
@@ -139,12 +145,12 @@ def compare_root_sample(
                 label=labels.get(labels_key, labels_key),
                 trace=root.trace,
                 run_start=run_start,
-                trajectory=trajectory,
+                stop=stop,
             )
             result.neow_options = neow_options
             results.append(result)
             print(
-                f"  [targeted] {labels_key} root {index + 1}/{len(sample)} ({len(roots)} enumerated) "
+                f"  [targeted] {labels_key} root {index + 1}/{len(sample)} ({len(roots)} enumerated) [{stop}] "
                 f"-> {result.status} boundaries={result.boundaries} {result.stage or ''}",
                 flush=True,
             )
@@ -157,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--roots-per-fixture", type=int, default=3, help="how many sampled roots each targeted fixture compares")
     parser.add_argument("--breadth-limit", type=int, default=100, help="how many frozen breadth entries to compare")
     parser.add_argument("--workers", type=int, default=4, help="concurrent shipped-application processes")
-    parser.add_argument("--trajectory", action="store_true", help="compare the full first combat for every entry, not only the root")
+    parser.add_argument("--trajectory", action="store_true", help="play the first combat out for every entry (stop=endpoint) instead of settling at the first-combat root (stop=root)")
     parser.add_argument(
         "--only-label",
         action="append",
@@ -196,11 +202,12 @@ def main(argv: list[str] | None = None) -> int:
             fixtures = [fixture for fixture in TARGETED_FIXTURES if not args.only_label or fixture[3] in args.only_label]
             if args.only_label and not fixtures:
                 parser.error(f"--only-label matched no targeted fixture: {', '.join(args.only_label)}")
+            targeted_stop = "endpoint" if args.trajectory else "root"
             with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
                 futures = [
                     (
                         (seed, character, ascension, outcome),
-                        executor.submit(compare_root_sample, seed, character, ascension, args.roots_per_fixture, labels, index, args.workers, args.trajectory),
+                        executor.submit(compare_root_sample, seed, character, ascension, args.roots_per_fixture, labels, index, args.workers, targeted_stop),
                     )
                     for index, (seed, character, ascension, outcome) in enumerate(fixtures)
                 ]
@@ -226,8 +233,10 @@ def main(argv: list[str] | None = None) -> int:
             def compare_breadth(item: tuple[str, str, int, str], index: int) -> EntryResult:
                 seed, character, ascension, label = item
                 # The first len(BREADTH_CELLS) entries cover every character/ascension cell once, and
-                # the plan requires one full step-by-step first combat per cell.
-                cell_trajectory = index < len(BREADTH_CELLS)
+                # the plan requires one full step-by-step first combat per cell. Every other entry
+                # still drives to the first-combat root and proves the boundary there.
+                cell_endpoint = index < len(BREADTH_CELLS)
+                stop = "endpoint" if (args.trajectory or cell_endpoint) else "root"
                 try:
                     with NativeWorker() as fast:
                         return run_entry(
@@ -236,8 +245,8 @@ def main(argv: list[str] | None = None) -> int:
                             seed=seed,
                             character=character,
                             ascension=ascension,
-                            label=f"{label}:cell" if cell_trajectory else label,
-                            trajectory=args.trajectory or cell_trajectory,
+                            label=f"{label}:cell" if cell_endpoint else label,
+                            stop=stop,
                         )
                 except Exception as error:  # noqa: BLE001 - one failed entry must not hide the rest
                     return EntryResult(
@@ -247,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
                         label=label,
                         status="error",
                         stage="worker",
+                        stop=stop,
                         error=f"{type(error).__name__}: {error}",
                     )
 
@@ -259,8 +269,9 @@ def main(argv: list[str] | None = None) -> int:
                     result = future.result()
                     results.append(result)
                     print(
-                        f"  [breadth] {result.seed}|{result.character}|A{result.ascension} -> {result.status} "
-                        f"boundaries={result.boundaries} combat_steps={result.combat_steps} {result.stage or ''}",
+                        f"  [breadth] {result.seed}|{result.character}|A{result.ascension} [{result.stop}] -> "
+                        f"{result.status} boundaries={result.boundaries} combat_steps={result.combat_steps} "
+                        f"{result.stage or ''}",
                         flush=True,
                     )
 
