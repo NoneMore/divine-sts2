@@ -44,6 +44,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 #pragma warning restore CS0649
     private string _hash = "";
     private bool _runServicesInitialized;
+    private ConstructionAudit? _lastConstructionAudit;
     private bool _mapMode;
     private bool _rewardMode;
     private object? _cardReward;
@@ -280,7 +281,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     public string Fork() => GetOrAddCurrentBranch();
-    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug };
+    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, last_construction = _lastConstructionAudit };
 
     public async Task<EnvironmentResult> RestoreAsync(string id)
     {
@@ -350,7 +351,37 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         InstallSeam(); InstallChoiceSelector();
     }
 
+    /// Runs both construction phases in order and records the audited boundary between them.
+    /// The audit samples native facts at that boundary -- the shipped `CombatManager` state
+    /// reference and the native run RNG counters -- so the run-only isolation claim is
+    /// observable through `diagnostics` rather than asserted in prose.
     private void Construct(ResetRequest r)
+    {
+        object? combatStateBeforeRun = NativeCombatState();
+        RunConstruction run = ConstructRun(r);
+        object? combatStateAfterRun = NativeCombatState();
+        ConstructionAudit runPhaseAudit = new(
+            RunPhaseCreatedCombatState: !ReferenceEquals(combatStateBeforeRun, combatStateAfterRun),
+            RunPhasePlayerHasCombatState: ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
+            RunPhaseRngCounters: RunRngCounters(),
+            CombatPhaseCreatedCombatState: false,
+            CombatPhasePlayerHasCombatState: false,
+            CombatPhaseRngCounters: new SortedDictionary<string, int>(StringComparer.Ordinal));
+        _lastConstructionAudit = runPhaseAudit;
+        ConstructCombat(r, run);
+        _lastConstructionAudit = runPhaseAudit with
+        {
+            CombatPhaseCreatedCombatState = !ReferenceEquals(combatStateAfterRun, NativeCombatState()),
+            CombatPhasePlayerHasCombatState = ReflectionTools.Get(_player!, "PlayerCombatState") is not null,
+            CombatPhaseRngCounters = RunRngCounters()
+        };
+    }
+
+    /// Run-only construction: the player, starting or custom deck, relic/potion state, the
+    /// native `RunState`, run services, ascension effects, and stable card instance identities.
+    /// It must not create an encounter or combat, shuffle a pile, or roll monster intents. The
+    /// returned `RunConstruction` carries exactly the run-owned objects the combat phase needs.
+    private RunConstruction ConstructRun(ResetRequest r)
     {
         Type db = T("MegaCrit.Sts2.Core.Models.ModelDb"), playerType = T("MegaCrit.Sts2.Core.Entities.Players.Player");
         // Cancel and detach every shipped combat continuation before replacing the
@@ -445,19 +476,33 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             object result = ReflectionTools.Invoke(_player, "AddPotionInternal", Mutable("AllPotions", potion.ModelId), potion.Slot, true)!;
             if (!(bool)ReflectionTools.Get(result, "success")!) throw new ProtocolException("invalid_reset", $"Could not place potion {potion.ModelId} in slot {potion.Slot}.");
         }
+        return new RunConstruction(deck, deckVersions, modifiers);
+    }
 
+    /// Combat-only construction: encounter and monster generation, the native `CombatState`,
+    /// the combat manager and player combat state, entry hooks, opening pile/enemy overrides,
+    /// and combat RNG initialization.
+    private void ConstructCombat(ResetRequest r, RunConstruction run)
+    {
+        Type db = T("MegaCrit.Sts2.Core.Models.ModelDb"), playerType = T("MegaCrit.Sts2.Core.Entities.Players.Player");
+        object deck = run.Deck, modifiers = run.Modifiers;
+        Dictionary<string, object> deckVersions = run.DeckVersions;
+        // Run construction guarantees both; the combat phase reads non-null locals so the split
+        // never depends on a field that the other phase happened to leave unset.
+        object runState = _run!, player = _player!;
+        object nativeCombatManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance")!;
         object encounterModel = r.Encounter.Equals("first", StringComparison.OrdinalIgnoreCase) ? ReflectionTools.Enumerate(ReflectionTools.GetStatic(db, "AllEncounters")).First(x => x is not null)! : Find(ReflectionTools.GetStatic(db, "AllEncounters")!, r.Encounter);
-        object encounter = ReflectionTools.Invoke(encounterModel, "ToMutable")!; ReflectionTools.Invoke(encounter, "GenerateMonstersWithSlots", _run);
-        _combat = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Combat.CombatState"), encounter, _run, modifiers, List(T("MegaCrit.Sts2.Core.Models.BadgeModel"), []), ReflectionTools.Get(_run, "MultiplayerScalingModel"));
-        ReflectionTools.Invoke(_combat, "AddPlayer", _player);
+        object encounter = ReflectionTools.Invoke(encounterModel, "ToMutable")!; ReflectionTools.Invoke(encounter, "GenerateMonstersWithSlots", runState);
+        _combat = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Combat.CombatState"), encounter, runState, modifiers, List(T("MegaCrit.Sts2.Core.Models.BadgeModel"), []), ReflectionTools.Get(runState, "MultiplayerScalingModel"));
+        ReflectionTools.Invoke(_combat, "AddPlayer", player);
         // CombatManager and RunState normally enter combat together. The isolated constructor
         // supplies CombatState directly, so preserve the other half of that native invariant as
         // well: end-of-combat hooks receive the real CombatRoom wrapping this same state.
         object combatRoom = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Rooms.CombatRoom"), _combat);
-        ReflectionTools.Invoke(_run, "PushRoom", combatRoom);
+        ReflectionTools.Invoke(runState, "PushRoom", combatRoom);
         _manager = nativeCombatManager; ReflectionTools.Set(_manager, "_state", _combat); ReflectionTools.Set(_manager, "IsInProgress", true); InitEvents(_manager);
-        ReflectionTools.Invoke(_player, "ResetCombatState"); _pcs = ReflectionTools.Get(_player, "PlayerCombatState")!;
-        ReflectionTools.Invoke(_player, "PopulateCombatState", ReflectionTools.Get(ReflectionTools.Get(_run, "Rng")!, "Shuffle"), _combat);
+        ReflectionTools.Invoke(player, "ResetCombatState"); _pcs = ReflectionTools.Get(player, "PlayerCombatState")!;
+        ReflectionTools.Invoke(player, "PopulateCombatState", ReflectionTools.Get(ReflectionTools.Get(runState, "Rng")!, "Shuffle"), _combat);
         object drawPile = ReflectionTools.Get(_pcs, "DrawPile")!;
         foreach (object? combatCard in ReflectionTools.Enumerate(ReflectionTools.Get(drawPile, "Cards")))
         {
@@ -526,7 +571,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
         }
         _combatCreaturesById.Clear();
-        object pcCreature = ReflectionTools.Get(_player, "Creature")!;
+        object pcCreature = ReflectionTools.Get(player, "Creature")!;
         if (ReflectionTools.Get(pcCreature, "CombatId") is uint pcId) _combatCreaturesById[pcId] = pcCreature;
         foreach (object c in constructedEnemies)
         {
@@ -538,7 +583,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             // individual relic, card, character, or pet effects. The exporter opts into this
             // only for traces captured after the field was introduced; legacy traces retain
             // their previous reset contract and remain quarantined if they require the hooks.
-            foreach (object? relic in ReflectionTools.Enumerate(ReflectionTools.Get(_player, "Relics")))
+            foreach (object? relic in ReflectionTools.Enumerate(ReflectionTools.Get(player, "Relics")))
             {
                 if (relic is null) continue;
                 if (ReflectionTools.Invoke(relic, "AfterRoomEntered", combatRoom) is Task roomHook)
@@ -556,7 +601,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else
         {
             // Backward-compatible narrow lifecycle for already certified Necrobinder traces.
-            foreach (object? relic in ReflectionTools.Enumerate(ReflectionTools.Get(_player, "Relics")))
+            foreach (object? relic in ReflectionTools.Enumerate(ReflectionTools.Get(player, "Relics")))
             {
                 if (relic is null || ReflectionTools.Get(relic, "SpawnsPets") is not true) continue;
                 MethodInfo? beforeCombatStart = relic.GetType().GetMethod("BeforeCombatStart", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -566,7 +611,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
         }
         object cardDb = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.GameActions.Multiplayer.NetCombatCardDb"), "Instance")!; ReflectionTools.Invoke(cardDb, "ClearCardsForTesting");
-        ReflectionTools.Invoke(cardDb, "StartCombat", List(playerType, [_player]));
+        ReflectionTools.Invoke(cardDb, "StartCombat", List(playerType, [player]));
         if (r.Enemies is not null)
             for (int index = 0; index < constructedEnemies.Count; index++)
                 if (r.Enemies[index].Block is int expectedBlock)
@@ -2016,6 +2061,17 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private bool Alive(string side) => _combat is not null && ReflectionTools.Enumerate(ReflectionTools.Get(_combat, side)).Any(x => x is not null && (bool)ReflectionTools.Get(x, "IsAlive")!);
     private bool PlayerAlive() => _player is not null && ReflectionTools.Get(_player, "Creature") is { } creature && (bool)ReflectionTools.Get(creature, "IsAlive")!;
+
+    /// Current native `CombatManager` combat state, read through the shipped singleton. Used by
+    /// the construction audit to compare the reference that existed before run-only construction
+    /// with the one that exists after it; the shipped `Reset(graceful: false)` deliberately keeps
+    /// a stale reference, so identity comparison -- not nullness -- is the honest test.
+    private object? NativeCombatState()
+    {
+        object? manager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance");
+        return manager is null ? null : ReflectionTools.Get(manager, "_state");
+    }
+
     private object Mutable(string collection, string id)
     {
         object canonical = Find(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Models.ModelDb"), collection)!, id);
@@ -3218,6 +3274,23 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         List<RelicSnapshot> Relics,
         List<string?> PotionSlots,
         OrbQueueSnapshot? Orbs);
+
+    /// Objects the run-only phase owns and the combat-only phase needs. Everything else the
+    /// combat phase reads comes from `_run`, `_player`, or the shipped singletons.
+    private sealed record RunConstruction(
+        object Deck,
+        Dictionary<string, object> DeckVersions,
+        object Modifiers);
+
+    /// Diagnostics-only record of the run-only/combat-only construction boundary. Every field is
+    /// read from shipped native state, so it can only be produced while the boundary is real.
+    private sealed record ConstructionAudit(
+        bool RunPhaseCreatedCombatState,
+        bool RunPhasePlayerHasCombatState,
+        SortedDictionary<string, int> RunPhaseRngCounters,
+        bool CombatPhaseCreatedCombatState,
+        bool CombatPhasePlayerHasCombatState,
+        SortedDictionary<string, int> CombatPhaseRngCounters);
 
     private sealed record Branch(
         string? ParentHandle,

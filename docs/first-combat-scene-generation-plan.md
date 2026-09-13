@@ -115,6 +115,18 @@ E7 真正跨 worker combat keyframe 调查
 
 ### E1 — 拆分 run 构造与 combat 构造
 
+**状态：实施完成（2026-09-13），Refactor gate 证据见本节；合并决定由项目维护者复核。**
+
+结果与证据摘要：
+
+1. `Construct()` 现在只负责按顺序调用两个阶段并记录构造边界审计；`ConstructRun` 返回 `RunConstruction`（deck、稳定 card instance 映射、modifiers），`ConstructCombat` 只消费该结果与 `_run`/`_player`。
+2. 新增只读审计 `diagnostics.last_construction`，在真实阶段边界读取 shipped 原生状态（`CombatManager._state` 引用、新玩家是否已有 `PlayerCombatState`、原生 run RNG counter map）。由于 shipped `Reset(graceful: false)` 会保留旧 `CombatState` 引用，审计按对象 identity 比较而非判空。
+3. 负向证据（pinned build）：run-only 阶段 `run_phase_created_combat_state=false`、`run_phase_player_has_combat_state=false`，八个 combat RNG 流（`Shuffle`、`MonsterAi`、`CombatCardGeneration`、`CombatPotionGeneration`、`CombatCardSelection`、`CombatEnergyCosts`、`CombatTargets`、`CombatOrbs`）计数全为 0；combat 阶段则安装 `CombatState`、生成 `PlayerCombatState` 并消耗 `Shuffle`（10 张牌=9；A10 起始负载=10，同时native 起始牌组含恰好一张 `ASCENDERS_BANE`）。四 worker、同 worker 重复构造、八种 reset mode 的审计完全一致。
+4. 两次临时故障注入证明断言可判别而非自证：把 combat 构造移入 run-only 阶段 → 边界报告 `run_phase_created_combat_state: true`、`Shuffle: 9`；仅在 run-only 阶段抽取一次 `Shuffle` → 报告 `run-only construction consumed combat RNG: {'Shuffle': 1}`（此时两条 CombatState 断言仍通过，说明 RNG 断言独立生效）。注入已完全回滚。
+5. 正向回归：16 个 acceptance 脚本拆分前后退出码、状态 hash 集合与（除去计时字段的）输出完全一致，唯一差异是 `acceptance.py` 新增的 `construction_boundary` 字段；direct reset hash 保持 `CEE9B22A0D5E3FC2B3A0C66E2C5E694E54540059B9C27E9EEA77F3D840DBEF7B`。
+6. `run_room_entry_acceptance.py`、`run_event_combat_acceptance.py`、`run_custom_reward_acceptance.py` 在拆分**之前**即已在当前树上失败（断言与当前原生内容/句柄语义不符），本计划未修改其期望，已记录在 `docs/persistent-environment.md` Validation 节。
+7. 构建：Protocol、Core、Host、GodotHost 的 Release 构建均 0 警告 0 错误；GodotHost Debug（Godot 默认加载配置）同样通过。
+
 **结果**
 
 把 `Construct()` 拆成明确的 run-only 与 combat-only 生命周期，同时保持 `reset` 及所有隔离 mode 的现有可观察行为。

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from acceptance import SCENARIO
+from acceptance import SCENARIO, audit_construction_boundary
 from sts2_native_sim import NativeWorkerPool
 
 
@@ -26,6 +26,8 @@ def main() -> None:
         results = {}
         for name, reset in cases:
             state = reset()
+            # E1: every reset mode constructs the run before it constructs combat.
+            audit_construction_boundary(source)
             action_id = state["legal_actions"][0]["action_id"]
             stepped = source.step(action_id)
             branch = source.export_branch()
