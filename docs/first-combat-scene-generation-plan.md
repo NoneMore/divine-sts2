@@ -1,6 +1,6 @@
 # 第一战战斗场景生成模块执行计划
 
-状态：**E0 已关闭；E1、E2、E3 实施完成，待项目维护者复核合并；E4 起待实施**  
+状态：**E0 已关闭；E1、E2、E3、E4 实施完成，待项目维护者复核合并；E5 起待实施**  
 规划日期：**2026-09-13**  
 治理调查：[first-combat-neow-investigation-report.md](first-combat-neow-investigation-report.md)
 
@@ -253,6 +253,20 @@ E7 真正跨 worker combat keyframe 调查
 - 不支持/反射签名漂移/Neow 不允许时 fail loudly，并报告 build provenance。
 
 ### E4 — 第一战根枚举库与 portable replay
+
+**状态：实施完成（2026-09-13），Root gate 证据见本节；合并决定由项目维护者复核。**
+
+结果与证据摘要（pinned build `A1F9E653…` / `v0.107.1`，见 `docs/persistent-environment.md`）：
+
+1. 新增 `python/sts2_native_sim/first_combat.py`：按 E4 结果要求枚举一个 `seed + character + ascension` 的全部合法 Neow 分支与第一战路线，并在 `combat.turn == 1 && combat.phase == Play` 精确边界产出结构化根记录。只跟随协议真实暴露的 legal actions（`choose_event`、`choose_cards`、`choose_option`、`choose_custom_reward`、`skip_custom_rewards`、`proceed_neow`、`choose_map`），不伪造无玩家选择的 RNG 分支。
+2. 分支身份由有序 action trace 决定（`branch_identity`），不按 deck/relic/遭遇/状态 hash 去重：九个 fixture 共记录 656 条分支，但只有 5/3/4/12/27/4/68/4/27 个不同根 hash，收敛到同一战斗状态的多个首层 map 点仍是独立记录。
+3. 节点一律用 run-start 配方重演（`neow_run_reset` + 记录动作），不依赖兄弟分支的 mid-tree restore 或 resident-prefix；因此每个根记录本身就是 E4 要求的 replay recipe：`neow_run` provenance、记录的动作历史、根 hash 期望值，外加根观测、合法动作、完整 Run RNG counters、build 身份与首层路线（坐标、节点类型、敌人）。
+4. `EnumerationLimits` 显式限制每分支动作数、根数与展开节点数；触顶、遇到 terminal/unsupported decision 或无合法动作都写入 `EnumerationFailure` 并把该 seed 标为 `complete=False`，`assert_complete()` 拒绝把截断结果当作完整语料；另外输出按稳定排序（根按 trace、失败按 reason+trace+detail）并用 canonical 未压缩字节序列化。
+5. 正向证据（`python/first_combat_root_acceptance.py`，四 worker，9 个 fixture：Large Capsule / Phial Holster / Small Capsule / New Leaf / Leafy Poultice / Scroll Boxes / Neow's Bones / Ironclad A10 Scroll Boxes / Defect 广度样本）：882 次决策节点展开得到 656 个根（15/9/8/36/108/16/340/16/108）。每个 fixture 经两种 worker 轮换各枚举一次（同一 fixture 必落在两个不同 worker 上），两次的 branch identities、root hashes、action traces 与 canonical 未压缩记录字节完全一致；首个 fixture 另外在同一 worker 上重复枚举两次，字节同样一致。
+6. 每个根都满足 Turn 1 / Play，具备 `play_card`/`end_turn` 合法动作、八个 combat RNG 流全部可见、完整 build 身份、row 1 `Monster` 路线与敌人，以及 provenance 为 `neow_run`、history 等于 trace、expected hash 等于根 hash、reset request 恰为四个开局字段的 portable branch。
+7. 同 worker replay、local fork restore、跨 worker portable restore 三条路径在每个 fixture 各抽 4 个根（共 36 个）执行，hash/observation/legal actions 全部逐字节一致；restore 证据取 worker 自身的 `last_restore`：`path == "replay"`、`replayed_actions` 等于 trace 长度（3–6）且大于 0、`synthetic_combat_installed == false`，并且验证前先把 worker 移离根状态、移离动作未改变状态则直接报错，避免把 resident-prefix no-op 当作重建证据。
+8. 负向证据：`max_actions_per_branch=1` 与 `max_roots=2` 分别产生 `action_cap`/`root_cap` 失败、`complete=False`、`assert_complete()` 抛错，且 cap 下仍被产出的根全部通过边界断言；Neow 决策态被根断言拒绝；篡改根分支 `expected_hash` 以 `replay_divergence` 失败并只污染尝试它的那个 worker，pool 替换该 worker 后未篡改配方恢复正常，证明篡改是唯一原因。`tests/test_first_combat.py` 用不实现 `restore` 的假 worker 离线覆盖同一套枚举逻辑（分支调度、全部失败原因、caps、排序、canonical 字节稳定性、去重规则）。
+9. 构建与回归：仅新增 Python 库、acceptance 与离线测试，未改动 C# 或 client 协议；`python/acceptance.py`、`python/portable_modes_acceptance.py`、`python/neow_run_acceptance.py` 行为不变（direct reset hash 仍为 `CEE9B22A…DBEF7B`，证据与命令见 `docs/persistent-environment.md` Validation 节）。
 
 **结果**
 
