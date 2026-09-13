@@ -154,6 +154,19 @@ the pinned profile, the revealed-epoch count, the run count, the requested and o
 ascension, and `StartedWithNeow`. The bridge does not verify the observed ascension itself; that is
 the caller's assertion, and the differential treats a mismatch as a gate failure.
 
+### Run lifecycle: one run start per process is a bridge constraint
+
+The bridge starts the shipped autoplay driver once, when the main menu first appears, and that driver
+exits the process when its run ends, so the current bridge serves exactly one run start per process.
+That is an implementation constraint of this bridge, not a property of the shipped application: the
+shipped driver itself abandons an in-progress run and starts another from the main menu,
+`NGame.ReturnToMainMenu()` runs the complete shipped teardown (`RunManager.CleanUp()`, including the
+`CombatManager.Reset(graceful)` that the reconstructed worker needs for the same reason), and
+`NGame.StartNewSingleplayerRun` is the production run-start seam the reconstructed `neow_run_reset`
+already models. The E5 differential therefore keeps one fresh process per entry as a conservative
+measurement choice rather than a necessity. Measurements, the source evidence and the open decision are
+recorded in [e5-differential-run-cost-and-process-reuse-report.md](e5-differential-run-cost-and-process-reuse-report.md).
+
 ### Nested-choice seam
 
 `CardSelectCmd.Selector` is the single seam every nested card choice goes through (a Neow blessing

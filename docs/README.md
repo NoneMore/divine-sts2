@@ -15,6 +15,7 @@ Start with [project-status-and-review-guide.md](project-status-and-review-guide.
 | What was verified about that environment, and how fast is it? | [persistent-environment-evidence.md](persistent-environment-evidence.md) |
 | How is state serialized and hashed? | [state-hashing.md](state-hashing.md) |
 | How does the shipped-application bridge work? | [full-application-control-bridge.md](full-application-control-bridge.md) |
+| Where does the E5 differential's run time go, and can one shipped process serve several run starts? | [e5-differential-run-cost-and-process-reuse-report.md](e5-differential-run-cost-and-process-reuse-report.md) |
 | How do I generate runs and training data, and what has been rejected? | [native-rollout-farm.md](native-rollout-farm.md) |
 | What is a differential trace, and how is certification scoped? | [differential-trace-format.md](differential-trace-format.md), [trace-exporter.md](trace-exporter.md), [isolated-autotrace.md](isolated-autotrace.md) |
 | What work is planned or in flight? | [first-combat-scene-generation-plan.md](first-combat-scene-generation-plan.md), [a1-policy-recovery-plan.md](a1-policy-recovery-plan.md), [holistic-solver-roadmap.md](holistic-solver-roadmap.md) |
@@ -33,6 +34,7 @@ Each durable claim has one home. Update that home instead of restating the claim
 | [persistent-environment.md](persistent-environment.md) | `reconstructed_native` contract: authority model, worker/process model, reset and branch protocol, reset modes, choice seams, run-start (Neow) contract, presentation-suppression inventory | Maintained contract |
 | [persistent-environment-evidence.md](persistent-environment-evidence.md) | Dated verification evidence, fault injections, recorded stale expectations, measured performance for that environment | Maintained evidence log; supersede rather than silently edit results |
 | [full-application-control-bridge.md](full-application-control-bridge.md) | `full_application_native` sandboxing, RPC protocol, suppression seams | Dated specification/report; its GO verdict and benchmarks are historical, not a current certification |
+| [e5-differential-run-cost-and-process-reuse-report.md](e5-differential-run-cost-and-process-reuse-report.md) | Measured cost model of the E5 differential runner, concurrency calibration on one machine, and the source-level assessment of serving several run starts from one shipped-application process | Dated evaluation; input to a decision, not a capability claim |
 | [native-rollout-farm.md](native-rollout-farm.md) | Rollout farm capability and throughput, compile/train pipeline, native critic and value-model experiment record, promotion gates | Maintained |
 | [differential-trace-format.md](differential-trace-format.md) | Trace file format, comparator modes, campaign aggregation and its non-global certification scope | Maintained specification |
 | [trace-exporter.md](trace-exporter.md) | Read-only shipped-game exporter, its coverage, safety gates, and install procedure | Maintained specification |

@@ -113,6 +113,15 @@ observed encounter), and `stop=endpoint` continues from that same asserted root 
 player death, or the encounter cleared before `generate_room_rewards`. Every entry reports the action
 kinds it actually took, and the aggregate reports `stops`, `compared_roots` and `decision_kind_counts`.
 
+> **Correction (2026-09-13, evidenced in [e5-differential-run-cost-and-process-reuse-report.md](e5-differential-run-cost-and-process-reuse-report.md)).**
+> The sentence above ("one sandboxed game process per entry because the shipped game serves exactly one
+> run start per process") states a constraint of the current bridge, not of the shipped application:
+> the bridge starts the shipped autoplay driver once and that driver exits the process when its run
+> ends, while the game itself tears a run down (`NGame.ReturnToMainMenu()` → `RunManager.CleanUp()`) and
+> starts another through `NGame.StartNewSingleplayerRun` — the seam the reconstructed `neow_run_reset`
+> already models. The recorded per-entry fresh-process measurement is unchanged and remains the
+> conservative choice; only the stated reason is corrected.
+
 The decision policy is fixed and symmetric, not the shipped application's own preference: the recorded
 trace where one is supplied, otherwise the lexicographically smallest semantic action key with
 coordinator wrappers excluded. In combat that policy selects `end_turn` whenever it is legal, so the

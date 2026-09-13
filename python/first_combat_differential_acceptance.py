@@ -19,8 +19,11 @@ Both modes settle where they say they settle: the entry's `stop` field is `root`
 semantic policy on both sides (the smallest legal semantic key, wrappers excluded), which in combat
 selects `end_turn` whenever it is legal — the report states that rather than implying card-play coverage.
 
-Every entry uses its own isolated shipped-application process: the game serves exactly one run start
-per process, so a fresh sandbox worker is part of the measurement, not an implementation detail.
+Every entry uses its own isolated shipped-application process. A fresh sandbox worker is part of the
+measurement, not an implementation detail, but the reason is this bridge's lifecycle rather than a game
+limit: the bridge starts the shipped autoplay driver once and that driver exits the process when its run
+ends, while the game itself can tear a run down and start another in the same process (see
+docs/e5-differential-run-cost-and-process-reuse-report.md).
 Reports (including every mismatch with its raw seed, branch and action) land under `artifacts/`,
 which is git-ignored. Nothing is written into the game installation.
 """
@@ -70,8 +73,9 @@ TARGETED_FIXTURES = (
 CHARACTERS = ("IRONCLAD", "SILENT", "DEFECT", "NECROBINDER", "REGENT")
 
 # Frozen breadth manifest: 100 distinct seeds. Each seed pins one (character, ascension) cell, so the
-# ten cells are covered evenly (ten seeds each) without taking the full 10x100 cartesian product: the
-# shipped application serves exactly one run start per process, so every entry is its own measurement.
+# ten cells are covered evenly (ten seeds each) without taking the full 10x100 cartesian product: this
+# bridge serves one run start per process, so every entry is its own measurement (the lifecycle reason
+# is recorded in docs/e5-differential-run-cost-and-process-reuse-report.md).
 BREADTH_SEEDS = tuple(f"E5BREADTH{index:03d}" for index in range(100))
 
 # Cell order is character-major then ascension, so the first ten seeds cover all ten cells once each.

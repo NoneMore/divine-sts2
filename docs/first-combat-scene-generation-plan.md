@@ -337,6 +337,7 @@ E7 真正跨 worker combat keyframe 调查
 - 比较器缺陷与修复（2026-09-13，修复后离线测试通过、游戏侧待重跑）：`run_entry` 原来在 `trajectory=False` 时于**第一个非 wrapper 边界**即返回，而一次全新 run start 的首个此类边界是 **Neow 事件决策**，于是 breadth 的 90 条"比根"实际只比了 Neow 选项，从未到达第一战根，与本单元 Fixed 第 1 条"根比较必须显式证明 `turn == 1 && phase == Play`"相矛盾。修复：`run_entry` 改为 `stop="root" | "endpoint"`，到达根边界时两侧都调用 `assert_root_boundary`（`root` 模式在此收束，`endpoint` 模式记录 `root_status` 后继续到统一终点），到不了根则以 `budget` 阶段 fail loud。离线回归测试覆盖该缺陷、收侧未证根、根不可达、以及 endpoint 轨迹同样要自证根。
 - 唯一 unsupported 项：`discard_potion`（reconstruction 会暴露丢弃药水动作，bridge 的回合决策面没有该动作）。比较器把它列入 `unsupported_kinds` 而不是静默丢弃；所有已比较轨迹都未取用该动作。
 - E5 期间在 bridge 只读投影中修正了三处真实缺陷（均为投影缺口，不是 reconstruction 行为差异）：Neow 遗物在战斗开始时打开的嵌套卡牌选择会丢失 combat 投影；`NRewardsScreen` 在 `WithSkippingDisallowed`（Neow's Bones）时禁用的 skip 按钮曾被当作合法 `proceed`；`CardReward` 的候选卡改为融合动作 `choose_reward:{r}:Card:{i}:{CARD}` 暴露。三处都记录在 [full-application-control-bridge.md](full-application-control-bridge.md)。
+- 运行成本与进程复用评估（2026-09-13，[e5-differential-run-cost-and-process-reuse-report.md](e5-differential-run-cost-and-process-reuse-report.md)）：单条 entry 约 13 s 的固定成本来自出厂进程启动 + 主菜单/autoplay 点击流，占全程约 75%；实测 2→4 worker 只有 1.71×，且多 worker 运行期间出现 `crashpad_handler` 桌面错误对话框（出厂进程启动未复用 Godot worker 的错误模式/无窗口抑制），故**并发维持 2**。源码核对表明"一个进程只能服务一次 run start"是当前 bridge 的实现约束而非游戏性质（游戏自带 `RunManager.CleanUp()` 拆解与 `NGame.StartNewSingleplayerRun` 生产起点，reconstruction 侧 `neow_run_reset` 即照此建模），因此进程复用是可评估方向；分步 spike（S0/S1/S2）与风险清单见该报告，**尚未授权实施**。
 
 **声明边界**
 

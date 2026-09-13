@@ -21,9 +21,12 @@
     `stops`/`compared_roots`/`decision_kind_counts`, so a report never implies more coverage than the run
     exercised.
 
-    Every entry runs its own sandboxed `SlayTheSpire2.exe --headless` process, because the shipped game
-    serves exactly one run start per process. Reports land under artifacts/ (git-ignored) and every
-    non-match keeps its raw seed, branch, action ids and the exact diverging field.
+    Every entry runs its own sandboxed `SlayTheSpire2.exe --headless` process. That is a conservative
+    measurement choice rather than a game constraint: this bridge starts the shipped autoplay driver once
+    and that driver exits the process when its run ends, while the game itself can tear a run down and
+    start another in the same process (see docs/e5-differential-run-cost-and-process-reuse-report.md).
+    Reports land under artifacts/ (git-ignored) and every non-match keeps its raw seed, branch, action ids
+    and the exact diverging field.
 
     Both modes exit non-zero when any entry is not a match, so this script fails closed.
 
