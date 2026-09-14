@@ -45,6 +45,9 @@ knowledge_database/
 *.save*
 *.log
 
+# Local agent tooling
+.agents/
+
 # Local configuration and secrets
 .env
 .env.*

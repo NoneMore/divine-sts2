@@ -6,7 +6,7 @@ separate claims, each backed by a reproducible artifact or command.
 
 ## Development setup
 
-Use the [README clean-clone acceptance](README.md#first-clean-clone-acceptance)
+Use the [README quickstart](README.md#quickstart)
 as the source of truth:
 
 1. Install Python 3.11+, PowerShell 7, and a lawfully installed Steam copy of
