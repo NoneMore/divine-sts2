@@ -7,6 +7,7 @@ import copy
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -15,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .paths import REPOSITORY_ROOT, find_game_assembly, find_godot
+from .paths import REPOSITORY_ROOT, find_game_assembly, find_godot, native_worker_user_directory_overrides
 
 
 _windows_spawn_lock = threading.Lock()
@@ -104,13 +105,19 @@ class NativeWorker:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         environment = os.environ.copy()
         dotnet_root = REPOSITORY_ROOT / ".tools" / "dotnet9"
-        if not dotnet_root.is_dir():
-            dotnet_root = REPOSITORY_ROOT.parent / ".tools" / "dotnet9"
         if dotnet_root.is_dir():
             environment["DOTNET_ROOT"] = str(dotnet_root)
             environment["DOTNET_ROOT_X64"] = str(dotnet_root)
             environment["PATH"] = str(dotnet_root) + os.pathsep + environment.get("PATH", "")
             environment["DOTNET_ROLL_FORWARD"] = "Major"
+        redirects = native_worker_user_directory_overrides()
+        if redirects:
+            environment.update(redirects)
+            print(
+                "[sts2_native_sim] The user profile is not writable; the worker's user data "
+                f"goes to {redirects['APPDATA']}.",
+                file=sys.stderr,
+            )
         self.process = _spawn_without_windows_error_dialogs(
             self.command,
             stdin=subprocess.PIPE,

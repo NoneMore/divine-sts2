@@ -68,7 +68,9 @@ def find_game_root(explicit: str | Path | None = None) -> Path:
             return candidate
     searched = ", ".join(str(path) for path in candidates) or "standard Steam libraries"
     raise DiscoveryError(
-        "Slay the Spire 2 was not found. Set STS2_GAME_ROOT to the installed game directory. "
+        "Slay the Spire 2 was not found. Set STS2_GAME_ROOT to the installed game directory, or put "
+        "it in .env. Steam libraries are read from %PROGRAMFILES%, %PROGRAMFILES(X86)% and STEAM_PATH "
+        "only, so a Steam installation that is not below one of those needs the variable. "
         f"Searched: {searched}"
     )
 
@@ -92,7 +94,6 @@ def find_dotnet(explicit: str | Path | None = None) -> Path:
     exe_name = "dotnet.exe" if os.name == "nt" else "dotnet"
     candidates = [
         REPOSITORY_ROOT / ".tools" / "dotnet9" / exe_name,
-        REPOSITORY_ROOT.parent / ".tools" / "dotnet9" / exe_name,
     ]
     for c in candidates:
         if c.is_file():
@@ -138,7 +139,6 @@ def find_godot(explicit: str | Path | None = None) -> Path:
 
     tool_roots = [
         REPOSITORY_ROOT / ".tools" / "godot-4.5.1-mono",
-        REPOSITORY_ROOT.parent / ".tools" / "godot-4.5.1-mono",
     ]
     names = (
         "Godot_v4.5.1-stable_mono_win64_console.exe",
@@ -195,3 +195,50 @@ def find_sandbox_root(explicit: str | Path | None = None, *, game_root: str | Pa
     except DiscoveryError:
         return _local_appdata_sandbox_root()
     return sandbox_root_beside(install)
+
+
+def is_directory_writable(directory: str | Path) -> bool:
+    """Whether files can be created under `directory`, leaving nothing behind.
+
+    A probe rather than a permission query: a file sandbox refuses writes that the
+    filesystem's own permissions allow. It writes a file and removes it again — never
+    `tempfile`, whose directories are created with `mode=0o700` and are refused by a
+    sandbox that would have accepted an ordinary file.
+    """
+    target = Path(directory).expanduser()
+    probe = target / f".sts2-write-probe-{os.urandom(4).hex()}"
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return True
+
+
+def native_worker_user_directory_overrides(root: str | Path | None = None) -> dict[str, str]:
+    """Environment that redirects the worker's user-facing directories into the repository.
+
+    Godot writes its `user://` data under `%APPDATA%` and dies headless, before it starts,
+    when that location is refused — a sandboxed host, or a read-only profile. Only a
+    location that is actually refused is redirected, so a host that allows it keeps its own
+    user data; without an `%APPDATA%` at all (not a Windows host) there is nothing to
+    redirect. `root` names the repository-local base, for tests.
+    """
+    appdata = os.environ.get("APPDATA")
+    if not appdata or is_directory_writable(appdata):
+        return {}
+    base = Path(root) if root else REPOSITORY_ROOT / ".tools" / "tmp" / "native-worker"
+    overrides = {
+        "APPDATA": base / "appdata",
+        "LOCALAPPDATA": base / "localappdata",
+        "TEMP": base / "temp",
+        "TMP": base / "temp",
+    }
+    for directory in dict.fromkeys(overrides.values()):
+        directory.mkdir(parents=True, exist_ok=True)
+    return {name: str(directory) for name, directory in overrides.items()}
