@@ -111,6 +111,14 @@ The runtime auto-detects standard Steam installations. For custom library paths,
 STS2_GAME_ROOT=D:\SteamLibrary\steamapps\common\Slay the Spire 2
 ```
 
+Full-app sandboxes are prepared on the game install's own volume, because each sandbox hard-links the
+install instead of copying it and a hard link cannot cross volumes. Set `STS2_SANDBOX_ROOT` only to
+place them somewhere else on that same volume:
+
+```ini
+STS2_SANDBOX_ROOT=D:\SteamLibrary\steamapps\common\divine-sts2\full-app-sandboxes
+```
+
 ---
 
 ## Troubleshooting

@@ -12,6 +12,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GAME_DIRECTORY_NAME = "Slay the Spire 2"
 GAME_DATA_DIRECTORY_NAME = "data_sts2_windows_x86_64"
+_SANDBOX_DIRECTORY = Path("divine-sts2") / "full-app-sandboxes"
 
 
 class DiscoveryError(FileNotFoundError):
@@ -156,6 +157,41 @@ def find_godot(explicit: str | Path | None = None) -> Path:
     raise DiscoveryError("Godot 4.5.1 .NET was not found. Optional for pure .NET runner; required only for FullAppBridge.")
 
 
-def default_sandbox_root() -> Path:
+def volume_root(path: str | Path) -> str:
+    """The volume a path lives on: a drive root on Windows, `/` elsewhere.
+
+    A full-app sandbox hard-links the shipped install, and hard links cannot
+    cross volumes, so this is what a sandbox location has to match.
+    """
+    return Path(path).expanduser().absolute().anchor or os.sep
+
+
+def sandbox_root_beside(install: str | Path) -> Path:
+    """The default sandbox root for an install: beside it, on the install's volume."""
+    return Path(install).expanduser().resolve().parent / _SANDBOX_DIRECTORY
+
+
+def _local_appdata_sandbox_root() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir())
-    return base / "divine-sts2" / "full-app-sandboxes"
+    return base / _SANDBOX_DIRECTORY
+
+
+def find_sandbox_root(explicit: str | Path | None = None, *, game_root: str | Path | None = None) -> Path:
+    """Resolve where full-app sandboxes are prepared.
+
+    Named explicitly, then through `STS2_SANDBOX_ROOT`, then beside the game
+    install — on its own volume, because the install is hard-linked into each
+    sandbox and a hard link cannot cross volumes. Without a discoverable install
+    there is nothing to link, so the local application data location is used
+    instead; preparation still refuses loudly if that turns out to be another
+    volume.
+    """
+    override = explicit or os.environ.get("STS2_SANDBOX_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    try:
+        install = Path(game_root).expanduser().resolve() if game_root else find_game_root()
+    except DiscoveryError:
+        return _local_appdata_sandbox_root()
+    return sandbox_root_beside(install)

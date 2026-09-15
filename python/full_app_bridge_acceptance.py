@@ -80,7 +80,11 @@ def run_acceptance() -> int:
             startup_latencies.append(t_launch)
             hello_res = client.hello()
             print(f"  Worker {i} ready on port {client.bound_port} (PID {hello_res['pid']}, startup {t_launch*1000:.1f}ms)", flush=True)
+            if client.sandbox_layout is not None:
+                print(f"  Worker {i} sandbox: {client.sandbox_layout.describe()}", flush=True)
             workers.append(client)
+
+        report["sandbox_root"] = str(workers[0].sandbox_root)
 
         report["metrics"]["process_startup_seconds"] = {
             "mean": sum(startup_latencies) / len(startup_latencies),

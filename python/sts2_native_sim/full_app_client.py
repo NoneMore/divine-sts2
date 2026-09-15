@@ -10,22 +10,44 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .paths import default_sandbox_root, find_game_root
+from .full_app_sandbox import SandboxLayout, share_install
+from .paths import find_game_root, find_sandbox_root
+
+
+def bridge_package_dir() -> Path:
+    """Where the built full-app bridge mod package lives."""
+    return (
+        Path(__file__).resolve().parent.parent.parent
+        / "src"
+        / "Sts2.NativeSim.FullAppBridge"
+        / "bin"
+        / "Release"
+        / "net9.0"
+        / "package"
+    )
 
 
 @dataclass
 class FullAppClientConfig:
     game_root: str = field(default_factory=lambda: str(find_game_root()))
-    sandbox_root: str = field(default_factory=lambda: str(default_sandbox_root()))
+    sandbox_root: str = ""
     worker_id: int = 0
     port: int = 0
     timeout_seconds: float = 60.0
+
+    def __post_init__(self) -> None:
+        if not self.sandbox_root:
+            # A sandbox hard-links the install, so it defaults to the volume of
+            # the game root this config names rather than a second discovery.
+            self.sandbox_root = str(find_sandbox_root(game_root=self.game_root))
 
 
 class FullAppBridgeClient:
     def __init__(self, config: FullAppClientConfig) -> None:
         self.config = config
-        self.sandbox_dir = Path(config.sandbox_root) / f"worker_{config.worker_id}"
+        self.sandbox_root = Path(config.sandbox_root).expanduser().resolve()
+        self.sandbox_dir = self.sandbox_root / f"worker_{config.worker_id}"
+        self.sandbox_layout: Optional[SandboxLayout] = None
         self.process: Optional[subprocess.Popen[bytes]] = None
         self.sock: Optional[socket.socket] = None
         self.file_reader = None
@@ -33,49 +55,25 @@ class FullAppBridgeClient:
         self.request_id = 0
         self.bound_port = 0
 
-    def prepare_sandbox(self, requested_character: str = "IRONCLAD") -> None:
+    def prepare_sandbox(self, requested_character: str = "IRONCLAD") -> SandboxLayout:
         game_root = Path(self.config.game_root).resolve()
         if not game_root.exists():
             raise FileNotFoundError(f"Game root not found at {game_root}")
 
-        self.sandbox_dir.mkdir(parents=True, exist_ok=True)
-
-        # Hardlink top-level files if missing
-        for item in game_root.iterdir():
-            if item.is_file():
-                dest = self.sandbox_dir / item.name
-                if not dest.exists():
-                    try:
-                        os.link(item, dest)
-                    except OSError:
-                        # Hardlinks cannot cross volumes (a common Steam/C: temp layout).
-                        # Copy only the top-level launcher/resources as a safe fallback.
-                        shutil.copy2(item, dest)
+        # Hard links and junctions, never copies: the sandbox root has to sit on
+        # the install's own volume, and a link failure says so.
+        share = share_install(game_root, self.sandbox_dir)
 
         for required in ("SlayTheSpire2.exe", "SlayTheSpire2.pck"):
             if not (self.sandbox_dir / required).is_file():
                 raise FileNotFoundError(f"Sandbox preparation did not produce {required}: {self.sandbox_dir}")
-
-        # Junction heavy directories if missing
-        for d in ["controller_config", "data_sts2_windows_x86_64"]:
-            src = game_root / d
-            dest = self.sandbox_dir / d
-            if src.exists() and not dest.exists():
-                subprocess.run(
-                    f'cmd /c mklink /J "{dest}" "{src}"',
-                    shell=True,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
 
         # Deploy full app bridge mod
         mods_dir = self.sandbox_dir / "mods" / "sts2-full-app-bridge"
         mods_dir.mkdir(parents=True, exist_ok=True)
 
         # Locate built mod package
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        mod_package = repo_root / "src" / "Sts2.NativeSim.FullAppBridge" / "bin" / "Release" / "net9.0" / "package"
+        mod_package = bridge_package_dir()
         dll_src = mod_package / "sts2-full-app-bridge.dll"
 
         if not dll_src.exists():
@@ -119,6 +117,14 @@ class FullAppBridgeClient:
 
         with open(settings_dir / "settings.save", "w", encoding="utf-8") as f:
             json.dump(settings_data, f, indent=2)
+
+        self.sandbox_layout = SandboxLayout(
+            game_root=game_root,
+            sandbox_root=self.sandbox_root,
+            worker_dir=self.sandbox_dir,
+            share=share,
+        )
+        return self.sandbox_layout
 
     def launch(self, requested_character: str = "IRONCLAD") -> None:
         self.prepare_sandbox(requested_character=requested_character)
