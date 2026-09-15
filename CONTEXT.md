@@ -11,3 +11,35 @@ _Avoid_: Completed profile, all-unlocked profile
 **Full-app sandbox**:
 An isolated single-player full-game session whose user-data directories are separate from the player's real profile and saves.
 _Avoid_: Test profile, real profile
+
+**Shipped game**:
+A legally installed, unmodified Slay the Spire 2 client, as distinct from this project's simulator.
+_Avoid_: Real game, original game, vanilla game, production build
+
+**Run seed**:
+The string that identifies a run's randomness, as a player would enter it in the shipped game.
+_Avoid_: Seed index, seed prefix, numeric seed
+
+**Ancient**:
+The event room that begins every act and offers a set of run-start choices.
+_Avoid_: Neow (except for act 1's own Ancient), shrine, blessing room
+
+**Neow**:
+The Ancient of act 1.
+_Avoid_: Neow as a general name for Ancients or for the Ancient room type
+
+**Ancient choice**:
+One of the choices an Ancient room offers at run start, including the nested choice — a card select, reward set, or bundle pick — that some choices open before the run continues.
+_Avoid_: Neow blessing, blessing, boon
+
+**Combat initial state**:
+The state of a combat at the moment it has begun and before the player has made any decision.
+_Avoid_: Starting state, opening state, run-start state
+
+**Act variant**:
+One of the interchangeable models for the same act index — for act 1, `Overgrowth` and `Underdocks` — which share the act's map topology but not its encounter, event, or boss pools.
+_Avoid_: Map variant, act 1 variant (the map itself does not vary)
+
+**Generated scenario**:
+A recorded run-start situation together with the choices that produced it, such that the shipped game can reproduce it from the same run seed.
+_Avoid_: Sample, fixture, seed dump
