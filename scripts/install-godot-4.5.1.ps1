@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$repositoryRoot = Split-Path -Parent $PSScriptRoot
-$toolRoot = Join-Path $repositoryRoot '.tools'
+. (Join-Path $PSScriptRoot 'common.ps1')
+$toolRoot = Get-DivineToolsRoot
 $archive = Join-Path $toolRoot 'Godot_v4.5.1-stable_mono_win64.zip'
 $partialArchive = "$archive.part"
 $destination = Join-Path $toolRoot 'godot-4.5.1-mono'
@@ -9,13 +9,7 @@ $download = 'https://github.com/godotengine/godot/releases/download/4.5.1-stable
 
 New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
 if (-not (Test-Path -LiteralPath $archive)) {
-    if (Test-Path -LiteralPath $partialArchive) {
-        curl.exe -L --fail --retry 3 -C - -o $partialArchive $download
-    } else {
-        curl.exe -L --fail --retry 3 -o $partialArchive $download
-    }
-    if ($LASTEXITCODE -ne 0) { throw "Godot download failed with exit code $LASTEXITCODE. Rerun to resume." }
-    Move-Item -LiteralPath $partialArchive -Destination $archive -Force
+    Save-DivineDownload -Uri $download -OutFile $archive -Resume
 }
 
 $godot = Get-ChildItem -LiteralPath $destination -Recurse -File -Filter 'Godot_v4.5.1-stable_mono_win64.exe' -ErrorAction SilentlyContinue |

@@ -30,16 +30,15 @@ if (-not $CandidateDirectory) { $CandidateDirectory = Join-Path $repositoryRoot 
 if (-not $CertifiedDirectory) { $CertifiedDirectory = Join-Path $repositoryRoot 'artifacts\shipped-autotraces\certified' }
 if (-not $FailureDirectory) { $FailureDirectory = Join-Path $repositoryRoot 'artifacts\shipped-autotraces\failures' }
 
-$dotnet = Get-DivineDotnet
 $env:STS2_GAME_ROOT = $gameRootResolved
 $exporterProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.TraceExporter\Sts2.NativeSim.TraceExporter.csproj'
 $driverProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.AutoTraceDriver\Sts2.NativeSim.AutoTraceDriver.csproj'
 $workerProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.GodotHost\Sts2.NativeSim.GodotHost.csproj'
-& $dotnet build $exporterProject -c Release --nologo | Out-Host
+Invoke-DivineDotnet build $exporterProject -c Release --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Trace exporter build failed with exit code $LASTEXITCODE" }
-& $dotnet build $driverProject -c Release --nologo | Out-Host
+Invoke-DivineDotnet build $driverProject -c Release --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "AutoTrace driver build failed with exit code $LASTEXITCODE" }
-& $dotnet build $workerProject -c Release --nologo | Out-Host
+Invoke-DivineDotnet build $workerProject -c Release --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Differential worker build failed with exit code $LASTEXITCODE" }
 
 $existingManifest = $null
