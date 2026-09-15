@@ -67,6 +67,30 @@ def test_seed_and_rng_masking():
     assert agent_obs["run"]["seed"] == "MASKED"
     assert agent_obs["run"]["rng_counters"] == {}
 
+def test_act_variant_is_reported_in_the_agent_observation():
+    """Verify that the Act variant in play reaches a caller while the seed stays masked."""
+    raw_state = {
+        "observation": {
+            "run": {
+                "seed": "RAW_SUPER_SECRET_SEED",
+                "ascension": 0,
+                "act_variant": "UNDERDOCKS",
+                "rng_counters": {"UpFront": 410},
+            },
+            "combat": {"piles": []},
+        },
+    }
+    agent_obs = extract_agent_observation(raw_state)
+    assert agent_obs["run"]["act_variant"] == "UNDERDOCKS"
+    assert agent_obs["run"]["seed"] == "MASKED"
+
+
+def test_act_variant_is_not_invented_when_the_observation_omits_it():
+    """Verify that an observation without an Act in play reports no Act variant."""
+    agent_obs = extract_agent_observation({"observation": {"run": {"seed": "SEED"}, "combat": {"piles": []}}})
+    assert "act_variant" not in agent_obs["run"]
+
+
 def test_evolving_card_state_whitelisting():
     """Verify that player-visible dynamic state is kept while hidden flags are stripped."""
     raw_native_state = {

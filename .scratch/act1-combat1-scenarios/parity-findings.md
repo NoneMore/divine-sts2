@@ -32,11 +32,11 @@ Fixes: **(a)** enter the Ancient node for real, which appends the entry naturall
 
 ## Gap 2: the act-1 variant is rolled, not fixed
 
-Act 1 has two models, both `Index => 0`: `Overgrowth` (`IsDefault => true`, `Core/Models/Acts/Overgrowth.cs:49-51`) and `Underdocks` (`false`, `Core/Models/Acts/Underdocks.cs:44-46`). The shipped game rolls the variant with `new Rng(hash(seed), "act_selection")` (`Core/Multiplayer/Game/Lobby/StartRunLobby.cs:463-465`), with an override that forces an undiscovered non-default act (`Core/Models/ActModel.cs:550-554`) and a lobby setting that can pin it (`StartRunLobby.cs:495-506`). The simulator hard-codes `ActModel.GetDefaultList()` (`src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs:404`), so it always plays `Overgrowth`.
+Act 1 has two models, both `Index => 0`: `Overgrowth` (`IsDefault => true`, `Core/Models/Acts/Overgrowth.cs:49-51`) and `Underdocks` (`false`, `Core/Models/Acts/Underdocks.cs:44-46`). The shipped game rolls the variant with `new Rng(hash(seed), "act_selection")` (`Core/Multiplayer/Game/Lobby/StartRunLobby.cs:463-465`), with an override that forces an undiscovered non-default act (`Core/Models/ActModel.cs:550-554`) and a lobby setting that can pin it (`StartRunLobby.cs:495-506`). **Ticket 02 removed this gap**: the simulator now makes the same roll over the run's own unlock state (`ActListForSeed` in `src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs`), with the discovery override pinned off, and reports the result as `run.act_variant`.
 
 Map *topology* is variant-independent (identical `GetMapPointTypes`, `BaseNumberOfRooms`, `NumberOfWeakEncounters`), but the encounter pools (22 vs 20), event pools (13 vs 10) and bosses differ — so for a seed whose act 1 is `Underdocks`, every act-1 room the simulator plays is the wrong one.
 
-Note the interaction with ADR-0001: the discovery override depends on `SaveManager.Progress.DiscoveredActs`, and "fully unlocked" deliberately does not imply discovered content, so the variant must be pinned explicitly rather than inherited from profile state.
+Note the interaction with ADR-0001: the discovery override depends on `SaveManager.Progress.DiscoveredActs`, and "fully unlocked" deliberately does not imply discovered content, so the variant must be pinned explicitly rather than inherited from profile state. ADR-0001 now records that pinning.
 
 ## Couplings worth knowing
 
@@ -76,4 +76,5 @@ The richest existing realization of the contract is the trace exporter's per-com
 ## Still open
 
 - **No field-by-field parity comparison has been run yet.** The evidence above establishes that the oracle starts and can be driven; it does not compare a single field. Before it can, the bridge's own combat observation must carry every field of the parity contract — it does not today (the encounter id and the ordered draw pile are known gaps), which is why extending that seam belongs to this feature rather than to a prerequisite someone else owns.
-- **The `TotalFloor` and Act-variant divergences remain static conclusions.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator, and to repeat it for a seed whose act 1 is the non-default Act variant.
+- **The `TotalFloor` divergence remains a static conclusion.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator.
+- **The Act-variant roll is no longer static, but has not been compared against the shipped game.** Ticket 02's `python/act_variant_acceptance.py` runs the shipped install and confirms, for 8 seeds, that the simulator's variant matches an independent port of the shipped roll (4 `Overgrowth`, 4 `Underdocks`), that the map and the run's own counters do not move, and that the variant is reported on the run observation. What is still unmeasured is the other side of the claim: that a shipped run on a non-default seed plays the same act-1 rooms, which needs the field-by-field parity run on a non-default seed (ticket 15).

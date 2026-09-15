@@ -102,6 +102,10 @@ def extract_agent_observation(state_or_obs: dict[str, Any]) -> dict[str, Any]:
             "seed": "MASKED",
             "rng_counters": {},
         }
+        # The Act variant in play is part of the situation a policy is in, so it
+        # is reported rather than left for the caller to re-derive from the seed.
+        if "act_variant" in run:
+            agent_run["act_variant"] = run["act_variant"]
         agent_obs["run"] = agent_run
 
     # Combat-level information

@@ -401,7 +401,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             ReflectionTools.Invoke(_player, "AddRelicInternal", nativeRelic, -1, true);
         }
 
-        object acts = ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Models.ActModel"), "GetDefaultList")!;
+        object acts = ActListForSeed(r.Seed, unlock);
         object modifiers = List(T("MegaCrit.Sts2.Core.Models.ModifierModel"), []);
         object mode = Enum.GetValues(T("MegaCrit.Sts2.Core.Runs.GameMode")).GetValue(0)!;
         _run = T("MegaCrit.Sts2.Core.Runs.RunState").GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForTest")
@@ -724,7 +724,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object observation = new
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion, game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = counters },
+            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = counters },
             combat = combatObservation,
             inventory = new { relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(x => x is not null).Select(x => new { model_id = Entry(x!), counter = (bool)ReflectionTools.Get(x!, "ShowCounter")! ? ReflectionTools.Get(x!, "DisplayAmount") : null, native_state = SavedNativeState(x!) }).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select((x, i) => x is null ? null : new { slot = i, model_id = Entry(x) }).ToArray() },
             outstanding_choice = choiceState,
@@ -943,7 +943,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"), rng_counters = RunRngCounters() },
+            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, act_variant = ActVariant(), act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"), rng_counters = RunRngCounters() },
             map = new { points, visited, current = ReflectionTools.Get(_run!, "CurrentMapPoint") is { } current ? Coord(current) : null },
             decision = new { kind = actions.Length == 0 ? "map_terminal" : "map_choice", legal_actions = actions },
             terminal = actions.Length == 0, victory = false
@@ -1077,7 +1077,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
+            run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
             reward = new { kind = _rewardKind, options, can_skip = true, selected = _rewardCompleted },
             outstanding_choice = _pendingChoice?.Snapshot(),
             decision = new { kind = _pendingChoice is not null ? _pendingChoice.DecisionKind : actions.Length == 0 ? "reward_complete" : "reward_choice", legal_actions = actions },
@@ -1133,7 +1133,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = new
             {
-                seed = _reset!.Seed, ascension = _reset.Ascension, rng_counters = RunRngCounters(),
+                seed = _reset!.Seed, ascension = _reset.Ascension, rng_counters = RunRngCounters(), act_variant = ActVariant(),
                 current_hp = ReflectionTools.Get(ReflectionTools.Get(_player!, "Creature")!, "CurrentHp"),
                 max_hp = ReflectionTools.Get(ReflectionTools.Get(_player!, "Creature")!, "MaxHp"),
                 deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => new { model_id = Entry(card!), upgrades = ReflectionTools.Get(card!, "CurrentUpgradeLevel") }).ToArray()
@@ -1265,7 +1265,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = new
             {
-                seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = RunRngCounters(),
+                seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(),
                 current_hp = ReflectionTools.Get(creature, "CurrentHp"), max_hp = ReflectionTools.Get(creature, "MaxHp"),
                 deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => new { model_id = Entry(card!), upgrades = ReflectionTools.Get(card!, "CurrentUpgradeLevel") }).ToArray(),
                 relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(),
@@ -1669,9 +1669,39 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         throw new ProtocolException("unsupported_shop_entry", $"Native merchant entry '{type}' is not connected.");
     }
 
+    /// <summary>
+    /// The act list the shipped game rolls for a run seed.
+    /// </summary>
+    /// <remarks>
+    /// The roll is the shipped game's own: a generator of its own,
+    /// <c>new Rng(hash(seed), "act_selection")</c>, over the acts the run's unlock
+    /// state allows. It is made here and discarded, so it advances no stream that
+    /// the map, the encounter pools or a combat reads.
+    ///
+    /// The shipped singleplayer roll also forces a non-default act the first time
+    /// the machine's profile meets it, by consulting the local progress save's
+    /// discovered acts. A fully unlocked run has no such profile history to inherit
+    /// (ADR-0001), so the roll asks for the pool the run's own unlock state allows
+    /// and lets the seed alone decide — the same roll a profile that has met every
+    /// act gets.
+    /// </remarks>
+    private object ActListForSeed(string seed, object unlock)
+    {
+        uint selectionSeed = unchecked((uint)Convert.ToInt32(ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Helpers.StringHelper"), "GetDeterministicHashCode", seed)!));
+        object rng = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Random.Rng"), selectionSeed, "act_selection");
+        // The shipped roll reads the local progress save only when this flag is
+        // false, and uses it for nothing else, so passing it is the pin described
+        // above and adopts no other multiplayer behaviour.
+        const bool isMultiplayer = true;
+        return ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Models.ActModel"), "GetRandomList", rng, unlock, isMultiplayer)!;
+    }
+
+    /// <summary>The Act variant the run is playing, named as the shipped game names it.</summary>
+    private string ActVariant() => Entry(ReflectionTools.Get(_run!, "Act")!);
+
     private object RunInventorySnapshot(object deck) => new
     {
-        seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = RunRngCounters(),
+        seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(),
         deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => new { model_id = Entry(card!), upgrades = ReflectionTools.Get(card!, "CurrentUpgradeLevel") }).ToArray(),
         relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(),
         potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray()
@@ -1912,7 +1942,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
+            run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
             room_rewards = new { rewards },
             decision = new { kind = "room_reward_choice", legal_actions = actions }, terminal = false, victory = false
         };

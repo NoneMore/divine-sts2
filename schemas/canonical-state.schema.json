@@ -7,7 +7,16 @@
   "properties": {
     "schema_version": { "const": 2 },
     "game_build": { "type": "object", "required": ["version", "assembly_sha256", "pck_sha256"] },
-    "run": { "type": "object", "required": ["seed", "ascension", "gold", "rng_counters"] },
+    "run": {
+      "type": "object",
+      "required": ["seed", "ascension", "gold", "act_variant", "rng_counters"],
+      "properties": {
+        "act_variant": {
+          "type": "string",
+          "description": "The Act variant in play, named as the shipped game names it — for act 1, OVERGROWTH or UNDERDOCKS."
+        }
+      }
+    },
     "combat": { "type": "object", "required": ["turn", "phase", "energy", "max_energy", "creatures", "piles"] },
     "inventory": { "type": "object", "required": ["relics", "potions"] },
     "outstanding_choice": { "type": ["object", "null"] },
