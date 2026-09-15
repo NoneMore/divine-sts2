@@ -9,13 +9,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from acceptance import SCENARIO
 from sts2_native_sim import NativeWorkerPool
+from sts2_native_sim.ancient import start_past_ancient
+
+# The Underdocks weak encounter this seed's act draws first, recorded rather than
+# derived: which pool entry a node resolves to is the encounter ticket's subject, and
+# this script's subject is that travelling a map point puts the run in a real combat.
+_EXPECTED_ENCOUNTER = ("SLUDGE_SPINNER",)
 
 
 def main() -> None:
     scenario = copy.deepcopy(SCENARIO)
     scenario["seed"] = "NATIVE-COMPOSED-ROOM-ENTRY"
     with NativeWorkerPool(4) as pool:
-        mapped = pool.map(lambda worker, reset: worker.run_reset(reset), [scenario] * 4)
+        # A run starts on the Ancient node; the row-1 fight is behind it.
+        mapped = start_past_ancient(pool, scenario)
         assert len({state["state_hash"] for state in mapped}) == 1
         assert len({json.dumps(state["legal_actions"], sort_keys=True) for state in mapped}) == 1
         map_handle = mapped[0]["state_handle"]
@@ -26,7 +33,11 @@ def main() -> None:
         assert len({json.dumps(state["legal_actions"], sort_keys=True) for state in entered}) == 1
         assert all(state["observation"]["combat"]["phase"] == "Play" for state in entered)
         assert all(state["observation"]["combat"]["turn"] == 1 for state in entered)
-        assert all(any(creature["model_id"] == "NIBBIT" for creature in state["observation"]["combat"]["creatures"]) for state in entered)
+        assert all(
+            tuple(creature["model_id"] for creature in state["observation"]["combat"]["creatures"] if creature["side"] == "Enemy")
+            == _EXPECTED_ENCOUNTER
+            for state in entered
+        )
         assert all(sum(len(pile["cards"]) for pile in state["observation"]["combat"]["piles"]) == len(scenario["deck"]) for state in entered)
         entered_handle = entered[0]["state_handle"]
 

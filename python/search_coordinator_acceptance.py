@@ -7,19 +7,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from run_seeded_full_act_corpus import choose_action, scenario
-from sts2_native_sim import NativeObservedMaterialScorer, NativeSearchCoordinator, NativeTorchValueScorer, NativeWorkerPool
+from sts2_native_sim import (
+    NativeObservedMaterialScorer,
+    NativeSearchCoordinator,
+    NativeTorchValueScorer,
+    NativeWorkerPool,
+)
 
 
 def main() -> None:
     with NativeWorkerPool(4) as pool:
         worker = pool.workers[0]
         state = worker.run_reset(scenario("NATIVE-FULL-ACT-2"))
-        for _ in range(16):
+        # Walk the run to a combat rather than to a fixed step count: the route out of the
+        # act's Ancient room is a decision of its own, so how many steps a fight is deep is
+        # the run's business, not the search checkpoint's.
+        depth = 0
+        while state["observation"]["decision"]["kind"] != "combat_action":
             action_id = choose_action(state)
             if action_id is None:
                 raise RuntimeError("route stalled before search checkpoint")
             state = worker.run_step(action_id)
-        assert state["observation"]["decision"]["kind"] == "combat_action"
+            depth += 1
+            if depth > 64:
+                raise RuntimeError("route never reached a search checkpoint combat")
         root_hash = state["state_hash"]
         coordinator = NativeSearchCoordinator(pool)
         scorer = NativeObservedMaterialScorer()
@@ -46,7 +57,7 @@ def main() -> None:
         print(json.dumps({
             "success": True,
             "workers": 4,
-            "root_depth": 16,
+            "root_depth": depth,
             "root_hash": root_hash,
             "candidate_count": len(first),
             "selected_action": first[0]["action"]["action_id"],

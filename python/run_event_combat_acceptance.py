@@ -10,19 +10,24 @@ sys.path.insert(0, str(Path(__file__).parent))
 from acceptance import SCENARIO
 from run_composed_utility_rooms_acceptance import finish_combat, step_all
 from sts2_native_sim import NativeWorkerPool
+from sts2_native_sim.ancient import start_past_ancient
 
 
 def main() -> None:
     scenario = copy.deepcopy(SCENARIO)
     scenario.update({
-        "seed": "EVENT-COMBAT-SEED-51",
+        # Re-picked for the Ancient room: entering it is an Event room visit, so the act's
+        # ordered event pool is one further along than it was for the seed this script was
+        # written on. This seed's first unknown node opens DenseVegetation, whose REST
+        # option starts the nested combat the script is about.
+        "seed": "EVENT-COMBAT-14",
         "current_hp": 9999,
         "max_hp": 9999,
         "deck": [{"instance_id": f"bludgeon-{index}", "model_id": "BLUDGEON", "upgrades": 1} for index in range(10)],
         "initial_hand": [],
     })
     with NativeWorkerPool(4) as pool:
-        states = pool.map(lambda worker, reset: worker.run_reset(reset), [scenario] * 4)
+        states = start_past_ancient(pool, scenario)
         points = {(p["coord"]["col"], p["coord"]["row"]): p for p in states[0]["observation"]["map"]["points"]}
         start, unknown = next(
             (action, child)
@@ -47,7 +52,8 @@ def main() -> None:
 
         states = finish_combat(pool, states)
         assert states[0]["observation"]["decision"]["kind"] == "map_choice"
-        assert len(states[0]["observation"]["map"]["visited"]) == 2
+        # The Ancient node, the row-1 node, and the event node all appended an entry.
+        assert len(states[0]["observation"]["map"]["visited"]) == 3
         returned_hash = states[0]["state_hash"]
         assert pool.workers[0].restore(nested_handle)["state_hash"] == nested_hash
 

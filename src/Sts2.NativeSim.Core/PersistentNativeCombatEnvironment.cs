@@ -831,8 +831,13 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     {
         object map = ReflectionTools.Get(_run!, "Map")!;
         object? current = ReflectionTools.Get(_run!, "CurrentMapPoint");
+        // The shipped map screen makes the map's own starting point travelable until the run has
+        // travelled once (NMapScreen.RecalculateTravelability), and only then its children. That
+        // starting point is the act's Ancient on a fully unlocked run and a Monster node when the
+        // Neow epoch is not revealed, so offering it is what puts the Ancient room in front of
+        // every other node and what makes the room's map-point history entry the shipped one.
         IEnumerable<object?> candidates = current is null
-            ? ReflectionTools.Enumerate(ReflectionTools.Get(map, "startMapPoints"))
+            ? [ReflectionTools.Get(map, "StartingMapPoint")]
             : ReflectionTools.Enumerate(ReflectionTools.Get(current, "Children"));
         return candidates.Where(point => point is not null).Select(point => point!).Select(point =>
         {
@@ -881,6 +886,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             _runStage = "event"; _eventMode = true;
             _event = ReflectionTools.Get(room, "LocalMutableEvent")!; _eventId = Entry(_event);
+            await AwaitEventStartedAsync();
         }
         else if (roomType == "Treasure")
         {
@@ -896,6 +902,26 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         }
         else
             throw new ProtocolException("unsupported_room", $"Native room type '{roomType}' entered successfully but its decision coordinator is not connected yet.");
+    }
+
+    /// <summary>
+    /// The shipped event room starts its event with <c>TaskHelper.RunSafely</c>, so entering the
+    /// room can return before the event has generated its first page. Yield until the event is
+    /// decidable — it offers an option or has finished — so that the observation which follows an
+    /// Ancient-room entry describes a real decision instead of a half-started room. Every act's
+    /// Ancient generates its first page in <c>SetInitialEventState</c>, straight after its own
+    /// <c>BeforeEventStarted</c>, so exhausting the bound is a defect and not a slow event.
+    /// </summary>
+    private async Task AwaitEventStartedAsync()
+    {
+        for (int attempt = 0; attempt < 4096; attempt++)
+        {
+            if (_event is null) return;
+            if (ReflectionTools.Get(_event, "IsFinished") is true) return;
+            if (ReflectionTools.Enumerate(ReflectionTools.Get(_event, "CurrentOptions")).Any(option => option is not null)) return;
+            await Task.Yield();
+        }
+        throw new ProtocolException("event_not_started", $"Native event '{_eventId}' offered no option and did not finish.");
     }
 
     private void RebindEnteredCombat(object room)
@@ -1178,10 +1204,18 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 string textKey = (string)ReflectionTools.Get(pair.option!, "TextKey")!;
                 return new LegalAction($"choose_event:{pair.index}:{Uri.EscapeDataString(textKey)}", "choose_event", new Dictionary<string, object?>
                 {
-                    ["option_index"] = pair.index, ["text_key"] = textKey, ["is_proceed"] = ReflectionTools.Get(pair.option!, "IsProceed")
+                    ["option_index"] = pair.index, ["text_key"] = textKey, ["is_proceed"] = ReflectionTools.Get(pair.option!, "IsProceed"),
+                    // An Ancient choice is a relic option; the relic it grants is the choice's
+                    // identity for a caller, and the order of the actions is the order the run
+                    // offered them in.
+                    ["relic_model_id"] = OptionRelicId(pair.option!)
                 });
             }).ToArray();
     }
+
+    /// <summary>The relic an event option grants, or null when the option grants none.</summary>
+    private static string? OptionRelicId(object option)
+        => ReflectionTools.Get(option, "Relic") is { } relic ? Entry(relic) : null;
 
     private void EnsureHeadlessArchitectOption()
     {
@@ -1256,7 +1290,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object[] options = ReflectionTools.Enumerate(ReflectionTools.Get(_event, "CurrentOptions")).Select((option, index) => option is null ? null : new
         {
             option_index = index, text_key = ReflectionTools.Get(option, "TextKey"), locked = ReflectionTools.Get(option, "IsLocked"),
-            chosen = ReflectionTools.Get(option, "WasChosen"), is_proceed = ReflectionTools.Get(option, "IsProceed")
+            chosen = ReflectionTools.Get(option, "WasChosen"), is_proceed = ReflectionTools.Get(option, "IsProceed"),
+            relic_model_id = OptionRelicId(option)
         }).Where(option => option is not null).ToArray()!;
         bool finished = (bool)ReflectionTools.Get(_event, "IsFinished")!;
         object observation = new
@@ -1724,6 +1759,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             current_hp = ReflectionTools.Get(creature, "CurrentHp"), max_hp = ReflectionTools.Get(creature, "MaxHp"), block = ReflectionTools.Get(creature, "Block"),
             gold = ReflectionTools.Get(_player!, "Gold"),
             act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"),
+            // TotalFloor counts the run's travelled map points, so it is the floor counter the
+            // Ancient room advances: the Ancient appends one entry before the row-1 node does,
+            // and that count is what seeds the per-encounter generator.
+            total_floor = ReflectionTools.Get(_run!, "TotalFloor"),
             map_col = currentCoord is null ? null : ReflectionTools.Get(currentCoord, "col"), map_row = currentCoord is null ? null : ReflectionTools.Get(currentCoord, "row"),
             deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => new
             {

@@ -9,14 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from acceptance import SCENARIO
 from sts2_native_sim import NativeWorkerPool
-
+from sts2_native_sim.ancient import start_past_ancient
 
 TARGETS = {"Shop", "RestSite", "Treasure"}
 
 
-def best_path(observation: dict) -> list[tuple[int, int, str]]:
+def best_path(observation: dict, starts: list[tuple[int, int]]) -> list[tuple[int, int, str]]:
     points = {(p["coord"]["col"], p["coord"]["row"]): p for p in observation["map"]["points"]}
-    starts = [(a["parameters"]["col"], a["parameters"]["row"]) for a in observation["decision"]["legal_actions"]]
 
     def walk(coord: tuple[int, int]) -> list[list[tuple[int, int, str]]]:
         point = points[coord]
@@ -35,7 +34,13 @@ def best_path(observation: dict) -> list[tuple[int, int, str]]:
 
 def matching_map_action(state: dict, step: tuple[int, int, str]) -> str:
     col, row, _ = step
-    return next(a["action_id"] for a in state["legal_actions"] if a["kind"] == "choose_map" and a["parameters"]["col"] == col and a["parameters"]["row"] == row)
+    action = next((a for a in state["legal_actions"] if a["kind"] == "choose_map" and a["parameters"]["col"] == col and a["parameters"]["row"] == row), None)
+    if action is None:
+        raise AssertionError(
+            f"the run does not offer the planned step {step}; it offers "
+            f"{[a['action_id'] for a in state['legal_actions']]} in stage {state['observation']['decision']['kind']}"
+        )
+    return action["action_id"]
 
 
 def step_all(pool: NativeWorkerPool, states: list[dict], action_ids: list[str]) -> list[dict]:
@@ -55,6 +60,28 @@ def finish_combat(pool: NativeWorkerPool, states: list[dict]) -> list[dict]:
         states = step_all(pool, states, [action] * 4)
 
 
+def settle_room(pool: NativeWorkerPool, states: list[dict]) -> list[dict]:
+    """Drive whatever room the run just entered back to the map.
+
+    An unknown point rolls its room type, so a planned ``Unknown`` step can turn out to
+    be a combat, an event, a rest site, a shop or a treasure room; this settles any of
+    them by taking the first legal action each time. Rooms the planned path names are
+    driven by their own branches, which assert more than reachability.
+    """
+    while True:
+        kind = states[0]["observation"]["decision"]["kind"]
+        if kind == "map_choice":
+            return states
+        kinds = {action["kind"] for action in states[0]["legal_actions"]}
+        if "generate_room_rewards" in kinds:
+            states = step_all(pool, states, ["generate_room_rewards"] * 4)
+            states = step_all(pool, states, ["leave_room_rewards"] * 4)
+        elif states[0]["legal_actions"]:
+            states = step_all(pool, states, [states[0]["legal_actions"][0]["action_id"]] * 4)
+        else:
+            raise AssertionError(f"the run cannot leave stage {kind}")
+
+
 def main() -> None:
     scenario = copy.deepcopy(SCENARIO)
     scenario.update({
@@ -66,8 +93,9 @@ def main() -> None:
         "initial_hand": [],
     })
     with NativeWorkerPool(4) as pool:
-        states = pool.map(lambda worker, reset: worker.run_reset(reset), [scenario] * 4)
-        path = best_path(states[0]["observation"])
+        states = start_past_ancient(pool, scenario)
+        starts = [(action["parameters"]["col"], action["parameters"]["row"]) for action in states[0]["legal_actions"]]
+        path = best_path(states[0]["observation"], starts)
         shop_before = shop_after = rest_done = treasure_open = treasure_done = None
         restore_handles: list[tuple[str, str]] = []
 
@@ -106,9 +134,7 @@ def main() -> None:
                 states = step_all(pool, states, ["leave_treasure"] * 4)
                 break
             elif room_type == "Unknown":
-                while states[0]["observation"]["decision"]["kind"] != "event_complete":
-                    states = step_all(pool, states, [states[0]["legal_actions"][0]["action_id"]] * 4)
-                states = step_all(pool, states, ["leave_event"] * 4)
+                states = settle_room(pool, states)
             else:
                 raise AssertionError(f"unexpected room type on selected path: {room_type}")
 
@@ -117,7 +143,7 @@ def main() -> None:
         assert len(shop_after["observation"]["run"]["deck"]) == len(shop_before["observation"]["run"]["deck"])
         assert treasure_open["observation"]["treasure"]["relic_options"]
         assert len(treasure_done["observation"]["run"]["relics"]) == len(treasure_open["observation"]["run"]["relics"]) + 1
-        assert len(states[0]["observation"]["map"]["visited"]) == len(path)
+        assert len(states[0]["observation"]["map"]["visited"]) == len(path) + 1
 
         worker = pool.workers[0]
         for handle, expected_hash in restore_handles:

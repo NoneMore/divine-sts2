@@ -26,11 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from sts2_native_sim import NativeWorkerPool
+from sts2_native_sim.shipped_rng import Rng, deterministic_hash_code
 
-_UINT32 = 0xFFFFFFFF
-_UINT64 = 0xFFFFFFFFFFFFFFFF
-_INT32_SEED = 352654597
-_INT32_MULTIPLIER = 1566083941
 _ACT_SELECTION_STREAM = "act_selection"
 # ModelDb.ActsByIndex[0]: the act-1 variants in the order the shipped database
 # lists them, default first.
@@ -80,65 +77,9 @@ _BASELINE = {
 }
 
 
-def _code_units(text: str) -> list[int]:
-    """The UTF-16 code units `StringHelper.GetDeterministicHashCode` iterates."""
-    raw = text.encode("utf-16-le")
-    return [raw[index] | (raw[index + 1] << 8) for index in range(0, len(raw), 2)]
-
-
-def _deterministic_hash_code(text: str) -> int:
-    """Port of `StringHelper.GetDeterministicHashCode`, in 32-bit wrapping arithmetic."""
-    units = _code_units(text)
-    num = _INT32_SEED
-    num2 = num
-    for index in range(0, len(units), 2):
-        num = (((num << 5) + num) ^ units[index]) & _UINT32
-        if index == len(units) - 1:
-            break
-        num2 = (((num2 << 5) + num2) ^ units[index + 1]) & _UINT32
-    return (num + num2 * _INT32_MULTIPLIER) & _UINT32
-
-
-def _rotate_left(value: int, count: int) -> int:
-    return ((value << count) | (value >> (64 - count))) & _UINT64
-
-
-class _MegaRandom:
-    """Port of the shipped `MegaRandom`: splitmix64 seeding over xoshiro256**."""
-
-    def __init__(self, seed: int) -> None:
-        self._state = [0, 0, 0, 0]
-        state = seed & _UINT64
-        for index in range(4):
-            state = (state + 11400714819323198485) & _UINT64
-            value = state
-            value = ((value ^ (value >> 30)) * 13787848793156543929) & _UINT64
-            value = ((value ^ (value >> 27)) * 10723151780598845931) & _UINT64
-            self._state[index] = value ^ (value >> 31)
-
-    def _next_ulong(self) -> int:
-        s0, s1, s2, s3 = self._state
-        result = (_rotate_left((s1 * 5) & _UINT64, 7) * 9) & _UINT64
-        shifted = (s1 << 17) & _UINT64
-        s2 ^= s0
-        s3 ^= s1
-        s1 ^= s2
-        s0 ^= s3
-        s2 ^= shifted
-        s3 = _rotate_left(s3, 45)
-        self._state = [s0, s1, s2, s3]
-        return result
-
-    def next_below(self, exclusive: int) -> int:
-        """`Rng.NextInt(0, exclusive)`, i.e. one uniform integer draw."""
-        # MegaRandom's own double step: the top 53 bits scaled by its 2^-53 step.
-        return int((self._next_ulong() >> 11) * 1.1102230246251565e-16 * exclusive)
-
-
 def rolled_act_variant(seed: str) -> str:
     """The variant the shipped roll picks: `new Rng(hash(seed), "act_selection")`."""
-    selection = (_deterministic_hash_code(seed) + _deterministic_hash_code(_ACT_SELECTION_STREAM)) & _UINT32
-    return _ACT_POOL[_MegaRandom(selection).next_below(len(_ACT_POOL))]
+    return Rng(deterministic_hash_code(seed), stream=_ACT_SELECTION_STREAM).next_item(list(_ACT_POOL))
 
 
 def _run_state(seed: str, ascension: int = 0) -> dict:
