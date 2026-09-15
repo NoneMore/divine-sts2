@@ -6,7 +6,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <!-- The shipped game's assemblies belong to the machine, not to this repository, so no
+         default path is recorded here: GameDataDir comes from STS2_GAME_ROOT (see
+         .env.example). Every project that references those assemblies declares
+         RequiresGameData, which turns a missing variable into the error below instead of a
+         missing-reference failure. -->
     <GameDataDir Condition="'$(GameDataDir)' == '' and '$(STS2_GAME_ROOT)' != ''">$(STS2_GAME_ROOT)\data_sts2_windows_x86_64</GameDataDir>
-    <GameDataDir Condition="'$(GameDataDir)' == ''">F:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</GameDataDir>
   </PropertyGroup>
+  <Target Name="RequireGameDataDir" BeforeTargets="ResolveAssemblyReferences" Condition="'$(RequiresGameData)' == 'true' and '$(GameDataDir)' == ''">
+    <Error Code="STS2001" Text="STS2_GAME_ROOT is not set, so $(MSBuildProjectName) cannot reference the shipped game assemblies. Set STS2_GAME_ROOT to the installed game directory, or put it in .env, before building." />
+  </Target>
 </Project>
