@@ -56,6 +56,24 @@ There is exactly one seed widget, and it is on the **Custom Run** screen: `%Seed
 
 Consequence for this feature: a record's seed must be stored in the canonical form the shipped game derives, or it cannot be reproduced by pasting it into the Custom Run screen.
 
+## Runtime evidence
+
+Gathered by running the bridge acceptance (`python/full_app_bridge_acceptance.py`) against the shipped install in a secondary Steam library. **The full-app oracle works**: with the game root configured, the bridge started real headless game processes and 3 of 4 workers answered `hello` (ports 52839 / 52998 / 53143, startup 4.8–5.2 s) before the fourth failed during sandbox preparation.
+
+Two prerequisites became concrete:
+
+- **Discovery ignores the registry.** `find_game_root()` raised `DiscoveryError` until `STS2_GAME_ROOT` was set, because `_steam_roots()` (`python/sts2_native_sim/paths.py:21-43`) derives Steam roots only from `%PROGRAMFILES(X86)%`, `%PROGRAMFILES%` and `STEAM_PATH`, never from the registry `SteamPath`. On this machine Steam lives at `E:\Program Files (x86)\Steam` while `%PROGRAMFILES(X86)%` is `C:\Program Files(X86)`.
+- **The sandbox must sit on the game's volume.** `prepare_sandbox` (`python/sts2_native_sim/full_app_client.py:36-57`) hard-links the install into a per-worker sandbox; hard links cannot cross volumes (`WinError 17`), so it fell back to `shutil.copy2` (`:53`) and exhausted the local drive (`WinError 112`). `default_sandbox_root()` (`paths.py:159-161`) is pinned to `%LOCALAPPDATA%` with no environment override, so 11.3 GB of copied installs accumulated before the failure. With the sandbox root on the same volume as the game the hard links succeed and nothing is copied.
+
+## The oracle's own projection is thin
+
+Parity can only be checked through the full-app bridge, so the bridge's combat observation is on the critical path. Inventoried against the contract, it is missing or wrong in roughly three dozen combat-relevant fields: the encounter id; ordered draw, discard, exhaust and play piles (draw/discard/exhaust are counts only, and the play pile has no representation at all); card instance ids, card type, cost-x, enchantment and native state; the full intent list, of which only the next move's id is present; a creature `side`; the player's own creature row; max energy; stars; the granular turn phase; RNG counters; act floor; map coordinate; relic counters and native states; potion slots (empty slots are skipped, which destroys the slot index); and game build.
+
+Three of those are worse than absent because they look present: the act index is reported **one-based** where the rest of the system is zero-based, hand cards carry an upgrade-level field that is never populated so it always reads zero, and hand energy cost reads a different accessor than the other projections. A comparison that trusts these would report parity while comparing the wrong numbers.
+
+The richest existing realization of the contract is the trace exporter's per-combat projection, which already carries almost all of it — the encounter id, the ordered draw pile, per-card identity, upgrades, enchantment, costs, intents and powers. The bridge should converge on that rather than become a third shape. The two encoders' state hashes are not comparable by construction (one is versioned and kernel-hashed, the other hashes its own DTO), so parity has to be compared field by field.
+
 ## Still open
 
-- Everything above is static reading. The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator.
+- **No field-by-field parity comparison has been run yet.** The evidence above establishes that the oracle starts and can be driven; it does not compare a single field. Before it can, the bridge's own combat observation must carry every field of the parity contract — it does not today (the encounter id and the ordered draw pile are known gaps), which is why extending that seam belongs to this feature rather than to a prerequisite someone else owns.
+- **The `TotalFloor` and Act-variant divergences remain static conclusions.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator, and to repeat it for a seed whose act 1 is the non-default Act variant.
