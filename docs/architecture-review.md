@@ -53,6 +53,16 @@ $ echo $?
 
 Both files are tracked. **CI is red on pristine main.** `.github/workflows/ci.yml:35` runs this script; `CONTRIBUTING.md:18` tells contributors to run it.
 
+**Resolved.** The path scan now skips tracked markdown, so a document may quote the pattern and the
+matches it produced — this finding was itself the third match, which is the whole reason for the
+exemption — while the secret-token scan still covers every tracked file, because a credential in prose
+is still a leak (ADR-0004). The hardcoded game paths are gone from `Directory.Build.props` and
+`tests/Sts2.NativeSim.TraceExporterSmoke/Sts2.NativeSim.TraceExporterSmoke.csproj`: `GameDataDir`
+derives from `STS2_GAME_ROOT` alone, and a project that references the shipped assemblies declares
+`RequiresGameData` and fails with `STS2_GAME_ROOT is not set` rather than a missing-reference error.
+`pwsh scripts/test-public-tree.ps1` exits 0 on this tree
+(`.scratch/dev-environment-hardening/issues/03-public-tree-gate-and-hardcoded-defaults.md`).
+
 ### B2 — A documented command cannot import
 
 `README.md:78` instructs users to run `python python/neural_turn_search.py`. That file imports, at `neural_turn_search.py:26-27`:
@@ -810,7 +820,7 @@ Highest leverage available: one interface replaces three hand-synced dispatch ta
 
 ### Out of band
 
-[**B1**](#b1--the-gate-fails-on-the-tree-it-gates) — `scripts/test-public-tree.ps1:13-14` — is a gate that currently **fails CI on every clean checkout**. It is not architecture, but it should not wait for architecture.
+[**B1**](#b1--the-gate-fails-on-the-tree-it-gates) — `scripts/test-public-tree.ps1:13-14` — is a gate that **failed CI on every clean checkout**. It is not architecture, and it did not wait for architecture: it was fixed on its own, ahead of any work in this review (see the resolution note in B1 and ADR-0004).
 
 ---
 

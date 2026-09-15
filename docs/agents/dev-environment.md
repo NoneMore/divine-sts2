@@ -1,179 +1,110 @@
 # Dev environment: sandboxed Windows work on this repo
 
-Notes from a session implementing `.scratch/act1-combat1-scenarios` tickets on a Windows host where:
+This repository adapts itself to a Windows host whose file sandbox permits writes inside the
+repository only, whose user profile is not writable, and whose proxy refuses the download transports
+`curl` and `Invoke-WebRequest` accept. The adaptations live in `scripts/common.ps1`,
+`python/sts2_native_sim/paths.py` and `NativeWorker`, each conditional on a probe, so a host without
+those restrictions behaves exactly as it did. This file says what to run, which repository defects
+exist, and what the host refuses.
 
-- the file sandbox permits writes **inside the repository only** — anything under the user profile
-  (`%APPDATA%`, `%TEMP%`, `%USERPROFILE%\.dotnet`) or another drive is denied;
-- the machine had no repo-local toolchain (`.tools/dotnet9`, `.tools/godot-4.5.1-mono` were absent);
-- outbound HTTPS goes through a local proxy (`HTTP_PROXY` / `HTTPS_PROXY`).
+## What to run
 
-Everything below was hit for real in that session. Each entry is symptom → cause → what worked.
-None of it is a repo defect unless marked as such.
+```powershell
+pwsh scripts/bootstrap.ps1                  # first time: toolchain, Python env, host build, doctor
+pwsh scripts/doctor.ps1 -Deep               # validate the game and toolchain, hash the build, start a worker
+pwsh scripts/build-persistent-server.ps1    # rebuild Host and GodotHost
+pwsh scripts/test-public-tree.ps1           # the public-tree gate, as CI runs it
+python -m pytest tests -q                    # offline tests (see "pytest needs a writable temp root")
+```
 
-## Build
+- Local overrides — `STS2_GAME_ROOT`, `GODOT`, `STS2_SANDBOX_ROOT`, SDK state — belong in a gitignored
+  `.env` (`.env.example` is the template). Loading is fill-only: a variable already set always wins.
+- `.env` is read by the PowerShell layer (`scripts/common.ps1`). The Python CLI does not read it, so
+  reach the CLI through a script — `scripts/doctor.ps1` — rather than from a bare shell.
+- `scripts/common.ps1` owns host adaptation, and `Invoke-DivineDotnet` is the one `dotnet` entry point
+  every script uses. No command here needs an exported environment block.
 
-### 1. `dotnet build` reports "0 errors" and still fails
+## Repository defects and their status
 
-**Symptom.** `dotnet build <project>` prints a summary of `0 个警告 / 0 个错误` and exits 1, with no
-error text. Only `-v diag` reveals it:
+**The public-tree gate used to fail on the tree it gates.** Its single `git grep` matched a hardcoded
+game path in `Directory.Build.props` and in a smoke-test project file, and — once the B1 finding in
+`docs/architecture-review.md` quoted the command and its matches — that document too, so CI was red on
+a pristine `main`. The two scans now have different scopes: a machine-specific path is forbidden
+outside tracked markdown, while a secret token is forbidden everywhere, because a credential in prose
+is still a leak (ADR-0004). Both hardcoded paths are gone: `GameDataDir` comes from `STS2_GAME_ROOT`
+alone, and a project that references the shipped assemblies declares `RequiresGameData`, which fails
+with `STS2_GAME_ROOT is not set` instead of a missing-reference error. `Protocol` and `Core` build
+without the variable, which is what CI does.
+
+**Steam-root discovery is still narrow.** `paths._steam_roots()` derives its candidates from
+`%PROGRAMFILES%`, `%PROGRAMFILES(X86)%` and `STEAM_PATH`, and does read each candidate's
+`libraryfolders.vdf`; what it never does is read the registry's `SteamPath`, so a Steam installation
+that is not below one of those variables is invisible. The failure says so and names `STS2_GAME_ROOT`.
+Repairing discovery belongs to the single-discovery-policy work recorded as out of scope in
+`.scratch/act1-combat1-scenarios/spec.md`; set `STS2_GAME_ROOT` (or put it in `.env`) here.
+
+## What this host refuses, and what happens instead
+
+**The user profile is not writable.** `dotnet` would write first-run state under `%USERPROFILE%` and
+fail with `UnauthorizedAccessException` before any build output. When a probe finds that location
+refused, the script layer keeps SDK and package state under `.tools\dotnet-home` and
+`.tools\nuget-packages` instead. The probe writes and removes one file: never `tempfile`/`mkdtemp`,
+whose directories are created with `mode=0o700`, the mode this class of sandbox refuses even for a
+location where ordinary files are fine.
+
+**Godot dies headless before it starts.** The worker needs a writable `user://`, which maps under
+`%APPDATA%`; refused, it reports `Failed to open 'user://logs/...'` and then `signal 11`.
+`NativeWorker` probes `%APPDATA%` and, only when it is refused, redirects `APPDATA`, `LOCALAPPDATA`,
+`TEMP` and `TMP` into `.tools\tmp\native-worker\...`, saying so once on stderr. Callers no longer
+export that block; only `GODOT` and a game root remain theirs to supply.
+
+**The proxy refuses `curl` and `Invoke-WebRequest`.** `curl` fails with
+`schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS`, `Invoke-WebRequest` with
+`Authentication failed`, while the proxy itself is reachable. `Save-DivineDownload` tries `curl`
+(resumable), then `Invoke-WebRequest`, then Python `urllib`, which honours `HTTP_PROXY`/`HTTPS_PROXY`
+and names those variables when all three fail. `install-dotnet-9.ps1` passes `-ProxyAddress` on.
+
+**The SDK cannot resolve its workload-locator directories.** `dotnet build` prints a summary of
+`0 个警告 / 0 个错误` and exits 1, with the reason visible only under `-v diag`:
 
 ```
 error MSB4276: The default SDK resolver failed to resolve SDK
-"Microsoft.NET.SDK.WorkloadAutoImportPropsLocator" because directory
-"<sdk>\Sdks\Microsoft.NET.SDK.WorkloadAutoImportPropsLocator\Sdk" does not exist.
+"Microsoft.NET.SDK.WorkloadAutoImportPropsLocator" because directory "<sdk>\Sdks\...\Sdk" does not exist.
 ```
 
-**Cause.** This machine's .NET 9 SDK is missing the two workload-locator SDK directories
-(`Microsoft.NET.SDK.WorkloadAutoImportPropsLocator`, `Microsoft.NET.SDK.WorkloadManifestTargetsLocator`).
-Building one project directly survives it, because `Microsoft.DotNet.MSBuildWorkloadSdkResolver` then
-resolves the locator to nothing and the failure is absorbed. A project that *references* another
-project evaluates the reference through the `MSBuild` task in `_GetProjectReferenceTargetFrameworkProperties`;
-inside that child evaluation the same failure is fatal. So a leaf project builds and its consumer
-does not.
+Building one project survives it; a project that *references* another fails, because the reference is
+evaluated through the `MSBuild` task. `dotnet run` fails the same way and passes `-m:1` nowhere, so the
+scripts build through the helper first and then run with `--no-build`. The helper adds `-m:1` only when
+the locator directories are missing and prints why; a fix that keeps node reuse is still open.
 
-**What worked.** Build single-node: `dotnet build <project> -m:1`. Verified by narrowing: an empty
-probe project builds → `Sts2.NativeSim.Protocol` builds → a probe referencing it builds → a probe
-referencing `Core` fails → adding `-m:1` succeeds. A freshly downloaded 9.0.318 SDK has the same gap,
-so this is the machine, not the download.
+**The vulnerability audit fails the build.** `NU1900` — the audit cannot reach `api.nuget.org` through
+the proxy — becomes an error because `Directory.Build.props` sets `TreatWarningsAsErrors`, and
+`--no-restore` does not help because the warning is replayed from the cached restore. Pass
+`-p:NuGetAudit=false` explicitly — `pwsh scripts/build-persistent-server.ps1 -DisableNuGetAudit`
+does it for the two host projects. This is deliberately not automatic (ADR-0005): it weakens every
+build, and probing reachability is neither cheap nor reliable.
 
-### 2. NuGet vulnerability audit fails the build
+**pytest needs a writable temp root.** Measured, not inferred: pytest creates every temporary directory
+with `mode=0o700` (`_pytest/tmpdir.py:139,158`, `_pytest/pathlib.py:232`) and this sandbox refuses a
+directory created that way even to the process that created it, so every `tmp_path` test fails at setup
+and session cleanup fails again. An in-repo `--basetemp` does not help — the same `mkdir` is used for it — so run
+the suite where the file policy allows it; tests that only touch files they create themselves are
+unaffected. Leftover `.tools\tmp\pytest-*` directories cannot be listed or deleted from inside the
+sandbox.
 
-**Symptom.** `error NU1900: 获取包漏洞数据时出错: 无法加载源 https://api.nuget.org/v3/index.json` — restore
-cannot reach nuget.org through the proxy, and `Directory.Build.props` sets
-`TreatWarningsAsErrors`, so the audit warning becomes an error. `--no-restore` does not help: the
-warning is replayed from the cached restore result.
+**Godot picks the wrong .NET runtime.** Left alone, the host rolls the worker forward to the machine's
+newest runtime and Harmony reports `CoreCLR version 10.0.12 is not supported`; pinning
+`DOTNET_ROLL_FORWARD=LatestPatch` instead lands on 8.x and the project assembly fails to load
+(`System.Runtime, Version=9.0.0.0`). `NativeWorker` sets `DOTNET_ROOT`, `DOTNET_ROOT_X64` and `PATH`
+from a repo-local `.tools\dotnet9` and pins `DOTNET_ROLL_FORWARD=Major`, which is why the install
+location matters rather than an environment tweak at each call site.
 
-**What worked.** `-p:NuGetAudit=false` (packages themselves are already in the local package cache).
+**`dotnet --info` throws.** `Win32Exception (5)` from `ProcessExtensions.GetParentProcessId` — the
+sandbox denies `OpenProcess` on the parent. Noise; building and running are unaffected.
 
-### 3. `dotnet` cannot configure itself
-
-**Symptom.** `System.UnauthorizedAccessException: Access to the path '<profile>\.dotnet' is denied`
-before any build output appears.
-
-**Cause.** First-run configuration writes under `$HOME`, which the sandbox refuses.
-
-**What worked.** The overrides `.env.example` already documents: `DOTNET_CLI_HOME=<repo>\.tools\dotnet-home`
-and `NUGET_PACKAGES=<repo>\.tools\nuget-packages`. Worth reading `.env.example` before inventing a fix.
-
-### 4. `dotnet --info` throws
-
-`System.ComponentModel.Win32Exception (5): 拒绝访问` from `ProcessExtensions.GetParentProcessId` —
-the sandbox denies `OpenProcess` on the parent. Noise; it does not affect building or running.
-
-## Toolchain installs and downloads
-
-### 5. Pure PowerShell downloads fail behind a local proxy
-
-**Symptom.** `curl` fails with `(35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS`;
-`Invoke-WebRequest` fails with `Authentication failed, see inner exception`. The proxy itself is
-reachable (`HTTP/1.1 200 Connection established`). Therefore `scripts/install-godot-4.5.1.ps1` and
-`scripts/install-dotnet-9.ps1` — both curl/IWR-based — cannot complete on this machine.
-
-**What worked.** Download with Python (`urllib.request` honours `HTTP_PROXY`/`HTTPS_PROXY`) from the
-repo's virtualenv, then unpack with `zipfile`. Godot 4.5.1 mono (~100 MB) and the .NET 9 SDK
-(~300 MB) both came down this way. Extract Godot to `.tools/godot-4.5.1-mono/` so
-`paths.find_godot()` finds it, and .NET to `.tools/dotnet9/` so `paths.find_dotnet()` finds it —
-`client.py` then sets `DOTNET_ROOT` for the native worker automatically.
-
-### 6. Toolchains that are not in the repo, and toolchains that vanish
-
-`.tools/` held only `dotnet-home` and `nuget-packages`. A sibling checkout's `.tools/` (with `.NET 9`
-and Godot) and a Godot zip elsewhere on the machine were present at the start of the session and
-**disappeared mid-session** (disk reclaim), so borrowing them is not a durable plan: install into
-this repo's `.tools/` instead. `.tools/` is gitignored, so none of it can be committed by accident.
-
-## Running the native simulator
-
-### 7. The pure .NET host cannot drive the simulator
-
-`Sts2.NativeSim.Host --server` crashes with `0xC0000005`: `InstallSaveMock` reaches
-`Godot.OS.GetCmdlineArgs()`, which needs the Godot native runtime. `--server` is therefore not a
-substitute for the Godot worker; real checks need Godot 4.5.1 mono and `python/sts2_native_sim/client.py`'s
-`NativeWorker`.
-
-### 8. Godot dies headless before it starts
-
-**Symptom.** `CrashHandlerException: Program crashed with signal 11`, preceded by
-`ERROR: Failed to open 'user://logs/godot<timestamp>.log'`.
-
-**Cause.** Godot writes its user data under `%APPDATA%`, which the sandbox refuses.
-
-**What worked.** Point the whole user-facing environment into the repo before launching:
-
-```powershell
-$env:APPDATA = "$repo\.tools\tmp\appdata"
-$env:LOCALAPPDATA = "$repo\.tools\tmp\appdata"
-$env:TEMP = "$repo\.tools\tmp\temp"; $env:TMP = $env:TEMP
-```
-
-### 9. Godot picks the wrong .NET runtime
-
-**Symptom A.** `System.PlatformNotSupportedException: CoreCLR version 10.0.12 is not supported` from
-Harmony — the host rolled forward to the machine's newest runtime instead of 9.x.
-
-**Symptom B.** Pinning `DOTNET_ROLL_FORWARD=LatestPatch` instead lands on the 8.x runtime and the
-project assembly fails to load: `Could not load file or assembly 'System.Runtime, Version=9.0.0.0'`.
-
-**What worked.** A repo-local .NET 9 under `.tools/dotnet9` (see 5). `client.py` then sets
-`DOTNET_ROOT`, `DOTNET_ROOT_X64` and `PATH` to it for every worker, which is why the install location
-matters rather than the solution being an env tweak at the call site.
-
-## Tests
-
-### 10. `pytest` cannot create its temporary directory
-
-**Symptom.** 15 tests fail at setup with
-`PermissionError: [WinError 5] ... '<profile>\AppData\Local\Temp\dsh-*\pytest-of-<user>'`. Redirecting
-`--basetemp` into the repo still failed on the same class of denial, and pytest's session cleanup hit
-it again over a `\\?\`-prefixed path.
-
-**What worked.** Running the suite with the wider file permission the harness offers
-(`danger-full-access`), after which all 24 tests passed. Inside the restricted sandbox, tests that
-only touch files they create under the repo are fine; the failures were all `tmp_path`.
-
-### 11. `python/act_variant_acceptance.py` needs the env block
-
-Any script that starts a native worker needs `GODOT`, `STS2_GAME_ROOT` and the redirected user
-directories from 8. `paths.find_godot()` finds `.tools/godot-4.5.1-mono` on its own once installed;
-`STS2_GAME_ROOT` is still required on this machine (see 12).
-
-## Pre-existing repo findings this session re-confirmed
-
-### 12. Steam-root discovery cannot see the real library
-
-`paths._steam_roots()` builds candidates from `%PROGRAMFILES(X86)%` / `%PROGRAMFILES%` / `STEAM_PATH`.
-On this machine `%PROGRAMFILES(X86)%` is `C:\Program Files(X86)` — without the space — so the Steam
-install and its `libraryfolders.vdf` are never read, and the game (in a secondary library) is not
-found. `STS2_GAME_ROOT` is the workaround. Repairing discovery is already recorded as out of scope in
-the feature spec.
-
-### 13. The public-tree gate fails on the tree it gates
-
-`scripts/test-public-tree.ps1` greps tracked files for machine-specific paths and throws on a match.
-It already matched `Directory.Build.props` and a smoke test `.csproj` before any change in this
-session, as `docs/architecture-review.md` (B1) records. Nothing added during this session introduced
-a new instance: cite the install generically ("a secondary Steam library"), never a drive-qualified
-path.
-
-## Verified command set
-
-```powershell
-# 1. Build (both flags are machine workarounds, see 1 and 2)
-$env:DOTNET_CLI_HOME = "<repo>\.tools\dotnet-home"
-$env:NUGET_PACKAGES = "<repo>\.tools\nuget-packages"
-<repo>\.tools\dotnet9\dotnet.exe build src\Sts2.NativeSim.GodotHost\Sts2.NativeSim.GodotHost.csproj `
-    -c Debug -m:1 -p:NuGetAudit=false
-
-# 2. Native acceptance against the shipped game (see 8 and 9)
-$env:GODOT = "<repo>\.tools\godot-4.5.1-mono\Godot_v4.5.1-stable_mono_win64\Godot_v4.5.1-stable_mono_win64_console.exe"
-$env:STS2_GAME_ROOT = "<installed game root>"
-$env:APPDATA = "<repo>\.tools\tmp\appdata"; $env:LOCALAPPDATA = $env:APPDATA
-$env:TEMP = "<repo>\.tools\tmp\temp"; $env:TMP = $env:TEMP
-.venv\Scripts\python.exe python\act_variant_acceptance.py
-
-# 3. Offline tests (see 10: needs the wider file permission in a sandboxed session)
-.venv\Scripts\python.exe -m pytest tests -q
-```
+**`Sts2.NativeSim.Host --server` cannot drive the simulator.** `InstallSaveMock` reaches
+`Godot.OS.GetCmdlineArgs()`, which needs the Godot native runtime, so it crashes with `0xC0000005`; the
+Godot worker is the real path.
 
 Versions in play: .NET SDK 9.0.318 (repo-local), .NET runtime 9.0.20, Godot 4.5.1 mono, shipped
 assembly `sts2.dll` sha256 `A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52`.

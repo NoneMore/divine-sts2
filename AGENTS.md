@@ -12,5 +12,5 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ### Dev environment
 
-Sandboxed Windows quirks (build flags, toolchain installs, redirected user directories, pytest temp
-dirs) and the command set that works: `docs/agents/dev-environment.md`.
+How this repository adapts itself to a sandboxed Windows host — the command set that works, the
+repository defects and their status, and what the host refuses: `docs/agents/dev-environment.md`.
