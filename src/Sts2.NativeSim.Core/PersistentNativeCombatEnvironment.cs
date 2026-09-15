@@ -13,6 +13,7 @@ namespace Sts2.NativeSim.Core;
 /// every gameplay transition is dispatched into the shipped game assembly.
 public sealed class PersistentNativeCombatEnvironment : IDisposable
 {
+    private const string UnlockPolicy = "all";
     private static PersistentNativeCombatEnvironment? _activeEnvironment;
     private static bool _eventPresentationScope;
     private static Task? _scopedScheduledTask;
@@ -87,6 +88,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     public object Hello() => new
     {
         protocol_version = ProtocolConstants.Version, observation_schema_version = ProtocolConstants.ObservationSchemaVersion,
+        unlock_policy = UnlockPolicy,
         server = "sts2-native-sim-godot", persistent = true, certifying = false,
         game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
         methods = new[] { "hello", "catalog", "reset", "run_reset", "map_reset", "reward_reset", "item_reward_reset", "custom_reward_reset", "rest_reset", "event_reset", "observe", "run_observe", "map_observe", "reward_observe", "custom_reward_observe", "rest_observe", "event_observe", "legal_actions", "step", "run_step", "map_step", "reward_step", "custom_reward_step", "rest_step", "event_step", "fork", "restore", "diagnostics", "close" },
@@ -280,7 +282,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     public string Fork() => GetOrAddCurrentBranch();
-    public object Diagnostics() => new { branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug };
+    public object Diagnostics() => new { unlock_policy = UnlockPolicy, branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug };
 
     public async Task<EnvironmentResult> RestoreAsync(string id)
     {
@@ -359,7 +361,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object nativeCombatManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance")!;
         if (_runServicesInitialized) ReflectionTools.Invoke(nativeCombatManager, "Reset", false);
         object character = Find(ReflectionTools.GetStatic(db, "AllCharacters")!, r.Character);
-        object unlock = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), new List<string>(), List(T("MegaCrit.Sts2.Core.Models.ModelId"), []), 0);
+        object unlock = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Unlocks.UnlockState"), "all")
+            ?? throw new MissingMemberException("MegaCrit.Sts2.Core.Unlocks.UnlockState", "all");
         _player = playerType.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForNewRun" && x.GetParameters().Length == 3).Invoke(null, [character, unlock, (ulong)1])!;
         _cardInstanceIds.Clear();
         _choiceOrdinal = 0; _dynamicCardOrdinal = 0; _pendingChoice = null; _continuationTask = null;

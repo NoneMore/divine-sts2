@@ -225,11 +225,16 @@ public sealed class NativeFeasibilityProbe
         Type ironcladType = Require("MegaCrit.Sts2.Core.Models.Characters.Ironclad");
         object ironclad = ReflectionTools.Enumerate(ReflectionTools.GetStatic(modelDb, "AllCharacters"))
             .Single(character => character?.GetType() == ironcladType)!;
-        object unlockState = ReflectionTools.Create(
-            Require("MegaCrit.Sts2.Core.Unlocks.UnlockState"),
-            new List<string>(),
-            ToTypedList(Require("MegaCrit.Sts2.Core.Models.ModelId"), []),
-            0);
+        object unlockState = ReflectionTools.GetStatic(Require("MegaCrit.Sts2.Core.Unlocks.UnlockState"), "all")
+            ?? throw new MissingMemberException("MegaCrit.Sts2.Core.Unlocks.UnlockState", "all");
+        int expectedEpochs = ReflectionTools.Enumerate(ReflectionTools.GetStatic(Require("MegaCrit.Sts2.Core.Timeline.EpochModel"), "AllEpochIds")).Count;
+        int expectedEncounters = ReflectionTools.Enumerate(ReflectionTools.GetStatic(modelDb, "AllEncounters")).Count;
+        int unlockedEpochs = Convert.ToInt32(ReflectionTools.Invoke(unlockState, "EpochUnlockCount"));
+        object serializedUnlocks = ReflectionTools.Invoke(unlockState, "ToSerializable")!;
+        int seenEncounters = ReflectionTools.Enumerate(ReflectionTools.Get(serializedUnlocks, "EncountersSeen")).Count;
+        int numberOfRuns = Convert.ToInt32(ReflectionTools.Get(unlockState, "NumberOfRuns"));
+        if (unlockedEpochs != expectedEpochs || seenEncounters != expectedEncounters || numberOfRuns <= 0)
+            throw new InvalidOperationException($"Native all-unlocks state is incomplete: epochs={unlockedEpochs}/{expectedEpochs}, encounters={seenEncounters}/{expectedEncounters}, runs={numberOfRuns}.");
         Type playerType = Require("MegaCrit.Sts2.Core.Entities.Players.Player");
         _player = playerType.GetMethods(BindingFlags.Public | BindingFlags.Static)
             .Single(method => method.Name == "CreateForNewRun" && method.GetParameters().Length == 3)
@@ -245,6 +250,8 @@ public sealed class NativeFeasibilityProbe
             .Single(method => method.Name == "CreateForTest")
             .Invoke(null, [ToTypedList(playerType, [_player]), acts, modifiers, mode, 0, "NATIVESIMSPIKE"])!;
         _facts["character_type"] = ironclad.GetType().FullName;
+        _facts["unlock_policy"] = "all";
+        _facts["unlock_state"] = new { epochs = unlockedEpochs, encounters = seenEncounters, number_of_runs = numberOfRuns };
         _facts["run_rng_seed"] = ReflectionTools.Get(ReflectionTools.Get(_runState, "Rng")!, "Seed");
         return $"character={ironclad.GetType().Name}; acts={ReflectionTools.Enumerate(acts).Count}; seed=NATIVESIMSPIKE";
     }

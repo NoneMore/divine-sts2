@@ -10,6 +10,8 @@ High-throughput, deterministic, headless reinforcement learning and MCTS executi
 
 Executes game mechanics directly from your local Steam installation inside isolated, presentation-suppressed .NET 9 workers. Contains zero copyrighted assets, game binaries, or proprietary art.
 
+Every newly created simulator run uses the game's complete legal gameplay content pools. Character, seed, and Ascension remain configurable, while profile progression never narrows cards, relics, potions, events, Acts, Ancients, or encounter ordering. This does not modify profile saves or mark achievements, tutorials, statistics, or compendium entries as complete. The `hello`, `diagnostics`, and full-app `start_run` responses expose this invariant as `unlock_policy: "all"`.
+
 ---
 
 ## Benchmarks
@@ -125,4 +127,3 @@ STS2_GAME_ROOT=D:\SteamLibrary\steamapps\common\Slay the Spire 2
 ## Legal
 
 `divine-sts2` is an independent research project and is not affiliated with or endorsed by Mega Crit. Users must provide their own legally obtained copy of Slay the Spire 2. Distributed under the [MIT License](LICENSE).
-

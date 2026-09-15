@@ -9,6 +9,7 @@ namespace Sts2.NativeSim.FullAppBridge;
 
 public static class FullAppBridgeServer
 {
+    public const string UnlockPolicy = "all";
     private static TcpListener? _listener;
     private static TcpClient? _client;
     private static NetworkStream? _stream;
@@ -121,6 +122,7 @@ public static class FullAppBridgeServer
                     ["version"] = "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314",
                     ["pid"] = Environment.ProcessId,
                     ["bound_port"] = BoundPort,
+                    ["unlock_policy"] = UnlockPolicy,
                 };
 
             case "start_run":
@@ -134,6 +136,9 @@ public static class FullAppBridgeServer
                         RequestedAscension = asc;
                 }
 
+                if (RequestedAscension is < 0 or > 10)
+                    throw new ArgumentOutOfRangeException("ascension", RequestedAscension, "Ascension must be between 0 and 10.");
+
                 _initialBoundaryTcs = new TaskCompletionSource<bool>();
                 IsRunStarted = true;
 
@@ -146,6 +151,7 @@ public static class FullAppBridgeServer
                     ["seed"] = RequestedSeed,
                     ["character"] = RequestedCharacter,
                     ["ascension"] = RequestedAscension,
+                    ["unlock_policy"] = UnlockPolicy,
                     ["observation"] = CurrentObservation,
                     ["legal_actions"] = CurrentLegalActions,
                 };
@@ -188,6 +194,7 @@ public static class FullAppBridgeServer
                     ["seed"] = RequestedSeed,
                     ["character"] = RequestedCharacter,
                     ["ascension"] = RequestedAscension,
+                    ["unlock_policy"] = UnlockPolicy,
                     ["actions"] = ActionHistory,
                     ["state_hashes"] = StateHashHistory,
                 };

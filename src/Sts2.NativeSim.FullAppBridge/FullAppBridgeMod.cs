@@ -11,6 +11,7 @@ using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Events;
@@ -19,6 +20,7 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -36,6 +38,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Unlocks;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
@@ -61,6 +64,11 @@ public static class FullAppBridgeMod
 
         TryPatchPostfix(harmony, typeof(NGame), "LaunchMainMenu", nameof(OnMainMenuLaunched));
         TryPatchPrefix(harmony, typeof(StartRunLobby), "BeginRunForAllPlayersIfAllReady", nameof(OnBeginRunForAllPlayers));
+        PatchRequiredPrefix(harmony, typeof(StartRunLobby), "BeginRunForAllPlayers", [typeof(string), typeof(List<ModifierModel>)], nameof(UseFullyUnlockedLobby));
+        PatchRequiredPrefix(harmony, typeof(Player), nameof(Player.CreateForNewRun), [typeof(CharacterModel), typeof(UnlockState), typeof(ulong)], nameof(UseFullyUnlockedPlayer));
+        PatchRequiredPrefix(harmony, typeof(NGame), nameof(NGame.StartNewSingleplayerRun),
+            [typeof(CharacterModel), typeof(bool), typeof(IReadOnlyList<ActModel>), typeof(IReadOnlyList<ModifierModel>), typeof(string), typeof(GameMode), typeof(int), typeof(DateTimeOffset?)],
+            nameof(UseRequestedAscension));
 
         TryPatchPrefix(harmony, typeof(CombatRoomHandler), nameof(CombatRoomHandler.HandleAsync), nameof(HandleCombatAsync));
         TryPatchPrefix(harmony, typeof(MapScreenHandler), nameof(MapScreenHandler.HandleAsync), nameof(HandleMapAsync));
@@ -114,6 +122,15 @@ public static class FullAppBridgeMod
         }
     }
 
+    private static void PatchRequiredPrefix(Harmony harmony, Type type, string methodName, Type[] parameterTypes, string patchMethodName)
+    {
+        MethodInfo method = AccessTools.DeclaredMethod(type, methodName, parameterTypes)
+            ?? throw new MissingMethodException(type.FullName, methodName);
+        MethodInfo patch = AccessTools.Method(typeof(FullAppBridgeMod), patchMethodName)
+            ?? throw new MissingMethodException(typeof(FullAppBridgeMod).FullName, patchMethodName);
+        harmony.Patch(method, prefix: new HarmonyMethod(patch));
+    }
+
     private static void OnMainMenuLaunched(ref Task __result)
     {
         __result = StartAfterMainMenuAsync(__result);
@@ -161,6 +178,29 @@ public static class FullAppBridgeMod
                 GD.PrintErr($"[FullAppBridge] Failed to set character {requested}: {ex.Message}");
             }
         }
+
+        __instance.SyncAscensionChange(FullAppBridgeServer.RequestedAscension);
+    }
+
+    private static void UseFullyUnlockedLobby(StartRunLobby __instance)
+    {
+        if (!FullAppBridgeServer.IsRunStarted || __instance.NetService.Type != NetGameType.Singleplayer) return;
+        for (int i = 0; i < __instance.Players.Count; i++)
+        {
+            LobbyPlayer player = __instance.Players[i];
+            player.unlockState = UnlockState.all.ToSerializable();
+            __instance.Players[i] = player;
+        }
+    }
+
+    private static void UseFullyUnlockedPlayer([HarmonyArgument(1)] ref UnlockState unlockState)
+    {
+        if (FullAppBridgeServer.IsRunStarted) unlockState = UnlockState.all;
+    }
+
+    private static void UseRequestedAscension([HarmonyArgument(6)] ref int ascensionLevel)
+    {
+        if (FullAppBridgeServer.IsRunStarted) ascensionLevel = FullAppBridgeServer.RequestedAscension;
     }
 
     private static bool HandleCombatAsync(Rng random, CancellationToken ct, ref Task __result)

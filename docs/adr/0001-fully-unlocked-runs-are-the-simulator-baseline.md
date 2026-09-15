@@ -1,0 +1,3 @@
+# Fully unlocked runs are the simulator baseline
+
+Every newly created headless or full-app sandbox run uses the game's complete legal gameplay content pools. The simulator does not expose a progression-locked mode: character, seed, and Ascension remain configurable, while profile progression must not silently narrow the environment's cards, relics, potions, events, Acts, Ancients, or encounter ordering. This makes environment behavior independent of incidental profile history and establishes one content-complete distribution for training and evaluation; compendium discovery, achievements, tutorials, badges, career statistics, existing saved runs, real profiles, and multiplayer remain outside this decision.
