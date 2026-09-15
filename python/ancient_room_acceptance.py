@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from sts2_native_sim import NativeWorkerPool
-from sts2_native_sim.ancient import ancient_action, prompt_free_choice_action
+from sts2_native_sim.ancient import ancient_action, drive_choice, prompt_free_choice_action
 from sts2_native_sim.shipped_rng import Rng, deterministic_hash_code, rng_for_content
 
 # `StandardActMap` puts the act's starting point at the middle column of row 0, and
@@ -334,18 +334,14 @@ def _drive(worker, sample: Sample) -> dict:
     pick = prompt_free_choice_action(entered)
     if pick is None:
         raise AssertionError(f"{sample.label}: no offered choice picks a relic that opens no second prompt: {offered}")
-    chosen = worker.run_step(pick["action_id"])
-    steps = 0
-    while chosen["observation"]["decision"]["kind"] != "event_complete":
-        _check(
-            bool(chosen["legal_actions"]) and steps < 64,
-            sample,
-            f"the Ancient choice did not finish ({chosen['observation']['decision']['kind']}, {steps} steps)",
-        )
-        chosen = worker.run_step(chosen["legal_actions"][0]["action_id"])
-        steps += 1
+    driven = drive_choice(worker, pick)
+    _check(
+        driven.state["observation"]["decision"]["kind"] == "event_complete",
+        sample,
+        f"the Ancient choice did not finish ({driven.state['observation']['decision']['kind']})",
+    )
     record["chosen"] = pick["parameters"]["relic_model_id"]
-    record["nested_steps"] = steps
+    record["nested_steps"] = len(driven.decisions)
 
     left = worker.run_step("leave_event")
     _check(left["observation"]["decision"]["kind"] == "map_choice", sample, "leaving the Ancient did not return to the map")

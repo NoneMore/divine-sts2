@@ -68,8 +68,11 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private bool _treasureOpened, _treasureResolved;
     private object? _merchantRoom, _merchantInventory;
     private readonly Dictionary<object, (string Kind, string? ModelId)> _merchantEntryIdentities = new(ReferenceEqualityComparer.Instance);
-    private object? _pendingRewardsSet;
-    private PendingRewardSelection? _pendingRewardSelection;
+    // Native reward sets are a stack, exactly as the shipped `RewardsSetSynchronizer` keeps
+    // them: a relic taken from one rewards screen may itself offer a second one, so the set
+    // that opened the second is suspended until the second is resolved. The top of the list
+    // is the set the run is currently asking the caller about.
+    private readonly List<PendingRewardSet> _rewardSets = [];
     private bool _customRewardMode, _customRewardsLinked;
     private string[] _customRewardKinds = [];
 
@@ -166,7 +169,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         _cardInstanceIds.Clear();
         _combatCreaturesById.Clear();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-        _runMode = false; _runStage = "map"; _runWon = false; _roomRewardsSet = null; _resolvedRoomRewards.Clear(); _pendingRoomRewardIndex = null; _pendingRewardsSet = null; _pendingRewardSelection = null; _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = []; _treasureRoom = null; _treasureSynchronizer = null; _treasureOpened = false; _treasureResolved = false; _merchantRoom = null; _merchantInventory = null; _merchantEntryIdentities.Clear(); _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _cardReward = null; _restMode = false; _eventMode = false; _eventId = null; _event = null; Validate(request); _reset = request; _history.Clear(); _currentBranchHandle = null; _lastActionId = null; Construct(request);
+        _runMode = false; _runStage = "map"; _runWon = false; _roomRewardsSet = null; _resolvedRoomRewards.Clear(); _pendingRoomRewardIndex = null; _rewardSets.Clear(); _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = []; _treasureRoom = null; _treasureSynchronizer = null; _treasureOpened = false; _treasureResolved = false; _merchantRoom = null; _merchantInventory = null; _merchantEntryIdentities.Clear(); _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _cardReward = null; _restMode = false; _eventMode = false; _eventId = null; _event = null; Validate(request); _reset = request; _history.Clear(); _currentBranchHandle = null; _lastActionId = null; Construct(request);
         try
         {
             object? runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance");
@@ -326,7 +329,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             _lastSnapshotDebug = "snapshot_was_null";
         }
 
-        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null; Construct(branch.Reset); _runMode = branch.RunMode; _runStage = "map"; _pendingRewardsSet = null; _pendingRewardSelection = null;
+        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null; Construct(branch.Reset); _runMode = branch.RunMode; _runStage = "map"; _rewardSets.Clear();
         _mapMode = !_runMode && branch.MapMode; _rewardMode = !_runMode && branch.RewardMode; _rewardKind = branch.RewardKind; _rewardModelId = branch.RewardModelId; _restMode = !_runMode && branch.RestMode; _eventMode = !_runMode && branch.EventMode; _eventId = branch.EventId;
         _customRewardMode = branch.CustomRewardMode; _customRewardsLinked = branch.CustomRewardsLinked; _customRewardKinds = branch.CustomRewardKinds;
         if (_runMode) InitializeRunMap();
@@ -728,7 +731,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             combat = combatObservation,
             inventory = new { relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(x => x is not null).Select(x => new { model_id = Entry(x!), counter = (bool)ReflectionTools.Get(x!, "ShowCounter")! ? ReflectionTools.Get(x!, "DisplayAmount") : null, native_state = SavedNativeState(x!) }).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select((x, i) => x is null ? null : new { slot = i, model_id = Entry(x) }).ToArray() },
             outstanding_choice = choiceState,
-            decision = new { kind = terminal ? "terminal" : _pendingChoice is null ? "combat_action" : _pendingChoice.DecisionKind, legal_actions = actions }, terminal, victory = terminal && playerAlive
+            decision = new { kind = terminal ? "terminal" : DecisionKind("combat_action"), legal_actions = actions }, terminal, victory = terminal && playerAlive
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
         return new(observation, _hash, actions, terminal, terminal && playerAlive, handle, transition, ScoringFeatures());
@@ -767,7 +770,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private IReadOnlyList<LegalAction> BuildActionsRaw()
     {
-        if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
+        if (HasOpenRewardSet) return BuildCustomRewardActions();
         if (_runMode && _runStage == "run_terminal") return [];
         if (_runMode && _runStage == "act_transition") return [new("advance_act", "advance_act", new Dictionary<string, object?>())];
         if (_runMode && _runStage == "map") return BuildMapActions();
@@ -1095,7 +1098,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private EnvironmentResult CaptureReward(object? transition)
     {
-        EnsureReset(); LegalAction[] actions = BuildRewardActions().ToArray(); object deck = ReflectionTools.Get(_player!, "Deck")!;
+        EnsureReset(); LegalAction[] roomActions = BuildRewardActions().ToArray(); object deck = ReflectionTools.Get(_player!, "Deck")!;
+        LegalAction[] actions = DecisionActions(roomActions).ToArray();
         object[] options = _cardReward is null ? [] : _rewardKind == "card"
             ? ReflectionTools.Enumerate(ReflectionTools.Get(_cardReward, "Cards")).Where(card => card is not null).Select((card, index) => new { option_id = $"reward-{index}-{Entry(card!)}", model_id = Entry(card!) }).Cast<object>().ToArray()
             : [new { option_id = $"reward-0-{Entry(ReflectionTools.Get(_cardReward, _rewardKind == "relic" ? "Relic" : "Potion")!)}", model_id = Entry(ReflectionTools.Get(_cardReward, _rewardKind == "relic" ? "Relic" : "Potion")!) }];
@@ -1105,8 +1109,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
             reward = new { kind = _rewardKind, options, can_skip = true, selected = _rewardCompleted },
-            outstanding_choice = _pendingChoice?.Snapshot(),
-            decision = new { kind = _pendingChoice is not null ? _pendingChoice.DecisionKind : actions.Length == 0 ? "reward_complete" : "reward_choice", legal_actions = actions },
+            outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
+            decision = new { kind = DecisionKind(roomActions.Length == 0 ? "reward_complete" : "reward_choice"), legal_actions = actions },
             terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
@@ -1128,7 +1132,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private IReadOnlyList<LegalAction> BuildRestActions()
     {
-        if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
+        if (HasOpenRewardSet) return BuildCustomRewardActions();
         if (_pendingChoice is not null) return BuildChoiceActions(_pendingChoice);
         if (_restSelectionStarted) return _runMode ? [new("leave_rest", "leave_rest", new Dictionary<string, object?>())] : [];
         return _restOptions.Where(option => (bool)ReflectionTools.Get(option, "IsEnabled")!).Select(option =>
@@ -1166,7 +1170,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             },
             rest_site = new { options, selected = _restSelectionStarted && _pendingChoice is null },
             outstanding_choice = choice, outstanding_rewards = CustomRewardsSnapshot(),
-            decision = new { kind = _pendingRewardsSet is not null ? "custom_reward_choice" : _pendingChoice is not null ? _pendingChoice.DecisionKind : _restSelectionStarted ? "rest_complete" : "rest_choice", legal_actions = actions },
+            decision = new { kind = DecisionKind(_restSelectionStarted ? "rest_complete" : "rest_choice"), legal_actions = actions },
             terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
@@ -1191,7 +1195,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private IReadOnlyList<LegalAction> BuildEventActions()
     {
-        if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
+        if (HasOpenRewardSet) return BuildCustomRewardActions();
         if (_pendingChoice is not null) return BuildChoiceActions(_pendingChoice);
         if (_event is null) return [];
         EnsureHeadlessArchitectOption();
@@ -1308,7 +1312,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             },
             @event = new { model_id = _eventId, options, finished },
             outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
-            decision = new { kind = _pendingRewardsSet is not null ? "custom_reward_choice" : _pendingChoice is not null ? _pendingChoice.DecisionKind : finished ? "event_complete" : "event_choice", legal_actions = actions },
+            decision = new { kind = DecisionKind(finished ? "event_complete" : "event_choice"), legal_actions = actions },
             terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
@@ -1332,13 +1336,11 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 {
                     if (state is null) continue;
                     object? stack = ReflectionTools.Get(state, "rewardsStack");
-                    if (stack is IEnumerable stackEnum)
+                    if (stack is not IEnumerable stackEnum) continue;
+                    foreach (object? entry in stackEnum)
                     {
-                        foreach (object? entry in stackEnum)
-                        {
-                            if (entry is not null && ReferenceEquals(ReflectionTools.Get(entry, "set"), rewardsSet))
-                                return;
-                        }
+                        if (entry is not null && ReferenceEquals(ReflectionTools.Get(entry, "set"), rewardsSet))
+                            return;
                     }
                 }
                 ReflectionTools.Invoke(synchronizer, "BeginRewardsSet", rewardsSet);
@@ -1364,7 +1366,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         await task.ConfigureAwait(false);
         _roomRewardsSet = ReflectionTools.Get(task, "Result")!;
         _resolvedRoomRewards.Clear();
-        object synchronizer = ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+        object synchronizer = CurrentRewardsSetSynchronizer();
         EnsureRewardsSetViewing(synchronizer, _roomRewardsSet);
         _runStage = "rewards";
     }
@@ -1411,7 +1413,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             ReflectionTools.Invoke(reward, "OnSkipped");
             return;
         }
-        object synchronizer = ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+        object synchronizer = CurrentRewardsSetSynchronizer();
         EnsureRewardsSetViewing(synchronizer, _roomRewardsSet);
         _pendingRoomRewardIndex = rewardIndex;
         try
@@ -1614,14 +1616,15 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         EnsureReset(); object deck = ReflectionTools.Get(_player!, "Deck")!;
         object[] relicOptions = !_treasureOpened || _treasureResolved || _treasureSynchronizer is null || ReflectionTools.Get(_treasureSynchronizer, "CurrentRelics") is null
             ? [] : ReflectionTools.Enumerate(ReflectionTools.Get(_treasureSynchronizer, "CurrentRelics")).Where(relic => relic is not null).Select((relic, index) => new { option_index = index, model_id = Entry(relic!) }).Cast<object>().ToArray();
-        LegalAction[] actions = BuildTreasureActions().ToArray();
+        LegalAction[] actions = DecisionActions(BuildTreasureActions()).ToArray();
         object observation = new
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = RunInventorySnapshot(deck),
             treasure = new { opened = _treasureOpened, resolved = _treasureResolved, relic_options = relicOptions },
-            decision = new { kind = !_treasureOpened ? "treasure_open" : _treasureResolved ? "treasure_complete" : "treasure_relic_choice", legal_actions = actions },
+            outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
+            decision = new { kind = DecisionKind(!_treasureOpened ? "treasure_open" : _treasureResolved ? "treasure_complete" : "treasure_relic_choice"), legal_actions = actions },
             terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
@@ -1633,7 +1636,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private IReadOnlyList<LegalAction> BuildShopActions()
     {
-        if (_pendingRewardsSet is not null) return BuildCustomRewardActions();
+        if (HasOpenRewardSet) return BuildCustomRewardActions();
         if (_pendingChoice is not null) return BuildChoiceActions(_pendingChoice);
         List<LegalAction> actions = [];
         object[] entries = MerchantEntries();
@@ -1682,7 +1685,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = RunInventorySnapshot(deck), shop = new { entries }, outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
-            decision = new { kind = _pendingRewardsSet is not null ? "custom_reward_choice" : _pendingChoice is null ? "shop_choice" : _pendingChoice.DecisionKind, legal_actions = actions }, terminal = false, victory = false
+            decision = new { kind = DecisionKind("shop_choice"), legal_actions = actions }, terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
         return new(observation, _hash, actions, false, false, handle, transition, ScoringFeatures());
@@ -1800,12 +1803,36 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private object[] ScoringPile(string name) => ReflectionTools.Enumerate(ReflectionTools.Get(ReflectionTools.Get(_pcs!, name)!, "Cards"))
         .Where(card => card is not null).Select(card => (object)new { model_id = Entry(card!), upgrades = ReflectionTools.Get(card!, "CurrentUpgradeLevel") }).ToArray();
 
+    /// <summary>The reward set the run is currently asking the caller about, if any.</summary>
+    private PendingRewardSet? CurrentRewardSet => _rewardSets.Count == 0 ? null : _rewardSets[^1];
+
+    /// <summary>Whether a native reward set is open, nested inside another one included.</summary>
+    private bool HasOpenRewardSet => _rewardSets.Count > 0;
+
+    /// <summary>The shipped synchronizer whose reward-set stack mirrors <see cref="_rewardSets"/>.</summary>
+    private object CurrentRewardsSetSynchronizer()
+        => ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+
+    /// <summary>
+    /// The decision the run is presenting. A native choice is more specific than the reward set
+    /// whose reward opened it, and an open reward set is more specific than the decision the room
+    /// stage would otherwise report, so the vocabulary a caller sees names what it must answer.
+    /// </summary>
+    private string DecisionKind(string fallbackKind)
+        => _pendingChoice is not null ? _pendingChoice.DecisionKind
+        : HasOpenRewardSet ? "custom_reward_choice"
+        : fallbackKind;
+
+    /// <summary>The legal actions matching <see cref="DecisionKind"/>.</summary>
+    private IReadOnlyList<LegalAction> DecisionActions(IReadOnlyList<LegalAction> roomActions)
+        => _pendingChoice is not null || HasOpenRewardSet ? BuildCustomRewardActions() : roomActions;
+
     private IReadOnlyList<LegalAction> BuildCustomRewardActions()
     {
         if (_pendingChoice is not null) return BuildChoiceActions(_pendingChoice);
-        if (_pendingRewardsSet is null) return [];
+        if (CurrentRewardSet is not { } frame) return [];
         List<LegalAction> actions = [];
-        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(_pendingRewardsSet, "Rewards")).Where(reward => reward is not null).Select(reward => reward!).ToArray();
+        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(frame.Set, "Rewards")).Where(reward => reward is not null).Select(reward => reward!).ToArray();
         for (int rewardIndex = 0; rewardIndex < rewards.Length; rewardIndex++)
         {
             object top = rewards[rewardIndex];
@@ -1817,7 +1844,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
             else AddCustomRewardActions(actions, rewardIndex, -1, top);
         }
-        if (!(bool)ReflectionTools.Get(_pendingRewardsSet, "DisallowSkipping")!) actions.Add(new("skip_custom_rewards", "skip_custom_rewards", new Dictionary<string, object?>()));
+        if (!(bool)ReflectionTools.Get(frame.Set, "DisallowSkipping")!) actions.Add(new("skip_custom_rewards", "skip_custom_rewards", new Dictionary<string, object?>()));
         return actions;
     }
 
@@ -1838,7 +1865,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         }
         object typedRewards = List(rewardType, rewards);
         await StartTransitionAsync(() => (Task)ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Commands.RewardsCmd"), "OfferCustom", _player!, typedRewards)!);
-        if (_pendingRewardsSet is null) throw new ProtocolException("invalid_state", "Native custom rewards completed without exposing a reward decision.");
+        if (!HasOpenRewardSet) throw new ProtocolException("invalid_state", "Native custom rewards completed without exposing a reward decision.");
     }
 
     private object CreateCustomReward(string kind) => kind switch
@@ -1858,7 +1885,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = RunInventorySnapshot(deck), custom_rewards = CustomRewardsSnapshot(), outstanding_choice = _pendingChoice?.Snapshot(),
-            decision = new { kind = _pendingChoice is not null ? _pendingChoice.DecisionKind : _pendingRewardsSet is not null ? "custom_reward_choice" : "custom_reward_complete", legal_actions = actions },
+            decision = new { kind = DecisionKind("custom_reward_complete"), legal_actions = actions },
             terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
@@ -1884,9 +1911,9 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     private async Task ChooseCustomRewardAsync(int rewardIndex, int childIndex, int optionIndex)
     {
-        if (_pendingRewardsSet is null) throw new ProtocolException("invalid_action", "No native custom reward set is active.");
-        Task offer = _continuationTask ?? throw new ProtocolException("invalid_state", "Custom rewards have no suspended native offer task.");
-        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(_pendingRewardsSet, "Rewards")).Where(reward => reward is not null).Select(reward => reward!).ToArray();
+        PendingRewardSet frame = CurrentRewardSet ?? throw new ProtocolException("invalid_action", "No native custom reward set is active.");
+        frame.OfferTask ??= _continuationTask;
+        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(frame.Set, "Rewards")).Where(reward => reward is not null).Select(reward => reward!).ToArray();
         if (rewardIndex < 0 || rewardIndex >= rewards.Length) throw new ProtocolException("invalid_action", $"Custom reward {rewardIndex} is not selectable.");
         object top = rewards[rewardIndex], reward = top;
         if (childIndex >= 0)
@@ -1897,62 +1924,102 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             reward = children[childIndex];
         }
         _rewardSelectionIndex = reward.GetType().Name == "CardReward" ? optionIndex : null;
-        object synchronizer = ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+        object synchronizer = CurrentRewardsSetSynchronizer();
         _choiceBegun = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Task selection = (Task)ReflectionTools.Invoke(synchronizer, "SelectLocalReward", reward)!;
-        _pendingRewardSelection = new(top, reward, offer, childIndex >= 0);
+        frame.Selection = new(top, reward, childIndex >= 0);
+        frame.SelectionTask = selection;
         _continuationTask = selection;
+        // Taking the reward can open a further prompt of its own — a card select, or a whole
+        // second rewards screen when the relic itself offers rewards. That prompt becomes the
+        // decision here, and the selection stays suspended on this frame until it is answered.
         Task completed = await Task.WhenAny(selection, _choiceBegun.Task).ConfigureAwait(false);
         if (completed != selection) { await _choiceBegun.Task.ConfigureAwait(false); return; }
         await selection.ConfigureAwait(false);
         _continuationTask = null; _choiceBegun = null; _rewardSelectionIndex = null;
-        await FinalizeCustomRewardSelectionAsync();
+        await SettleRewardSetsAsync().ConfigureAwait(false);
     }
 
-    private async Task FinalizeCustomRewardSelectionAsync()
+    /// <summary>
+    /// Finalize every settled reward set, from the top of the stack down. A nested set resolves
+    /// while the set that offered it is still suspended mid-selection, so resolving the nested
+    /// one has to hand the enclosing one back as the decision — which is what the shipped
+    /// synchronizer's own stack does when a relic taken from a rewards screen offers rewards.
+    /// </summary>
+    private async Task SettleRewardSetsAsync()
     {
-        PendingRewardSelection pending = _pendingRewardSelection ?? throw new ProtocolException("invalid_state", "No custom reward selection is pending.");
-        _pendingRewardSelection = null;
-        object synchronizer = ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+        while (CurrentRewardSet is { } frame)
+        {
+            if (frame.SelectionTask is not { } selection) return;
+            await selection.ConfigureAwait(false);
+            await FinalizeRewardSetSelectionAsync(frame).ConfigureAwait(false);
+            if (ReferenceEquals(CurrentRewardSet, frame)) return;
+        }
+    }
+
+    private async Task FinalizeRewardSetSelectionAsync(PendingRewardSet frame)
+    {
+        PendingRewardSelection pending = frame.Selection ?? throw new ProtocolException("invalid_state", "No custom reward selection is pending.");
+        frame.Selection = null; frame.SelectionTask = null;
+        object synchronizer = CurrentRewardsSetSynchronizer();
         if (pending.IsLinked)
         {
             ReflectionTools.Invoke(pending.TopReward, "OnSkipped");
             if (ReflectionTools.Invoke(synchronizer, "SelectLocalReward", pending.TopReward) is Task parentSelection) await parentSelection.ConfigureAwait(false);
         }
-        bool complete = (bool)ReflectionTools.Get(_pendingRewardsSet!, "AllRewardsSuccessfullySelected")!;
-        if (complete)
+        if (!(bool)ReflectionTools.Get(frame.Set, "AllRewardsSuccessfullySelected")!)
         {
-            await pending.OfferTask.ConfigureAwait(false);
-            _pendingRewardsSet = null; _continuationTask = null; _choiceBegun = null;
-        }
-        else
-        {
-            _continuationTask = pending.OfferTask;
+            _continuationTask = frame.OfferTask;
             _choiceBegun = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return;
         }
+        // The set is resolved, and every reward in it has been selected, so the shipped
+        // synchronizer has already completed the set's own offer task: what is still pending is
+        // the continuation that was suspended on it. Waiting for that — and not for the enclosing
+        // selection, which a nested set is itself unwinding — is what carries the run past the
+        // choice that offered the set. The enclosing set becomes the decision again when its own
+        // selection has unwound, which is what `SettleRewardSetsAsync` waits on next.
+        _rewardSets.Remove(frame);
+        _continuationTask = null; _choiceBegun = null;
+        // Once the outermost set is gone the run is suspended on the transition that offered it,
+        // and that transition must finish before the state is a decision again.
+        if (_rewardSets.Count == 0 && frame.OfferTask is { } offer) await offer.ConfigureAwait(false);
     }
 
     private async Task SkipCustomRewardsAsync()
     {
-        if (_pendingRewardsSet is null || (bool)ReflectionTools.Get(_pendingRewardsSet, "DisallowSkipping")!) throw new ProtocolException("invalid_action", "Native custom rewards cannot be skipped.");
-        Task offer = _continuationTask ?? throw new ProtocolException("invalid_state", "Custom rewards have no suspended native offer task.");
-        object synchronizer = ReflectionTools.Get(ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!, "RewardsSetSynchronizer")!;
+        PendingRewardSet frame = CurrentRewardSet ?? throw new ProtocolException("invalid_action", "Native custom rewards cannot be skipped.");
+        if ((bool)ReflectionTools.Get(frame.Set, "DisallowSkipping")!) throw new ProtocolException("invalid_action", "Native custom rewards cannot be skipped.");
+        frame.OfferTask ??= _continuationTask;
+        object synchronizer = CurrentRewardsSetSynchronizer();
         ReflectionTools.Invoke(synchronizer, "SkipLocalRewardsSet");
-        await offer.ConfigureAwait(false);
-        _pendingRewardsSet = null; _pendingRewardSelection = null; _continuationTask = null; _choiceBegun = null;
+        _rewardSets.Remove(frame);
+        frame.Selection = null; frame.SelectionTask = null;
+        _continuationTask = null; _choiceBegun = null;
+        if (_rewardSets.Count == 0 && frame.OfferTask is { } offer) await offer.ConfigureAwait(false);
+        await SettleRewardSetsAsync().ConfigureAwait(false);
     }
 
     private object? CustomRewardsSnapshot()
     {
-        if (_pendingRewardsSet is null) return null;
+        if (CurrentRewardSet is not { } frame) return null;
         object SnapshotReward(object reward) => new { kind = RewardKind(reward), model_id = RewardModelId(reward), implementation = reward.GetType().Name, selected = ReflectionTools.Get(reward, "SuccessfullySelected") };
-        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(_pendingRewardsSet, "Rewards")).Where(reward => reward is not null).Select((reward, index) =>
+        object[] rewards = ReflectionTools.Enumerate(ReflectionTools.Get(frame.Set, "Rewards")).Where(reward => reward is not null).Select((reward, index) =>
         {
             object model = reward!;
             object[] children = model.GetType().Name == "LinkedRewardSet" ? ReflectionTools.Enumerate(ReflectionTools.Get(model, "Rewards")).Where(child => child is not null).Select(child => SnapshotReward(child!)).ToArray() : [];
             return (object)new { reward_index = index, reward = SnapshotReward(model), children };
         }).ToArray();
-        return new { rewards, can_skip = !(bool)ReflectionTools.Get(_pendingRewardsSet, "DisallowSkipping")! };
+        return new
+        {
+            rewards,
+            can_skip = !(bool)ReflectionTools.Get(frame.Set, "DisallowSkipping")!,
+            // How many reward sets are open, this one included. A relic taken from a rewards
+            // screen may offer rewards of its own, so `depth` 2 is the run asking about a set
+            // that the caller is already part-way through answering another set about; a
+            // record has to name which of the two it resolved.
+            depth = _rewardSets.Count
+        };
     }
 
     private static string RewardKind(object reward) => reward.GetType().Name.Replace("Reward", "", StringComparison.Ordinal).ToLowerInvariant();
@@ -1976,14 +2043,15 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 : [];
             return (object)new { reward_index = index, kind = model.GetType().Name.Replace("Reward", "", StringComparison.Ordinal).ToLowerInvariant(), options, resolved = _resolvedRoomRewards.Contains(index) || (bool)ReflectionTools.Get(model, "SuccessfullySelected")! };
         }).ToArray();
-        object deck = ReflectionTools.Get(_player!, "Deck")!; LegalAction[] actions = BuildRoomRewardActions().ToArray();
+        object deck = ReflectionTools.Get(_player!, "Deck")!; LegalAction[] actions = DecisionActions(BuildRoomRewardActions()).ToArray();
         object observation = new
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
             run = new { seed = _reset!.Seed, ascension = _reset.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = RunRngCounters(), deck = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards")).Where(card => card is not null).Select(card => Entry(card!)).ToArray(), relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(relic => relic is not null).Select(relic => Entry(relic!)).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select(potion => potion is null ? null : Entry(potion)).ToArray() },
             room_rewards = new { rewards },
-            decision = new { kind = "room_reward_choice", legal_actions = actions }, terminal = false, victory = false
+            outstanding_choice = _pendingChoice?.Snapshot(), outstanding_rewards = CustomRewardsSnapshot(),
+            decision = new { kind = DecisionKind("room_reward_choice"), legal_actions = actions }, terminal = false, victory = false
         };
         _hash = ComputeStateHash(observation); string handle = GetOrAddCurrentBranch();
         return new(observation, _hash, actions, false, false, handle, transition, ScoringFeatures());
@@ -2272,8 +2340,11 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private static bool CaptureRewardsScreen(object __0, ref object? __result)
     {
         PersistentNativeCombatEnvironment environment = _activeEnvironment ?? throw new InvalidOperationException("No active native environment can coordinate rewards.");
-        if (environment._pendingRewardsSet is not null) throw new ProtocolException("nested_reward_collision", "A second native reward set began before the first was resolved.");
-        environment._pendingRewardsSet = __0;
+        // `NRewardsScreen.ShowScreen` is only ever called from `RewardsSet.Offer`, so this is
+        // the moment a reward set becomes the decision. A second set arrives here while the
+        // first is still open whenever a relic taken from one offers rewards of its own; the
+        // shipped synchronizer stacks them, and so does the environment.
+        environment._rewardSets.Add(new PendingRewardSet { Set = __0, OfferTask = environment._continuationTask });
         environment._choiceBegun?.TrySetResult();
         __result = null;
         return false;
@@ -2519,10 +2590,12 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         choice.Resolve(optionIds);
         _continuationTask = transition;
         await WaitForDecisionOrCompletionAsync();
-        if (_pendingRewardSelection is not null && _pendingChoice is null)
+        // Resolving the choice can be the last thing the reward selection that opened it was
+        // waiting for, so the set it belonged to becomes the decision again here.
+        if (_pendingChoice is null && HasOpenRewardSet)
         {
             _rewardSelectionIndex = null;
-            await FinalizeCustomRewardSelectionAsync();
+            await SettleRewardSetsAsync();
         }
         if (_pendingRoomRewardIndex is { } rewardIndex && _pendingChoice is null && _roomRewardsSet is not null)
         {
@@ -3309,7 +3382,27 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         string[] CustomRewardKinds,
         bool CustomRewardsLinked,
         CombatSnapshot? CombatSnapshot = null);
-    private sealed record PendingRewardSelection(object TopReward, object SelectedReward, Task OfferTask, bool IsLinked);
+    private sealed record PendingRewardSelection(object TopReward, object SelectedReward, bool IsLinked);
+
+    /// <summary>
+    /// One open reward set — one <c>NRewardsScreen</c> — together with the reward selection
+    /// currently in flight in it. Nested sets form a stack because the shipped
+    /// <c>RewardsSetSynchronizer</c> keeps one: a relic taken from a rewards screen may itself
+    /// offer rewards, and the set that offered it stays suspended until the new one resolves.
+    /// </summary>
+    private sealed class PendingRewardSet
+    {
+        public required object Set { get; init; }
+        /// <summary>
+        /// The task the run was suspended on when this set became the decision: the transition
+        /// that offered it for the outermost set, the enclosing reward selection for a nested
+        /// one. It is what the environment waits on while the set stays open, and the outermost
+        /// one's completion is what lets the run carry on once the stack empties.
+        /// </summary>
+        public Task? OfferTask { get; set; }
+        public PendingRewardSelection? Selection { get; set; }
+        public Task? SelectionTask { get; set; }
+    }
     private sealed class PendingNativeChoice(
         string choiceId,
         string decisionKind,
