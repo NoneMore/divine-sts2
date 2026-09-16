@@ -669,7 +669,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     {
         object hashPayload = new
         {
-            hash_schema_version = 3,
+            hash_schema_version = 4,
             observation,
             kernel = TransitionKernelSnapshot()
         };
@@ -700,8 +700,15 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object[] piles = new[] { "Hand", "DrawPile", "DiscardPile", "ExhaustPile", "PlayPile" }.Select(Pile).ToArray(); LegalAction[] actions = BuildActions().ToArray();
         bool playerAlive = PlayerAlive(), enemyAlive = Alive("Enemies"), terminal = !playerAlive || (!_runMode && !enemyAlive);
         object? choiceState = _pendingChoice?.Snapshot();
+        object? encounterModel = ReflectionTools.Get(_combat!, "Encounter");
         Dictionary<string, object?> combatObservation = new()
         {
+            // Which fight this is. A parity check compares it and an audit identifies the
+            // encounter with it; it is the same identity the trace exporter reports. Every
+            // combat a run can be in has one — a room that starts a combat always carries an
+            // encounter — so a null here is a defect: it drops the key, which the published
+            // canonical-state schema requires of a capture with a combat block.
+            ["encounter"] = encounterModel is null ? null : Entry(encounterModel),
             ["turn"] = ReflectionTools.Get(_pcs!, "TurnNumber"),
             ["phase"] = ReflectionTools.Get(_pcs!, "Phase")!.ToString(),
             ["energy"] = ReflectionTools.Get(_pcs!, "Energy"),
@@ -727,7 +734,13 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         object observation = new
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion, game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), rng_counters = counters },
+            // A combat observation is self-describing: which Act variant and act it is in, how far
+            // into that act it is, and how far into the run. The act index is the run's own
+            // zero-based CurrentActIndex, which is the base the map observation and the scoring
+            // features report, so a comparison never has to read it one-off. TotalFloor counts the
+            // map points the run has travelled, so it is the floor the Ancient room advances and
+            // the counter the per-encounter generator is seeded with.
+            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, gold = ReflectionTools.Get(_player!, "Gold"), act_variant = ActVariant(), act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"), total_floor = ReflectionTools.Get(_run!, "TotalFloor"), rng_counters = counters },
             combat = combatObservation,
             inventory = new { relics = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "Relics")).Where(x => x is not null).Select(x => new { model_id = Entry(x!), counter = (bool)ReflectionTools.Get(x!, "ShowCounter")! ? ReflectionTools.Get(x!, "DisplayAmount") : null, native_state = SavedNativeState(x!) }).ToArray(), potions = ReflectionTools.Enumerate(ReflectionTools.Get(_player!, "PotionSlots")).Select((x, i) => x is null ? null : new { slot = i, model_id = Entry(x) }).ToArray() },
             outstanding_choice = choiceState,
@@ -972,7 +985,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
-            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, act_variant = ActVariant(), act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"), rng_counters = RunRngCounters() },
+            run = new { seed = ReflectionTools.Get(rng, "StringSeed"), ascension = _reset!.Ascension, act_variant = ActVariant(), act_index = ReflectionTools.Get(_run!, "CurrentActIndex"), act_floor = ReflectionTools.Get(_run!, "ActFloor"), total_floor = ReflectionTools.Get(_run!, "TotalFloor"), rng_counters = RunRngCounters() },
             map = new { points, visited, current = ReflectionTools.Get(_run!, "CurrentMapPoint") is { } current ? Coord(current) : null },
             decision = new { kind = actions.Length == 0 ? "map_terminal" : "map_choice", legal_actions = actions },
             terminal = actions.Length == 0, victory = false

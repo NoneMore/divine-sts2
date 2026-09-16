@@ -17,6 +17,13 @@ pwsh scripts/test-public-tree.ps1           # the public-tree gate, as CI runs i
 python -m pytest tests -q                    # offline tests (see "pytest needs a writable temp root")
 ```
 
+- `build-persistent-server.ps1` defaults to `Release`, which is what the pure .NET host uses. The Godot
+  worker runs the project's **Debug** configuration instead, so a Core change built only with the default
+  leaves the worker answering from stale assemblies — with no error, just the old behaviour. Pass
+  `-Configuration Debug` when the next step starts a worker through `doctor.ps1 -Deep` or a Python
+  `*_acceptance.py`: `doctor.ps1` builds nothing, and `bootstrap.ps1` builds `Release` only. (The PowerShell
+  Godot scripts — `test-godot-determinism.ps1` and its siblings — build Debug themselves.)
+
 - Local overrides — `STS2_GAME_ROOT`, `GODOT`, `STS2_SANDBOX_ROOT`, SDK state — belong in a gitignored
   `.env` (`.env.example` is the template). Loading is fill-only: a variable already set always wins.
 - `.env` is read by the PowerShell layer (`scripts/common.ps1`). The Python CLI does not read it, so

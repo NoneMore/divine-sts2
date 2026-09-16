@@ -213,13 +213,15 @@ Three specific findings, all verified:
 
 **(a) The published schema is already wrong.** `canonical-state.schema.json` sets `additionalProperties: false` and requires `combat` + `inventory`. But `CaptureMap` (L939) emits `map` and no `combat` — as do the reward, rest, event, treasure, shop, room-reward, custom-reward, act-transition and terminal variants. **Ten of eleven violate it.** Nothing validates: there is no `jsonschema` dependency (`pyproject.toml:13-17`), and the only consumer is `tests/test_public_smoke.py:14-18`, which parses it as JSON and asserts two constants.
 
+**Resolved for the observation itself.** The schema is now v3: `combat` and `inventory` are optional, every run stage's block is described (including the ones that carry no combat block), the standalone blocks are described with them, and `jsonschema` is a dependency. `tests/test_observation_schema.py` validates captures recorded from the worker against it, so a capture that drifts fails a test instead of passing a parse. What remains of this finding is the rest of the solution below — typed observation records and a schema generated from them; the schema file is still hand-written and still the only description of the shape outside the C# capture sites.
+
 **(b) Two mutually incomparable state hashes.**
 
 | | PNC | FullAppStateTracker |
 |---|---|---|
 | Function | `ComputeStateHash` L662-671 | `ComputeHash` L445-454 |
-| Payload | `hash_schema_version = 3` + observation + kernel snapshot | own `ObservationDto` |
-| Schema pin | 3 | `SchemaVersion = 2` (L47) |
+| Payload | `hash_schema_version = 4` + observation + kernel snapshot | own `ObservationDto` |
+| Schema pin | 4 | `SchemaVersion = 2` (L47) |
 
 The two can never be compared — so "does the full-app bridge match the simulator" cannot be asked of the hashes at all. This quietly defeats the differential harness whose entire purpose is comparing the two encoders.
 

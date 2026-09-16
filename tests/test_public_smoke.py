@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_public_schemas_are_valid_json() -> None:
     state = json.loads((ROOT / "schemas" / "canonical-state.schema.json").read_text(encoding="utf-8"))
     action = json.loads((ROOT / "schemas" / "legal-action.schema.json").read_text(encoding="utf-8"))
-    assert state["properties"]["schema_version"]["const"] == 2
+    # The canonical schema's version is pinned to the environment's constant, and validated against
+    # recorded captures, by tests/test_observation_schema.py; this only checks the files parse.
+    assert state["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert "play_card" in action["properties"]["kind"]["enum"]
 
 

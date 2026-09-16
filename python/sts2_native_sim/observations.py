@@ -102,10 +102,13 @@ def extract_agent_observation(state_or_obs: dict[str, Any]) -> dict[str, Any]:
             "seed": "MASKED",
             "rng_counters": {},
         }
-        # The Act variant in play is part of the situation a policy is in, so it
-        # is reported rather than left for the caller to re-derive from the seed.
-        if "act_variant" in run:
-            agent_run["act_variant"] = run["act_variant"]
+        # The run's own identity and position — the Act variant in play and where the run is in
+        # it — are part of the situation a policy is in, so they are reported rather than left
+        # for the caller to re-derive from the masked seed. Each is passed through only when the
+        # canonical observation carries it, so this projection never invents a fact.
+        for key in ("act_variant", "act_index", "act_floor", "total_floor"):
+            if key in run:
+                agent_run[key] = run[key]
         agent_obs["run"] = agent_run
 
     # Combat-level information
@@ -119,6 +122,10 @@ def extract_agent_observation(state_or_obs: dict[str, Any]) -> dict[str, Any]:
             "stars": combat.get("stars", 0),
             "creatures": copy.deepcopy(combat.get("creatures", [])),
         }
+        # Which encounter the fight is: visible on the board, and the identity a policy groups
+        # fights by, so it is passed through rather than dropped.
+        if "encounter" in combat:
+            agent_combat["encounter"] = combat["encounter"]
         if "orbs" in combat:
             agent_combat["orbs"] = copy.deepcopy(combat["orbs"])
 

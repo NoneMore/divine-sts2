@@ -1,10 +1,18 @@
 ﻿"""Offline tests for observation projection, permutation invariance, and fog-of-war masking."""
 import json
+from pathlib import Path
+from typing import Any
+
 import pytest
 from sts2_native_sim.observations import (
     extract_agent_observation,
     project_player_visible_card_state,
     to_agent_observation,
+)
+
+# Captures recorded from the native worker by `python/observation_schema_acceptance.py --record`.
+_CAPTURES: dict[str, dict[str, Any]] = json.loads(
+    (Path(__file__).resolve().parent / "fixtures" / "canonical-observations.json").read_text(encoding="utf-8")
 )
 
 def test_draw_pile_permutation_invariance():
@@ -89,6 +97,27 @@ def test_act_variant_is_not_invented_when_the_observation_omits_it():
     """Verify that an observation without an Act in play reports no Act variant."""
     agent_obs = extract_agent_observation({"observation": {"run": {"seed": "SEED"}, "combat": {"piles": []}}})
     assert "act_variant" not in agent_obs["run"]
+
+
+def test_the_agent_observation_carries_every_field_of_the_canonical_run_and_combat_blocks():
+    """Verify the projection cannot silently drop a field the canonical observation gained.
+
+    A run-mode combat capture is the shape a policy is handed, so every field of its `run` and
+    `combat` blocks must reach the agent observation; only the deliberately masked (`seed`,
+    `rng_counters`) and transformed (`piles`) blocks may differ in value. The fixture is
+    recorded from the native worker, so a new canonical field fails here until the projection
+    reports it and the fixture is re-recorded.
+    """
+    canonical = _CAPTURES["run_combat_action"]
+    agent = extract_agent_observation({"observation": canonical})
+
+    assert set(canonical["run"]) <= set(agent["run"])
+    assert set(canonical["combat"]) <= set(agent["combat"])
+    assert agent["run"]["seed"] == "MASKED"
+    assert agent["run"]["rng_counters"] == {}
+    assert agent["run"]["act_index"] == canonical["run"]["act_index"]
+    assert agent["run"]["total_floor"] == canonical["run"]["total_floor"]
+    assert agent["combat"]["encounter"] == canonical["combat"]["encounter"]
 
 
 def test_evolving_card_state_whitelisting():

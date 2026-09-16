@@ -1,28 +1,527 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "local://sts2-native-sim/canonical-state.schema.json",
-  "title": "STS2 NativeSim observation v2 (non-certifying)",
+  "title": "STS2 NativeSim canonical observation v3 (non-certifying)",
+  "description": "The shape a native capture emits under `observation`. Every run stage is covered, including the ones that carry no combat block, because a run-mode capture is what a scenario record stores; the standalone modes that emit blocks no run stage emits (a battle started by `reset`, an item reward, a custom reward set) are covered by the same definitions. The nullable properties of the C# captures are absent rather than null on the wire, so only the fields every capture of a block reports are required here.",
   "type": "object",
-  "required": ["schema_version", "game_build", "run", "combat", "inventory", "decision", "terminal", "victory"],
+  "required": ["schema_version", "game_build", "run", "decision", "terminal", "victory"],
   "properties": {
-    "schema_version": { "const": 2 },
-    "game_build": { "type": "object", "required": ["version", "assembly_sha256", "pck_sha256"] },
-    "run": {
-      "type": "object",
-      "required": ["seed", "ascension", "gold", "act_variant", "rng_counters"],
-      "properties": {
-        "act_variant": {
-          "type": "string",
-          "description": "The Act variant in play, named as the shipped game names it — for act 1, OVERGROWTH or UNDERDOCKS."
-        }
-      }
-    },
-    "combat": { "type": "object", "required": ["turn", "phase", "energy", "max_energy", "creatures", "piles"] },
-    "inventory": { "type": "object", "required": ["relics", "potions"] },
-    "outstanding_choice": { "type": ["object", "null"] },
-    "decision": { "type": "object", "required": ["kind", "legal_actions"] },
+    "schema_version": { "const": 3 },
+    "game_build": { "$ref": "#/$defs/game_build" },
+    "run": { "$ref": "#/$defs/run" },
+    "combat": { "$ref": "#/$defs/combat" },
+    "inventory": { "$ref": "#/$defs/inventory" },
+    "map": { "$ref": "#/$defs/map" },
+    "reward": { "$ref": "#/$defs/reward" },
+    "rest_site": { "$ref": "#/$defs/rest_site" },
+    "event": { "$ref": "#/$defs/event" },
+    "treasure": { "$ref": "#/$defs/treasure" },
+    "shop": { "$ref": "#/$defs/shop" },
+    "room_rewards": { "$ref": "#/$defs/room_rewards" },
+    "custom_rewards": { "$ref": "#/$defs/custom_rewards" },
+    "outstanding_rewards": { "$ref": "#/$defs/custom_rewards" },
+    "outstanding_choice": { "$ref": "#/$defs/choice" },
+    "decision": { "$ref": "#/$defs/decision" },
     "terminal": { "type": "boolean" },
     "victory": { "type": "boolean" }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "description": "A capture that carries a combat block is a fight, so its run block names where the run was when the fight happened — the act index, the act floor and the run's total floor — while the stages that carry no combat block are not required to report them.",
+      "if": { "required": ["combat"] },
+      "then": { "properties": { "run": { "required": ["act_index", "act_floor", "total_floor"] } } }
+    }
+  ],
+  "$defs": {
+    "game_build": {
+      "type": "object",
+      "required": ["version", "assembly_sha256", "pck_sha256"],
+      "properties": {
+        "version": { "type": "string" },
+        "assembly_sha256": { "type": "string" },
+        "pck_sha256": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "required": ["seed", "ascension", "act_variant", "rng_counters"],
+      "properties": {
+        "seed": { "type": "string" },
+        "ascension": { "type": "integer" },
+        "act_variant": {
+          "type": "string",
+          "description": "The Act variant in play, named as the shipped game names it — for act 1, OVERGROWTH or UNDERDOCKS."
+        },
+        "act_index": {
+          "type": "integer",
+          "description": "Zero-based, the run's own CurrentActIndex, which is the base every other projection in the repository reports."
+        },
+        "act_floor": { "type": "integer" },
+        "total_floor": {
+          "type": "integer",
+          "description": "The map points the run has travelled, so it is the floor the Ancient room advances and the counter the per-encounter generator is seeded with."
+        },
+        "gold": { "type": "integer" },
+        "current_hp": { "type": "integer" },
+        "max_hp": { "type": "integer" },
+        "deck": {
+          "type": "array",
+          "description": "Two shapes, because the environment emits two: the standalone reward and the room-reward captures report each card's model id alone, while every other run block reports the model id with its upgrade level. The union is what the captures emit, not a licence — unifying the two is a change to the environment, not to this schema.",
+          "items": { "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/card_reference" }] }
+        },
+        "relics": { "type": "array", "items": { "type": "string" } },
+        "potions": { "type": "array", "items": { "type": ["string", "null"] } },
+        "rng_counters": { "type": "object", "additionalProperties": { "type": "integer" } }
+      },
+      "additionalProperties": false
+    },
+    "card_reference": {
+      "type": "object",
+      "required": ["model_id", "upgrades"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "upgrades": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "native_state": {
+      "type": "object",
+      "description": "The model's own saved properties, keyed by the name the shipped serializer gives them.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "integer" },
+          { "type": "boolean" },
+          { "type": "string" },
+          { "type": "array", "items": { "type": "integer" } }
+        ]
+      }
+    },
+    "combat": {
+      "type": "object",
+      "required": [
+        "encounter", "turn", "phase", "energy", "max_energy", "stars", "creatures", "piles"
+      ],
+      "properties": {
+        "encounter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The encounter's id — the encounter the fight is, as the shipped game names it. Required of a capture with a combat block: an empty value fails, because a fight that cannot name itself is not a capture a parity check can use."
+        },
+        "turn": { "type": "integer" },
+        "phase": { "type": "string" },
+        "energy": { "type": "integer" },
+        "max_energy": { "type": "integer" },
+        "stars": { "type": "integer" },
+        "creatures": { "type": "array", "items": { "$ref": "#/$defs/creature" } },
+        "piles": { "type": "array", "items": { "$ref": "#/$defs/pile" } },
+        "orbs": {
+          "type": "object",
+          "required": ["capacity", "entries"],
+          "properties": {
+            "capacity": { "type": "integer" },
+            "entries": { "type": "array", "items": { "$ref": "#/$defs/orb" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "creature": {
+      "type": "object",
+      "required": ["combat_id", "model_id", "side", "hp", "max_hp", "block", "alive", "powers"],
+      "properties": {
+        "combat_id": { "type": "integer" },
+        "model_id": { "type": "string" },
+        "side": { "type": "string" },
+        "hp": { "type": "integer" },
+        "max_hp": { "type": "integer" },
+        "block": { "type": "integer" },
+        "alive": { "type": "boolean" },
+        "next_move": { "$ref": "#/$defs/next_move" },
+        "powers": { "type": "array", "items": { "$ref": "#/$defs/power" } }
+      },
+      "additionalProperties": false
+    },
+    "next_move": {
+      "type": "object",
+      "required": ["id", "intents"],
+      "properties": {
+        "id": { "type": "string" },
+        "intents": { "type": "array", "items": { "$ref": "#/$defs/intent" } }
+      },
+      "additionalProperties": false
+    },
+    "intent": {
+      "type": "object",
+      "required": ["intent_type", "implementation"],
+      "properties": {
+        "intent_type": { "type": "string" },
+        "implementation": { "type": "string" },
+        "damage": { "type": "integer" },
+        "repeats": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "power": {
+      "type": "object",
+      "required": ["model_id", "amount"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "amount": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "orb": {
+      "type": "object",
+      "required": ["model_id", "passive", "evoke", "native_state"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "passive": { "type": "integer" },
+        "evoke": { "type": "integer" },
+        "native_state": { "$ref": "#/$defs/native_state" }
+      },
+      "additionalProperties": false
+    },
+    "pile": {
+      "type": "object",
+      "required": ["name", "type", "cards"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "cards": { "type": "array", "items": { "$ref": "#/$defs/card" } }
+      },
+      "additionalProperties": false
+    },
+    "card": {
+      "type": "object",
+      "required": [
+        "instance_id", "net_id", "model_id", "card_type", "target_type",
+        "energy_cost", "costs_x", "upgrades", "native_state"
+      ],
+      "properties": {
+        "instance_id": { "type": "string" },
+        "net_id": { "type": "integer" },
+        "model_id": { "type": "string" },
+        "card_type": { "type": "string" },
+        "target_type": { "type": "string" },
+        "energy_cost": { "type": "integer" },
+        "costs_x": { "type": "boolean" },
+        "upgrades": { "type": "integer" },
+        "enchantment": {
+          "type": "object",
+          "required": ["model_id", "amount"],
+          "properties": {
+            "model_id": { "type": "string" },
+            "amount": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        "native_state": { "$ref": "#/$defs/native_state" }
+      },
+      "additionalProperties": false
+    },
+    "inventory": {
+      "type": "object",
+      "required": ["relics", "potions"],
+      "properties": {
+        "relics": { "type": "array", "items": { "$ref": "#/$defs/inventory_relic" } },
+        "potions": {
+          "type": "array",
+          "description": "One entry per potion slot, in slot order; an empty slot is null so the slot index survives.",
+          "items": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["slot", "model_id"],
+                "properties": {
+                  "slot": { "type": "integer" },
+                  "model_id": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "inventory_relic": {
+      "type": "object",
+      "required": ["model_id", "native_state"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "counter": { "type": "integer" },
+        "native_state": { "$ref": "#/$defs/native_state" }
+      },
+      "additionalProperties": false
+    },
+    "coord": {
+      "type": "object",
+      "required": ["col", "row"],
+      "properties": {
+        "col": { "type": "integer" },
+        "row": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "map": {
+      "type": "object",
+      "required": ["points", "visited"],
+      "properties": {
+        "points": { "type": "array", "items": { "$ref": "#/$defs/map_point" } },
+        "visited": { "type": "array", "items": { "$ref": "#/$defs/coord" } },
+        "current": { "$ref": "#/$defs/coord" }
+      },
+      "additionalProperties": false
+    },
+    "map_point": {
+      "type": "object",
+      "required": ["coord", "point_type", "children"],
+      "properties": {
+        "coord": { "$ref": "#/$defs/coord" },
+        "point_type": { "type": "string" },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/coord" } }
+      },
+      "additionalProperties": false
+    },
+    "reward": {
+      "type": "object",
+      "required": ["kind", "options", "can_skip", "selected"],
+      "properties": {
+        "kind": { "type": "string" },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/reward_option" } },
+        "can_skip": { "type": "boolean" },
+        "selected": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "reward_option": {
+      "type": "object",
+      "required": ["option_id", "model_id"],
+      "properties": {
+        "option_id": { "type": "string" },
+        "model_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "rest_site": {
+      "type": "object",
+      "required": ["options", "selected"],
+      "properties": {
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["option_id", "enabled", "implementation"],
+            "properties": {
+              "option_id": { "type": "string" },
+              "enabled": { "type": "boolean" },
+              "implementation": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "selected": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": ["model_id", "options", "finished"],
+      "properties": {
+        "model_id": { "type": "string" },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/event_option" } },
+        "finished": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "event_option": {
+      "type": "object",
+      "required": ["option_index", "text_key", "locked", "chosen", "is_proceed"],
+      "properties": {
+        "option_index": { "type": "integer" },
+        "text_key": { "type": "string" },
+        "locked": { "type": "boolean" },
+        "chosen": { "type": "boolean" },
+        "is_proceed": { "type": "boolean" },
+        "relic_model_id": {
+          "type": "string",
+          "description": "The relic the choice grants; absent for a choice that grants none."
+        }
+      },
+      "additionalProperties": false
+    },
+    "treasure": {
+      "type": "object",
+      "required": ["opened", "resolved", "relic_options"],
+      "properties": {
+        "opened": { "type": "boolean" },
+        "resolved": { "type": "boolean" },
+        "relic_options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["option_index", "model_id"],
+            "properties": {
+              "option_index": { "type": "integer" },
+              "model_id": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "shop": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entry_index", "kind", "cost", "stocked", "enough_gold"],
+            "properties": {
+              "entry_index": { "type": "integer" },
+              "kind": { "type": "string" },
+              "model_id": { "type": "string" },
+              "cost": { "type": "integer" },
+              "stocked": { "type": "boolean" },
+              "enough_gold": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "room_rewards": {
+      "type": "object",
+      "required": ["rewards"],
+      "properties": {
+        "rewards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["reward_index", "kind", "options", "resolved"],
+            "properties": {
+              "reward_index": { "type": "integer" },
+              "kind": { "type": "string" },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["model_id"],
+                  "properties": { "model_id": { "type": "string" } },
+                  "additionalProperties": false
+                }
+              },
+              "resolved": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "custom_rewards": {
+      "type": "object",
+      "required": ["rewards", "can_skip", "depth"],
+      "properties": {
+        "rewards": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["reward_index", "reward", "children"],
+            "properties": {
+              "reward_index": { "type": "integer" },
+              "reward": { "$ref": "#/$defs/custom_reward" },
+              "children": { "type": "array", "items": { "$ref": "#/$defs/custom_reward" } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "can_skip": { "type": "boolean" },
+        "depth": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "custom_reward": {
+      "type": "object",
+      "required": ["kind", "implementation", "selected"],
+      "properties": {
+        "kind": { "type": "string" },
+        "model_id": { "type": "string" },
+        "implementation": { "type": "string" },
+        "selected": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "choice": {
+      "type": "object",
+      "required": ["choice_id", "kind", "min_select", "max_select", "provenance", "options"],
+      "properties": {
+        "choice_id": { "type": "string" },
+        "kind": { "type": "string" },
+        "min_select": { "type": "integer" },
+        "max_select": { "type": "integer" },
+        "provenance": { "type": "string" },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/choice_option" } }
+      },
+      "additionalProperties": false
+    },
+    "choice_option": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["option_id", "model_id"],
+          "properties": {
+            "option_id": { "type": "string" },
+            "model_id": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "A bundle choice offers cards rather than one model.",
+          "required": ["option_id", "cards"],
+          "properties": {
+            "option_id": { "type": "string" },
+            "cards": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["model_id"],
+                "properties": { "model_id": { "type": "string" } },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "decision": {
+      "type": "object",
+      "required": ["kind", "legal_actions"],
+      "properties": {
+        "kind": { "type": "string" },
+        "legal_actions": { "type": "array", "items": { "$ref": "#/$defs/legal_action" } }
+      },
+      "additionalProperties": false
+    },
+    "legal_action": {
+      "type": "object",
+      "required": ["action_id", "kind", "parameters"],
+      "properties": {
+        "action_id": { "type": "string" },
+        "kind": { "type": "string" },
+        "parameters": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  }
 }

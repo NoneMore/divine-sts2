@@ -1,0 +1,4591 @@
+{
+  "run_act_transition": {
+    "decision": {
+      "kind": "act_transition",
+      "legal_actions": [
+        {
+          "action_id": "advance_act",
+          "kind": "advance_act",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 1044,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK",
+        "MEAL_TICKET"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 10,
+        "Niche": 21,
+        "Shuffle": 232,
+        "TreasureRoomRelics": 1,
+        "UnknownMapPoint": 1,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_combat_action": {
+    "combat": {
+      "creatures": [
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 0,
+          "hp": 9999,
+          "max_hp": 9999,
+          "model_id": "IRONCLAD",
+          "powers": [],
+          "side": "Player"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 1,
+          "hp": 14,
+          "max_hp": 14,
+          "model_id": "LEAF_SLIME_S",
+          "next_move": {
+            "id": "TACKLE_MOVE",
+            "intents": [
+              {
+                "damage": 3,
+                "implementation": "SingleAttackIntent",
+                "intent_type": "Attack",
+                "repeats": 1
+              }
+            ]
+          },
+          "powers": [],
+          "side": "Enemy"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 2,
+          "hp": 28,
+          "max_hp": 28,
+          "model_id": "TWIG_SLIME_M",
+          "next_move": {
+            "id": "STICKY_SHOT_MOVE",
+            "intents": [
+              {
+                "implementation": "StatusIntent",
+                "intent_type": "StatusCard"
+              }
+            ]
+          },
+          "powers": [],
+          "side": "Enemy"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 3,
+          "hp": 8,
+          "max_hp": 8,
+          "model_id": "TWIG_SLIME_S",
+          "next_move": {
+            "id": "TACKLE_MOVE",
+            "intents": [
+              {
+                "damage": 4,
+                "implementation": "SingleAttackIntent",
+                "intent_type": "Attack",
+                "repeats": 1
+              }
+            ]
+          },
+          "powers": [],
+          "side": "Enemy"
+        }
+      ],
+      "encounter": "SLIMES_WEAK",
+      "energy": 3,
+      "max_energy": 3,
+      "orbs": {
+        "capacity": 0,
+        "entries": []
+      },
+      "phase": "Play",
+      "piles": [
+        {
+          "cards": [
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-3",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 0,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-1",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 1,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-9",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 2,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-0",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 3,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-7",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 4,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            }
+          ],
+          "name": "Hand",
+          "type": "Hand"
+        },
+        {
+          "cards": [
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-5",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 5,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-2",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 6,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-4",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 7,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-8",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 8,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 0,
+              "instance_id": "anger-6",
+              "model_id": "ANGER",
+              "native_state": {},
+              "net_id": 9,
+              "target_type": "AnyEnemy",
+              "upgrades": 1
+            }
+          ],
+          "name": "DrawPile",
+          "type": "Draw"
+        },
+        {
+          "cards": [],
+          "name": "DiscardPile",
+          "type": "Discard"
+        },
+        {
+          "cards": [],
+          "name": "ExhaustPile",
+          "type": "Exhaust"
+        },
+        {
+          "cards": [],
+          "name": "PlayPile",
+          "type": "Play"
+        }
+      ],
+      "stars": 0,
+      "turn": 1
+    },
+    "decision": {
+      "kind": "combat_action",
+      "legal_actions": [
+        {
+          "action_id": "play:anger-3:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 0,
+            "instance_id": "anger-3",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-3:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 0,
+            "instance_id": "anger-3",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-3:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 0,
+            "instance_id": "anger-3",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-1",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-1",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-1",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-9:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-9",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-9:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-9",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-9:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-9",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-0:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-0",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-0:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-0",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-0:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-0",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-7:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-7",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-7:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-7",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-7:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-7",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "end_turn",
+          "kind": "end_turn",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "inventory": {
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        {
+          "model_id": "LAVA_ROCK",
+          "native_state": {
+            "HasTriggered": false
+          }
+        }
+      ]
+    },
+    "run": {
+      "act_floor": 2,
+      "act_index": 0,
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "gold": 999,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 1,
+        "Niche": 4,
+        "Shuffle": 18,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN",
+      "total_floor": 2
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_combat_terminal": {
+    "combat": {
+      "creatures": [
+        {
+          "alive": false,
+          "block": 0,
+          "combat_id": 0,
+          "hp": 0,
+          "max_hp": 1,
+          "model_id": "IRONCLAD",
+          "powers": [],
+          "side": "Player"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 2,
+          "hp": 27,
+          "max_hp": 27,
+          "model_id": "TWIG_SLIME_M",
+          "next_move": {
+            "id": "STICKY_SHOT_MOVE",
+            "intents": [
+              {
+                "implementation": "StatusIntent",
+                "intent_type": "StatusCard"
+              }
+            ]
+          },
+          "powers": [],
+          "side": "Enemy"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 3,
+          "hp": 9,
+          "max_hp": 9,
+          "model_id": "TWIG_SLIME_S",
+          "next_move": {
+            "id": "TACKLE_MOVE",
+            "intents": [
+              {
+                "damage": 4,
+                "implementation": "SingleAttackIntent",
+                "intent_type": "Attack",
+                "repeats": 1
+              }
+            ]
+          },
+          "powers": [],
+          "side": "Enemy"
+        }
+      ],
+      "encounter": "SLIMES_WEAK",
+      "energy": 0,
+      "max_energy": 3,
+      "orbs": {
+        "capacity": 0,
+        "entries": []
+      },
+      "phase": "None",
+      "piles": [
+        {
+          "cards": [],
+          "name": "Hand",
+          "type": "Hand"
+        },
+        {
+          "cards": [],
+          "name": "DrawPile",
+          "type": "Draw"
+        },
+        {
+          "cards": [
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-1",
+              "model_id": "STRIKE_IRONCLAD",
+              "native_state": {},
+              "net_id": 0,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-2",
+              "model_id": "STRIKE_IRONCLAD",
+              "native_state": {},
+              "net_id": 1,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-4",
+              "model_id": "STRIKE_IRONCLAD",
+              "native_state": {},
+              "net_id": 2,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-3",
+              "model_id": "STRIKE_IRONCLAD",
+              "native_state": {},
+              "net_id": 3,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 3,
+              "instance_id": "dynamic-0-BLUDGEON",
+              "model_id": "BLUDGEON",
+              "native_state": {},
+              "net_id": 4,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Status",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "dynamic-1-SLIMED",
+              "model_id": "SLIMED",
+              "native_state": {},
+              "net_id": 5,
+              "target_type": "None",
+              "upgrades": 0
+            }
+          ],
+          "name": "DiscardPile",
+          "type": "Discard"
+        },
+        {
+          "cards": [],
+          "name": "ExhaustPile",
+          "type": "Exhaust"
+        },
+        {
+          "cards": [],
+          "name": "PlayPile",
+          "type": "Play"
+        }
+      ],
+      "stars": 0,
+      "turn": 1
+    },
+    "decision": {
+      "kind": "terminal",
+      "legal_actions": []
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "inventory": {
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        {
+          "model_id": "NEW_LEAF",
+          "native_state": {}
+        }
+      ]
+    },
+    "run": {
+      "act_floor": 2,
+      "act_index": 0,
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "gold": 99,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 1,
+        "Niche": 5,
+        "Shuffle": 8,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 411
+      },
+      "seed": "CANONICAL-SCHEMA-DEATH",
+      "total_floor": 2
+    },
+    "schema_version": 3,
+    "terminal": true,
+    "victory": false
+  },
+  "run_event_choice": {
+    "decision": {
+      "kind": "event_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_event:0:NEOW.pages.INITIAL.options.LAVA_ROCK",
+          "kind": "choose_event",
+          "parameters": {
+            "is_proceed": false,
+            "option_index": 0,
+            "relic_model_id": "LAVA_ROCK",
+            "text_key": "NEOW.pages.INITIAL.options.LAVA_ROCK"
+          }
+        },
+        {
+          "action_id": "choose_event:1:NEOW.pages.INITIAL.options.PHIAL_HOLSTER",
+          "kind": "choose_event",
+          "parameters": {
+            "is_proceed": false,
+            "option_index": 1,
+            "relic_model_id": "PHIAL_HOLSTER",
+            "text_key": "NEOW.pages.INITIAL.options.PHIAL_HOLSTER"
+          }
+        },
+        {
+          "action_id": "choose_event:2:NEOW.pages.INITIAL.options.SILKEN_TRESS",
+          "kind": "choose_event",
+          "parameters": {
+            "is_proceed": false,
+            "option_index": 2,
+            "relic_model_id": "SILKEN_TRESS",
+            "text_key": "NEOW.pages.INITIAL.options.SILKEN_TRESS"
+          }
+        }
+      ]
+    },
+    "event": {
+      "finished": false,
+      "model_id": "NEOW",
+      "options": [
+        {
+          "chosen": false,
+          "is_proceed": false,
+          "locked": false,
+          "option_index": 0,
+          "relic_model_id": "LAVA_ROCK",
+          "text_key": "NEOW.pages.INITIAL.options.LAVA_ROCK"
+        },
+        {
+          "chosen": false,
+          "is_proceed": false,
+          "locked": false,
+          "option_index": 1,
+          "relic_model_id": "PHIAL_HOLSTER",
+          "text_key": "NEOW.pages.INITIAL.options.PHIAL_HOLSTER"
+        },
+        {
+          "chosen": false,
+          "is_proceed": false,
+          "locked": false,
+          "option_index": 2,
+          "relic_model_id": "SILKEN_TRESS",
+          "text_key": "NEOW.pages.INITIAL.options.SILKEN_TRESS"
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "current_hp": 9999,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 999,
+      "max_hp": 9999,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_event_complete": {
+    "decision": {
+      "kind": "event_complete",
+      "legal_actions": [
+        {
+          "action_id": "leave_event",
+          "kind": "leave_event",
+          "parameters": {}
+        }
+      ]
+    },
+    "event": {
+      "finished": true,
+      "model_id": "NEOW",
+      "options": []
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "current_hp": 9999,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 999,
+      "max_hp": 9999,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_map_after_ancient": {
+    "decision": {
+      "kind": "map_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_map:0:1",
+          "kind": "choose_map",
+          "parameters": {
+            "col": 0,
+            "point_type": "Monster",
+            "row": 1
+          }
+        },
+        {
+          "action_id": "choose_map:3:1",
+          "kind": "choose_map",
+          "parameters": {
+            "col": 3,
+            "point_type": "Monster",
+            "row": 1
+          }
+        },
+        {
+          "action_id": "choose_map:5:1",
+          "kind": "choose_map",
+          "parameters": {
+            "col": 5,
+            "point_type": "Monster",
+            "row": 1
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "map": {
+      "current": {
+        "col": 3,
+        "row": 0
+      },
+      "points": [
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 1,
+              "row": 3
+            },
+            {
+              "col": 0,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 3
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 4
+            },
+            {
+              "col": 0,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 3
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 3
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 3
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 4
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 6
+            },
+            {
+              "col": 1,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 5
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 5
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 5
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 5
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 6
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 6
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 6
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 6
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 6
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 8
+            },
+            {
+              "col": 1,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 7
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 8
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 8
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 8
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 9
+            },
+            {
+              "col": 5,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 8
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 10
+            },
+            {
+              "col": 5,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 1,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 10
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 10
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 10
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 10
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 10
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 12
+            },
+            {
+              "col": 2,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 11
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 11
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 11
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 11
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 12
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 13
+            },
+            {
+              "col": 5,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 13
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 14
+            },
+            {
+              "col": 4,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 13
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 13
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 13
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 14
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 14
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        }
+      ],
+      "visited": [
+        {
+          "col": 3,
+          "row": 0
+        }
+      ]
+    },
+    "run": {
+      "act_floor": 1,
+      "act_index": 0,
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN",
+      "total_floor": 1
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_map_choice": {
+    "decision": {
+      "kind": "map_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_map:3:0",
+          "kind": "choose_map",
+          "parameters": {
+            "col": 3,
+            "point_type": "Ancient",
+            "row": 0
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "map": {
+      "points": [
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 2
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 1
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 1,
+              "row": 3
+            },
+            {
+              "col": 0,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 3
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 2
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 3
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 4
+            },
+            {
+              "col": 0,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 3
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 3
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 4
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 3
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 4
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 5
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 4
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 6
+            },
+            {
+              "col": 1,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 5
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 5
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 5
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 6
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 5
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 6
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 6
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 6
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 6
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 7
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 6
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 8
+            },
+            {
+              "col": 1,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 7
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 8
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 7
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 8
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 8
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 8
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 9
+            },
+            {
+              "col": 5,
+              "row": 9
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 8
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 10
+            },
+            {
+              "col": 5,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 10
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 9
+          },
+          "point_type": "Treasure"
+        },
+        {
+          "children": [
+            {
+              "col": 1,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 10
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 10
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 10
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 10
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 11
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 10
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 12
+            },
+            {
+              "col": 2,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 1,
+            "row": 11
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 11
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 11
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 12
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 11
+          },
+          "point_type": "Shop"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 12
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 13
+            },
+            {
+              "col": 5,
+              "row": 13
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 12
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 13
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 14
+            },
+            {
+              "col": 4,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 3,
+            "row": 13
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 13
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 6,
+              "row": 14
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 13
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 0,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 2,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 4,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 14
+          },
+          "point_type": "Unknown"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 14
+          },
+          "point_type": "Monster"
+        },
+        {
+          "children": [
+            {
+              "col": 5,
+              "row": 15
+            }
+          ],
+          "coord": {
+            "col": 6,
+            "row": 14
+          },
+          "point_type": "Elite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 0,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 2,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 4,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        },
+        {
+          "children": [
+            {
+              "col": 3,
+              "row": 16
+            }
+          ],
+          "coord": {
+            "col": 5,
+            "row": 15
+          },
+          "point_type": "RestSite"
+        }
+      ],
+      "visited": []
+    },
+    "run": {
+      "act_floor": 0,
+      "act_index": 0,
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN",
+      "total_floor": 0
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_rest_choice": {
+    "decision": {
+      "kind": "rest_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_rest:HEAL",
+          "kind": "choose_rest",
+          "parameters": {
+            "option_id": "HEAL"
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "rest_site": {
+      "options": [
+        {
+          "enabled": true,
+          "implementation": "HealRestSiteOption",
+          "option_id": "HEAL"
+        },
+        {
+          "enabled": false,
+          "implementation": "SmithRestSiteOption",
+          "option_id": "SMITH"
+        }
+      ],
+      "selected": false
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "current_hp": 9956,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "max_hp": 9999,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 9,
+        "Niche": 15,
+        "Shuffle": 104,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_rest_complete": {
+    "decision": {
+      "kind": "rest_complete",
+      "legal_actions": [
+        {
+          "action_id": "leave_rest",
+          "kind": "leave_rest",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "rest_site": {
+      "options": [
+        {
+          "enabled": true,
+          "implementation": "HealRestSiteOption",
+          "option_id": "HEAL"
+        },
+        {
+          "enabled": false,
+          "implementation": "SmithRestSiteOption",
+          "option_id": "SMITH"
+        }
+      ],
+      "selected": true
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "current_hp": 9999,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "max_hp": 9999,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 9,
+        "Niche": 15,
+        "Shuffle": 104,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_room_reward_choice": {
+    "decision": {
+      "kind": "room_reward_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_room_reward:0:take",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": null,
+            "option_index": 0,
+            "reward_index": 0,
+            "reward_kind": "gold"
+          }
+        },
+        {
+          "action_id": "choose_room_reward:0:skip",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": null,
+            "option_index": -1,
+            "reward_index": 0,
+            "reward_kind": "GoldReward"
+          }
+        },
+        {
+          "action_id": "choose_room_reward:1:card:0:CINDER",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": "CINDER",
+            "option_index": 0,
+            "reward_index": 1,
+            "reward_kind": "card"
+          }
+        },
+        {
+          "action_id": "choose_room_reward:1:card:1:BLUDGEON",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": "BLUDGEON",
+            "option_index": 1,
+            "reward_index": 1,
+            "reward_kind": "card"
+          }
+        },
+        {
+          "action_id": "choose_room_reward:1:card:2:BREAKTHROUGH",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": "BREAKTHROUGH",
+            "option_index": 2,
+            "reward_index": 1,
+            "reward_kind": "card"
+          }
+        },
+        {
+          "action_id": "choose_room_reward:1:skip",
+          "kind": "choose_room_reward",
+          "parameters": {
+            "model_id": null,
+            "option_index": -1,
+            "reward_index": 1,
+            "reward_kind": "CardReward"
+          }
+        },
+        {
+          "action_id": "leave_room_rewards",
+          "kind": "leave_room_rewards",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "room_rewards": {
+      "rewards": [
+        {
+          "kind": "gold",
+          "options": [],
+          "resolved": false,
+          "reward_index": 0
+        },
+        {
+          "kind": "card",
+          "options": [
+            {
+              "model_id": "CINDER"
+            },
+            {
+              "model_id": "BLUDGEON"
+            },
+            {
+              "model_id": "BREAKTHROUGH"
+            }
+          ],
+          "resolved": false,
+          "reward_index": 1
+        }
+      ]
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER",
+        "ANGER"
+      ],
+      "gold": 999,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 2,
+        "Niche": 4,
+        "Shuffle": 18,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "run_shop_choice": {
+    "decision": {
+      "kind": "shop_choice",
+      "legal_actions": [
+        {
+          "action_id": "buy_shop:0:card:SWORD_BOOMERANG",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 48,
+            "entry_index": 0,
+            "entry_kind": "card",
+            "model_id": "SWORD_BOOMERANG"
+          }
+        },
+        {
+          "action_id": "buy_shop:1:card:CINDER",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 52,
+            "entry_index": 1,
+            "entry_kind": "card",
+            "model_id": "CINDER"
+          }
+        },
+        {
+          "action_id": "buy_shop:2:card:SHRUG_IT_OFF",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 49,
+            "entry_index": 2,
+            "entry_kind": "card",
+            "model_id": "SHRUG_IT_OFF"
+          }
+        },
+        {
+          "action_id": "buy_shop:3:card:ARMAMENTS",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 24,
+            "entry_index": 3,
+            "entry_kind": "card",
+            "model_id": "ARMAMENTS"
+          }
+        },
+        {
+          "action_id": "buy_shop:4:card:INFLAME",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 72,
+            "entry_index": 4,
+            "entry_kind": "card",
+            "model_id": "INFLAME"
+          }
+        },
+        {
+          "action_id": "buy_shop:5:card:CATASTROPHE",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 86,
+            "entry_index": 5,
+            "entry_kind": "card",
+            "model_id": "CATASTROPHE"
+          }
+        },
+        {
+          "action_id": "buy_shop:6:card:GOLD_AXE",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 176,
+            "entry_index": 6,
+            "entry_kind": "card",
+            "model_id": "GOLD_AXE"
+          }
+        },
+        {
+          "action_id": "buy_shop:7:relic:JOSS_PAPER",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 195,
+            "entry_index": 7,
+            "entry_kind": "relic",
+            "model_id": "JOSS_PAPER"
+          }
+        },
+        {
+          "action_id": "buy_shop:8:relic:MERCURY_HOURGLASS",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 217,
+            "entry_index": 8,
+            "entry_kind": "relic",
+            "model_id": "MERCURY_HOURGLASS"
+          }
+        },
+        {
+          "action_id": "buy_shop:9:relic:KIFUDA",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 220,
+            "entry_index": 9,
+            "entry_kind": "relic",
+            "model_id": "KIFUDA"
+          }
+        },
+        {
+          "action_id": "buy_shop:10:potion:SPEED_POTION",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 52,
+            "entry_index": 10,
+            "entry_kind": "potion",
+            "model_id": "SPEED_POTION"
+          }
+        },
+        {
+          "action_id": "buy_shop:11:potion:POWER_POTION",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 51,
+            "entry_index": 11,
+            "entry_kind": "potion",
+            "model_id": "POWER_POTION"
+          }
+        },
+        {
+          "action_id": "buy_shop:12:potion:SKILL_POTION",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 49,
+            "entry_index": 12,
+            "entry_kind": "potion",
+            "model_id": "SKILL_POTION"
+          }
+        },
+        {
+          "action_id": "buy_shop:13:card_removal:none",
+          "kind": "buy_shop",
+          "parameters": {
+            "cost": 75,
+            "entry_index": 13,
+            "entry_kind": "card_removal",
+            "model_id": null
+          }
+        },
+        {
+          "action_id": "leave_shop",
+          "kind": "leave_shop",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 999,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 2,
+        "Niche": 5,
+        "Shuffle": 27,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "shop": {
+      "entries": [
+        {
+          "cost": 48,
+          "enough_gold": true,
+          "entry_index": 0,
+          "kind": "card",
+          "model_id": "SWORD_BOOMERANG",
+          "stocked": true
+        },
+        {
+          "cost": 52,
+          "enough_gold": true,
+          "entry_index": 1,
+          "kind": "card",
+          "model_id": "CINDER",
+          "stocked": true
+        },
+        {
+          "cost": 49,
+          "enough_gold": true,
+          "entry_index": 2,
+          "kind": "card",
+          "model_id": "SHRUG_IT_OFF",
+          "stocked": true
+        },
+        {
+          "cost": 24,
+          "enough_gold": true,
+          "entry_index": 3,
+          "kind": "card",
+          "model_id": "ARMAMENTS",
+          "stocked": true
+        },
+        {
+          "cost": 72,
+          "enough_gold": true,
+          "entry_index": 4,
+          "kind": "card",
+          "model_id": "INFLAME",
+          "stocked": true
+        },
+        {
+          "cost": 86,
+          "enough_gold": true,
+          "entry_index": 5,
+          "kind": "card",
+          "model_id": "CATASTROPHE",
+          "stocked": true
+        },
+        {
+          "cost": 176,
+          "enough_gold": true,
+          "entry_index": 6,
+          "kind": "card",
+          "model_id": "GOLD_AXE",
+          "stocked": true
+        },
+        {
+          "cost": 195,
+          "enough_gold": true,
+          "entry_index": 7,
+          "kind": "relic",
+          "model_id": "JOSS_PAPER",
+          "stocked": true
+        },
+        {
+          "cost": 217,
+          "enough_gold": true,
+          "entry_index": 8,
+          "kind": "relic",
+          "model_id": "MERCURY_HOURGLASS",
+          "stocked": true
+        },
+        {
+          "cost": 220,
+          "enough_gold": true,
+          "entry_index": 9,
+          "kind": "relic",
+          "model_id": "KIFUDA",
+          "stocked": true
+        },
+        {
+          "cost": 52,
+          "enough_gold": true,
+          "entry_index": 10,
+          "kind": "potion",
+          "model_id": "SPEED_POTION",
+          "stocked": true
+        },
+        {
+          "cost": 51,
+          "enough_gold": true,
+          "entry_index": 11,
+          "kind": "potion",
+          "model_id": "POWER_POTION",
+          "stocked": true
+        },
+        {
+          "cost": 49,
+          "enough_gold": true,
+          "entry_index": 12,
+          "kind": "potion",
+          "model_id": "SKILL_POTION",
+          "stocked": true
+        },
+        {
+          "cost": 75,
+          "enough_gold": true,
+          "entry_index": 13,
+          "kind": "card_removal",
+          "stocked": true
+        }
+      ]
+    },
+    "terminal": false,
+    "victory": false
+  },
+  "run_treasure_complete": {
+    "decision": {
+      "kind": "treasure_complete",
+      "legal_actions": [
+        {
+          "action_id": "leave_treasure",
+          "kind": "leave_treasure",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 1044,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK",
+        "MEAL_TICKET"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 9,
+        "Niche": 15,
+        "Shuffle": 104,
+        "TreasureRoomRelics": 1,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "treasure": {
+      "opened": true,
+      "relic_options": [],
+      "resolved": true
+    },
+    "victory": false
+  },
+  "run_treasure_open": {
+    "decision": {
+      "kind": "treasure_open",
+      "legal_actions": [
+        {
+          "action_id": "open_treasure",
+          "kind": "open_treasure",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 999,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 9,
+        "Niche": 15,
+        "Shuffle": 104,
+        "TreasureRoomRelics": 1,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "treasure": {
+      "opened": false,
+      "relic_options": [],
+      "resolved": false
+    },
+    "victory": false
+  },
+  "run_treasure_relic_choice": {
+    "decision": {
+      "kind": "treasure_relic_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_treasure:0:MEAL_TICKET",
+          "kind": "choose_treasure",
+          "parameters": {
+            "model_id": "MEAL_TICKET",
+            "option_index": 0
+          }
+        },
+        {
+          "action_id": "skip_treasure",
+          "kind": "skip_treasure",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        },
+        {
+          "model_id": "ANGER",
+          "upgrades": 1
+        }
+      ],
+      "gold": 1044,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [
+        "LAVA_ROCK"
+      ],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 9,
+        "Niche": 15,
+        "Shuffle": 104,
+        "TreasureRoomRelics": 1,
+        "UnknownMapPoint": 0,
+        "UpFront": 413
+      },
+      "seed": "CANONICAL-SCHEMA-RUN"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "treasure": {
+      "opened": true,
+      "relic_options": [
+        {
+          "model_id": "MEAL_TICKET",
+          "option_index": 0
+        }
+      ],
+      "resolved": false
+    },
+    "victory": false
+  },
+  "standalone_card_reward": {
+    "decision": {
+      "kind": "reward_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_reward:0:INFLAME",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": "INFLAME",
+            "option_index": 0,
+            "skip": false
+          }
+        },
+        {
+          "action_id": "choose_reward:1:UNRELENTING",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": "UNRELENTING",
+            "option_index": 1,
+            "skip": false
+          }
+        },
+        {
+          "action_id": "choose_reward:2:SWORD_BOOMERANG",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": "SWORD_BOOMERANG",
+            "option_index": 2,
+            "skip": false
+          }
+        },
+        {
+          "action_id": "choose_reward:skip",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": null,
+            "option_index": -1,
+            "skip": true
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "reward": {
+      "can_skip": true,
+      "kind": "card",
+      "options": [
+        {
+          "model_id": "INFLAME",
+          "option_id": "reward-0-INFLAME"
+        },
+        {
+          "model_id": "UNRELENTING",
+          "option_id": "reward-1-UNRELENTING"
+        },
+        {
+          "model_id": "SWORD_BOOMERANG",
+          "option_id": "reward-2-SWORD_BOOMERANG"
+        }
+      ],
+      "selected": false
+    },
+    "run": {
+      "act_variant": "UNDERDOCKS",
+      "ascension": 0,
+      "deck": [
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD"
+      ],
+      "gold": 99,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 230
+      },
+      "seed": "NATIVESIMSPIKE"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "standalone_card_select": {
+    "custom_rewards": {
+      "can_skip": true,
+      "depth": 1,
+      "rewards": [
+        {
+          "children": [],
+          "reward": {
+            "implementation": "GoldReward",
+            "kind": "gold",
+            "selected": false
+          },
+          "reward_index": 0
+        },
+        {
+          "children": [],
+          "reward": {
+            "implementation": "CardRemovalReward",
+            "kind": "cardremoval",
+            "selected": false
+          },
+          "reward_index": 1
+        }
+      ]
+    },
+    "decision": {
+      "kind": "card_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-0-STRIKE_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-0-STRIKE_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-1-STRIKE_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-1-STRIKE_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-2-STRIKE_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-2-STRIKE_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-3-STRIKE_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-3-STRIKE_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-4-STRIKE_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-4-STRIKE_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-5-DEFEND_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-5-DEFEND_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-6-DEFEND_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-6-DEFEND_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-7-DEFEND_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-7-DEFEND_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-8-DEFEND_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-8-DEFEND_IRONCLAD"
+            ]
+          }
+        },
+        {
+          "action_id": "choose_cards:card-choice-0:generated-card-choice-0-9-DEFEND_IRONCLAD",
+          "kind": "choose_cards",
+          "parameters": {
+            "choice_id": "card-choice-0",
+            "option_ids": [
+              "generated-card-choice-0-9-DEFEND_IRONCLAD"
+            ]
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "outstanding_choice": {
+      "choice_id": "card-choice-0",
+      "kind": "choose_cards",
+      "max_select": 1,
+      "min_select": 1,
+      "options": [
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "option_id": "generated-card-choice-0-0-STRIKE_IRONCLAD"
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "option_id": "generated-card-choice-0-1-STRIKE_IRONCLAD"
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "option_id": "generated-card-choice-0-2-STRIKE_IRONCLAD"
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "option_id": "generated-card-choice-0-3-STRIKE_IRONCLAD"
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "option_id": "generated-card-choice-0-4-STRIKE_IRONCLAD"
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "option_id": "generated-card-choice-0-5-DEFEND_IRONCLAD"
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "option_id": "generated-card-choice-0-6-DEFEND_IRONCLAD"
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "option_id": "generated-card-choice-0-7-DEFEND_IRONCLAD"
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "option_id": "generated-card-choice-0-8-DEFEND_IRONCLAD"
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "option_id": "generated-card-choice-0-9-DEFEND_IRONCLAD"
+        }
+      ],
+      "provenance": "MegaCrit.Sts2.Core.Commands.CardSelectCmd+<FromDeckGeneric>d__24.MoveNext > MegaCrit.Sts2.Core.Commands.CardSelectCmd.FromDeckGeneric > MegaCrit.Sts2.Core.Commands.CardSelectCmd.FromDeckForRemoval > MegaCrit.Sts2.Core.Multiplayer.Game.RewardSynchronizer+<DoUnsyncedCardRemoval>d__26.MoveNext > MegaCrit.Sts2.Core.Multiplayer.Game.RewardSynchronizer.DoUnsyncedCardRemoval > MegaCrit.Sts2.Core.Rewards.CardRemovalReward+<OnSelect>d__16.MoveNext > MegaCrit.Sts2.Core.Rewards.CardRemovalReward.OnSelect > MegaCrit.Sts2.Core.Rewards.Reward+<SelectUnsynchronized>d__33.MoveNext > MegaCrit.Sts2.Core.Rewards.Reward.SelectUnsynchronized > MegaCrit.Sts2.Core.Multiplayer.Game.RewardsSetSynchronizer+<SelectRewardForPlayer>d__21.MoveNext > MegaCrit.Sts2.Core.Multiplayer.Game.RewardsSetSynchronizer.SelectRewardForPlayer > MegaCrit.Sts2.Core.Multiplayer.Game.RewardsSetSynchronizer+<SelectLocalReward>d__16.MoveNext"
+    },
+    "run": {
+      "act_variant": "UNDERDOCKS",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        }
+      ],
+      "gold": 99,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 230
+      },
+      "seed": "NATIVESIMSPIKE"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "standalone_combat": {
+    "combat": {
+      "creatures": [
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 0,
+          "hp": 70,
+          "max_hp": 75,
+          "model_id": "DEFECT",
+          "powers": [],
+          "side": "Player"
+        },
+        {
+          "alive": true,
+          "block": 0,
+          "combat_id": 1,
+          "hp": 127,
+          "max_hp": 127,
+          "model_id": "BYGONE_EFFIGY",
+          "next_move": {
+            "id": "SLEEP_MOVE",
+            "intents": [
+              {
+                "implementation": "SleepIntent",
+                "intent_type": "Sleep"
+              }
+            ]
+          },
+          "powers": [
+            {
+              "amount": 1,
+              "model_id": "SLOW_POWER"
+            }
+          ],
+          "side": "Enemy"
+        }
+      ],
+      "encounter": "BYGONE_EFFIGY_ELITE",
+      "energy": 3,
+      "max_energy": 3,
+      "orbs": {
+        "capacity": 3,
+        "entries": [
+          {
+            "evoke": 8,
+            "model_id": "LIGHTNING_ORB",
+            "native_state": {},
+            "passive": 3
+          }
+        ]
+      },
+      "phase": "Play",
+      "piles": [
+        {
+          "cards": [],
+          "name": "Hand",
+          "type": "Hand"
+        },
+        {
+          "cards": [
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "defend-2",
+              "model_id": "DEFEND_DEFECT",
+              "native_state": {},
+              "net_id": 0,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "dualcast-0",
+              "model_id": "DUALCAST",
+              "native_state": {},
+              "net_id": 1,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "defend-3",
+              "model_id": "DEFEND_DEFECT",
+              "native_state": {},
+              "net_id": 2,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "defend-0",
+              "model_id": "DEFEND_DEFECT",
+              "native_state": {},
+              "net_id": 3,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-0",
+              "model_id": "STRIKE_DEFECT",
+              "native_state": {},
+              "net_id": 4,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "zap-0",
+              "model_id": "ZAP",
+              "native_state": {},
+              "net_id": 5,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-3",
+              "model_id": "STRIKE_DEFECT",
+              "native_state": {},
+              "net_id": 6,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Skill",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "defend-1",
+              "model_id": "DEFEND_DEFECT",
+              "native_state": {},
+              "net_id": 7,
+              "target_type": "Self",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-2",
+              "model_id": "STRIKE_DEFECT",
+              "native_state": {},
+              "net_id": 8,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            },
+            {
+              "card_type": "Attack",
+              "costs_x": false,
+              "energy_cost": 1,
+              "instance_id": "strike-1",
+              "model_id": "STRIKE_DEFECT",
+              "native_state": {},
+              "net_id": 9,
+              "target_type": "AnyEnemy",
+              "upgrades": 0
+            }
+          ],
+          "name": "DrawPile",
+          "type": "Draw"
+        },
+        {
+          "cards": [],
+          "name": "DiscardPile",
+          "type": "Discard"
+        },
+        {
+          "cards": [],
+          "name": "ExhaustPile",
+          "type": "Exhaust"
+        },
+        {
+          "cards": [],
+          "name": "PlayPile",
+          "type": "Play"
+        }
+      ],
+      "stars": 0,
+      "turn": 1
+    },
+    "decision": {
+      "kind": "combat_action",
+      "legal_actions": [
+        {
+          "action_id": "use_potion:0:target:0",
+          "kind": "use_potion",
+          "parameters": {
+            "model_id": "ENERGY_POTION",
+            "slot": 0,
+            "target_id": 0
+          }
+        },
+        {
+          "action_id": "discard_potion:0",
+          "kind": "discard_potion",
+          "parameters": {
+            "model_id": "ENERGY_POTION",
+            "slot": 0
+          }
+        },
+        {
+          "action_id": "end_turn",
+          "kind": "end_turn",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "inventory": {
+      "potions": [
+        {
+          "model_id": "ENERGY_POTION",
+          "slot": 0
+        },
+        null,
+        null
+      ],
+      "relics": [
+        {
+          "model_id": "CRACKED_CORE",
+          "native_state": {}
+        },
+        {
+          "counter": 2,
+          "model_id": "HAPPY_FLOWER",
+          "native_state": {
+            "TurnsSeen": 2
+          }
+        }
+      ]
+    },
+    "run": {
+      "act_floor": 0,
+      "act_index": 0,
+      "act_variant": "OVERGROWTH",
+      "ascension": 0,
+      "gold": 99,
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 230
+      },
+      "seed": "CANONICAL-SCHEMA-COMBAT",
+      "total_floor": 0
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "standalone_custom_rewards": {
+    "custom_rewards": {
+      "can_skip": true,
+      "depth": 1,
+      "rewards": [
+        {
+          "children": [],
+          "reward": {
+            "implementation": "GoldReward",
+            "kind": "gold",
+            "selected": false
+          },
+          "reward_index": 0
+        },
+        {
+          "children": [],
+          "reward": {
+            "implementation": "CardRemovalReward",
+            "kind": "cardremoval",
+            "selected": false
+          },
+          "reward_index": 1
+        }
+      ]
+    },
+    "decision": {
+      "kind": "custom_reward_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_custom_reward:0:-1:0:gold:none",
+          "kind": "choose_custom_reward",
+          "parameters": {
+            "child_index": -1,
+            "model_id": null,
+            "option_index": 0,
+            "reward_index": 0,
+            "reward_kind": "gold"
+          }
+        },
+        {
+          "action_id": "choose_custom_reward:1:-1:0:cardremoval:none",
+          "kind": "choose_custom_reward",
+          "parameters": {
+            "child_index": -1,
+            "model_id": null,
+            "option_index": 0,
+            "reward_index": 1,
+            "reward_kind": "cardremoval"
+          }
+        },
+        {
+          "action_id": "skip_custom_rewards",
+          "kind": "skip_custom_rewards",
+          "parameters": {}
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "run": {
+      "act_variant": "UNDERDOCKS",
+      "ascension": 0,
+      "deck": [
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "STRIKE_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        },
+        {
+          "model_id": "DEFEND_IRONCLAD",
+          "upgrades": 0
+        }
+      ],
+      "gold": 99,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 230
+      },
+      "seed": "NATIVESIMSPIKE"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  },
+  "standalone_item_reward": {
+    "decision": {
+      "kind": "reward_choice",
+      "legal_actions": [
+        {
+          "action_id": "choose_reward:0:MEAL_TICKET",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": "MEAL_TICKET",
+            "option_index": 0,
+            "skip": false
+          }
+        },
+        {
+          "action_id": "choose_reward:skip",
+          "kind": "choose_reward",
+          "parameters": {
+            "model_id": null,
+            "option_index": -1,
+            "skip": true
+          }
+        }
+      ]
+    },
+    "game_build": {
+      "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+      "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+      "version": "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314"
+    },
+    "reward": {
+      "can_skip": true,
+      "kind": "relic",
+      "options": [
+        {
+          "model_id": "MEAL_TICKET",
+          "option_id": "reward-0-MEAL_TICKET"
+        }
+      ],
+      "selected": false
+    },
+    "run": {
+      "act_variant": "UNDERDOCKS",
+      "ascension": 0,
+      "deck": [
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "STRIKE_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD",
+        "DEFEND_IRONCLAD"
+      ],
+      "gold": 99,
+      "potions": [
+        null,
+        null,
+        null
+      ],
+      "relics": [],
+      "rng_counters": {
+        "CombatCardGeneration": 0,
+        "CombatCardSelection": 0,
+        "CombatEnergyCosts": 0,
+        "CombatOrbs": 0,
+        "CombatPotionGeneration": 0,
+        "CombatTargets": 0,
+        "MonsterAi": 0,
+        "Niche": 1,
+        "Shuffle": 9,
+        "TreasureRoomRelics": 0,
+        "UnknownMapPoint": 0,
+        "UpFront": 230
+      },
+      "seed": "NATIVESIMSPIKE"
+    },
+    "schema_version": 3,
+    "terminal": false,
+    "victory": false
+  }
+}
