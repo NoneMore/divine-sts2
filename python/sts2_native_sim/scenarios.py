@@ -3,8 +3,9 @@
 A *generated scenario* is a run-start situation together with the choices that produced it,
 such that the shipped game can reproduce it from the same run seed: paste the seed into the
 custom run screen, take the recorded Ancient choice, and the same fight is there. This module
-is that behaviour — a request in, rows out — and `divine-sts2 scenario` is a thin wrapper
-over it, so the behaviour is importable and testable rather than a sibling script.
+is that behaviour: a request in, rows out (:func:`generate_rows`), or a request in, a corpus of
+shards and their summary out (:func:`generate_corpus`). `divine-sts2 scenario` is a thin wrapper
+over the two, so the behaviour is importable and testable rather than a sibling script.
 
 The request
 -----------
@@ -82,6 +83,36 @@ the offer is known, every choice still gets its own row, failed or not. The same
 again with the same error kind on a re-run, because a kind is the error's own stable identity —
 see :func:`error_kind` — and never its text.
 
+The corpus a batch writes
+-------------------------
+
+:func:`generate_corpus` writes a batch into an artifact root the way the repository's other
+corpora are written — one gzip-compressed JSONL shard per worker, ``worker-00.jsonl.gz`` upward,
+plus a ``summary.json`` beside them — so the readers that already consume a corpus consume this
+one without being told about it.
+
+* **A shard is a contiguous block of the expanded request.** Element *i* belongs to the shard that
+  owns the block *i* falls in, and a shard's rows are written in element order, so neither the
+  shard a row lands in nor its position within it depends on which worker finished first: a slow
+  worker changes when a row appears and never where it lands. Reading the shards back in name
+  order is the request in element order, whatever the worker count.
+* **An element that fails costs its own rows and nothing else.** One seed cannot end the batch or
+  move another seed's rows, and the summary says how much of the corpus is a fight rather than a
+  failure: the counts :func:`summarize_rows` produces, plus the request, the game build, the
+  worker count and the shards.
+* **A shard is written beside its own name and moved into place**, so a shard file is always a
+  whole shard, and a batch that stops in the middle leaves the shards that landed readable.
+* **The summary is the corpus's manifest.** It is rewritten every time a shard lands, so a batch
+  that was killed still says what it wrote, and a second run of the same request resumes it: a
+  shard the summary records as complete and whose file is still there is neither driven again nor
+  rewritten. A shard that landed after the last summary write is redone, which costs one shard and
+  cannot change the corpus, because the generator is deterministic. Resuming into another request,
+  another worker count or another game build is refused before anything is written, rather than
+  mixed into one root.
+* **A worker that dies, or that never comes up, is replaced rather than ending the batch.** The
+  element a dying worker failed is recorded as a failure row like any other, a fresh worker takes
+  over the rest of the shard, and the summary counts the replacement.
+
 The fixed rules
 ---------------
 
@@ -102,10 +133,17 @@ mean, and each is recorded so it can be audited and later replaced:
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import gzip
+import json
+import os
 import re
-from collections.abc import Callable, Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from .ancient import (
@@ -119,7 +157,7 @@ from .ancient import (
     drive_choice,
     map_actions,
 )
-from .client import NativeSimError
+from .client import NativeSimError, NativeWorker
 
 #: The versioned row tag, and the discriminators a row carries: one for an element that produced
 #: a fight, one for an element that could not.
@@ -129,6 +167,13 @@ FAILURE_RECORD = "failure"
 
 #: The row types a batch emits, in the order a summary counts them.
 ROW_TYPES = (SCENARIO_RECORD, FAILURE_RECORD)
+
+#: The versioned tag of the summary a batch writes beside its shards, and the name that summary is
+#: written under. A shard's own name is :func:`_shard_name`, because its padding depends on the
+#: batch's worker count; together they are the convention the repository's corpus readers already
+#: collect, so a corpus this module writes needs no reader of its own.
+CORPUS_SCHEMA = "sts2-native-sim/scenario-corpus/1"
+SUMMARY_FILE = "summary.json"
 
 #: The error kind a failure row names for a run that did not reach its fight the way the
 #: generation requires. The stage says where the run stopped; the kind says what sort of failure
@@ -160,6 +205,15 @@ class ScenarioRequestError(ValueError):
     """
 
 
+class CorpusConflictError(ScenarioRequestError):
+    """An artifact root cannot be resumed into by this request.
+
+    An input error like the ones above: it is raised before a run is driven and before a shard is
+    written, so one root never holds half of one corpus and half of another — or the same corpus
+    at two shard boundaries, or rows from two game builds.
+    """
+
+
 class ScenarioGenerationError(RuntimeError):
     """A run could not be driven to its first fight. ``stage`` names where it stopped.
 
@@ -180,6 +234,19 @@ class RunWorker(RunStepWorker, Protocol):
     build: dict[str, Any]
 
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class CorpusWorker(RunWorker, Protocol):
+    """What a corpus needs of a worker beyond driving one element of a request.
+
+    A corpus holds one worker per shard and closes it once the shard is written, so it also needs
+    to ask whether that worker is still usable — the question that decides whether a crashed
+    worker is replaced or the rest of the shard is lost with it.
+    """
+
+    def alive(self) -> bool: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -308,18 +375,45 @@ def summarize_rows(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     of a type this summary does not know is refused instead of being counted as neither a success
     nor a failure, which would make the two counts stop adding up to the rows.
     """
-    counts = {record_type: 0 for record_type in ROW_TYPES}
+    return _tally(_counts(rows))
+
+
+def encode_row(row: dict[str, Any]) -> str:
+    """One row as a corpus stores it: JSON on one line, with the record's own key order.
+
+    ``sort_keys`` is deliberately off — a record is built in a declared key order, and that order
+    is what makes a corpus diffable — and the separators are pinned rather than left to the
+    encoder's defaults, so the same row is the same bytes in every shard and every run.
+    """
+    return json.dumps(row, separators=(",", ":")) + "\n"
+
+
+def _counts(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """How many rows of each declared type `rows` holds, refusing a type nothing declares."""
+    counts = _empty_counts()
     for row in rows:
-        record_type = row["record_type"]
-        if record_type not in counts:
-            raise ValueError(f"unknown row type {record_type!r}")
-        counts[record_type] += 1
+        _add(counts, row["record_type"])
+    return counts
+
+
+def _tally(counts: dict[str, int]) -> dict[str, Any]:
+    """The counts a batch reports: by row type, then the two totals that follow from them."""
     return {
-        "rows": counts,
+        "rows": dict(counts),
         "succeeded": counts[SCENARIO_RECORD],
         "failed": counts[FAILURE_RECORD],
-        "total": len(rows),
+        "total": sum(counts.values()),
     }
+
+
+def _empty_counts() -> dict[str, int]:
+    return {record_type: 0 for record_type in ROW_TYPES}
+
+
+def _add(counts: dict[str, int], record_type: str) -> None:
+    if record_type not in counts:
+        raise ValueError(f"unknown row type {record_type!r}")
+    counts[record_type] += 1
 
 
 def generate_rows(request: ScenarioRequest, worker: RunWorker) -> list[dict[str, Any]]:
@@ -338,11 +432,23 @@ def generate_rows(request: ScenarioRequest, worker: RunWorker) -> list[dict[str,
     """
     _check_request(request)
     rows: list[dict[str, Any]] = []
-    for character in request.characters:
-        for ascension in request.ascensions:
-            for seed in request.seeds:
-                rows.extend(_rows_for_element(_Element.declared(character, ascension, seed), worker))
+    for element in _elements(request):
+        rows.extend(_rows_for_element(element, worker))
     return rows
+
+
+def _elements(request: ScenarioRequest) -> list[_Element]:
+    """The request's elements in expansion order: character, then Ascension, then seed.
+
+    This order is the whole of the request's ordering contract — a corpus assigns its shards by the
+    index an element has here, and a row's position in its shard follows from it.
+    """
+    return [
+        _Element.declared(character, ascension, seed)
+        for character in request.characters
+        for ascension in request.ascensions
+        for seed in request.seeds
+    ]
 
 
 def _check_request(request: ScenarioRequest) -> None:
@@ -702,3 +808,398 @@ def _nested_choice(decision: NestedDecision) -> dict[str, Any]:
         "selected_index": index,
         "selected_option_ids": list(option_ids) if isinstance(option_ids, list) else [],
     }
+
+
+# -- the corpus a batch writes -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Shard:
+    """One shard of a batch: the elements it owns and the file it is written to.
+
+    Elements are indices into the expanded request, and the file name — which is fixed when the
+    batch is planned, because how wide its index is padded depends on the worker count — is what a
+    reader finds it under. A shard therefore names the same work however the batch is run.
+    """
+
+    index: int
+    elements: tuple[int, ...]
+    name: str
+
+    def path(self, root: Path) -> Path:
+        return root / self.name
+
+
+@dataclass(frozen=True)
+class _ShardOutcome:
+    """What one shard recorded: its rows by type, and the workers it had to replace."""
+
+    counts: dict[str, int]
+    replacements: int
+
+
+@dataclass(frozen=True)
+class _Resume:
+    """What an artifact root already holds: the shards it recorded, and the build they ran on."""
+
+    outcomes: dict[int, _ShardOutcome]
+    build: dict[str, Any] | None
+
+
+def generate_corpus(
+    request: ScenarioRequest,
+    workers: int,
+    output_dir: str | Path,
+    *,
+    worker_factory: Callable[[int], CorpusWorker] | None = None,
+    compression: int = 3,
+) -> dict[str, Any]:
+    """Record the batch into an artifact root: one shard per worker, plus the summary naming them.
+
+    Rows come out exactly as :func:`generate_rows` produces them — one row per element, per Ancient
+    choice the run offers, in the request's declared order — but they are written to *shards*
+    rather than returned: shard *k* takes a contiguous block of the expanded request, so a batch
+    read back in shard order is the request in element order for any worker count, and a slow
+    worker changes when a row appears and never where it lands. The summary beside the shards is
+    the corpus's manifest: it names the request, the game build, the worker count, the shards and
+    the rows by type, and a second call with the same request resumes the corpus rather than
+    redoing it — see the module docstring.
+
+    A worker that dies, or that never comes up, is replaced, and the element a dying worker failed
+    is a failure row like any other, so no single seed can end, bias or reorder a batch.
+    ``worker_factory`` builds the worker for one shard index; the default builds a fresh native
+    worker per shard, and a caller that supplies one can drive a batch without a game installed.
+    """
+    if workers < 1:
+        raise ScenarioRequestError(f"a corpus needs at least one worker, not {workers}")
+    _check_request(request)
+    root = Path(output_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    corpus = _Corpus(
+        root, _elements(request), request, workers, compression, _resume(root, request, workers, compression)
+    )
+    factory = worker_factory or _native_worker
+    pending = corpus.pending
+    if pending:
+        with ThreadPoolExecutor(max_workers=len(pending)) as executor:
+            # One task per shard: workers are blocking processes, so shards run in threads, and a
+            # hard failure — a batch that was killed — takes the batch down while what already
+            # landed stays resumable.
+            futures = [executor.submit(corpus.write, shard, factory) for shard in pending]
+            for future in futures:
+                future.result()
+    return corpus.write_summary()
+
+
+def _native_worker(_shard: int) -> CorpusWorker:
+    """The default shard worker: one isolated native worker, which ignores its shard index."""
+    return NativeWorker()
+
+
+def _shard_name(index: int, workers: int) -> str:
+    """The file one shard of a ``workers``-worker batch is written under.
+
+    Padded to the widest index the batch has, so that collecting a corpus's shards in name order —
+    which is how the repository's readers collect one, and how a corpus reads back as the request
+    in element order — is collecting them in shard order for any worker count.
+    """
+    return f"worker-{index:0{max(2, len(str(workers - 1)))}d}.jsonl.gz"
+
+
+def _shards(elements: Sequence[_Element], workers: int) -> list[_Shard]:
+    """Split the expanded request into one contiguous block of elements per worker.
+
+    Blocks are contiguous so that the shards, read in name order, are the request in element order
+    whatever the worker count. They differ in size by at most one, and the earlier shards take the
+    longer ones, so the split is a function of the request and the worker count and of nothing
+    else — in particular not of how fast any worker is.
+
+    A shard is a block of *elements*, and an element is a character, an Ascension and a seed: the
+    Ancient choices a seed's run offers are discovered by driving it, so they cannot index a shard.
+    A batch with more workers than elements therefore leaves the shards after the last element
+    empty — they are still written, so the worker count still names the corpus.
+    """
+    size, longer = divmod(len(elements), workers)
+    shards: list[_Shard] = []
+    start = 0
+    for index in range(workers):
+        length = size + (1 if index < longer else 0)
+        shards.append(_Shard(index, tuple(range(start, start + length)), _shard_name(index, workers)))
+        start += length
+    return shards
+
+
+def read_corpus(path: str | Path) -> Iterator[dict[str, Any]]:
+    """Every row of a corpus, in shard order — the convention the repository's readers collect.
+
+    ``python/compile_native_rollouts.py`` takes a directory of shards, collects its ``*.jsonl.gz``
+    in name order and parses each line as one record. This is that convention, so a corpus written
+    here is one those readers consume, and a caller can read one back without a second
+    implementation of the walk. A single shard file is read too, which is how a caller looks at one
+    worker's rows.
+    """
+    given = Path(path)
+    shards = sorted(given.glob("*.jsonl.gz")) if given.is_dir() else [given]
+    for shard in shards:
+        with gzip.open(shard, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    yield json.loads(line)
+
+
+def _request_identity(request: ScenarioRequest) -> dict[str, Any]:
+    """The request as a corpus stores it and compares it: each dimension in its resolved form.
+
+    Resolved rather than declared, because that is what the elements are: a corpus of ``anc1ent01``
+    and a corpus of ``ANCIENT01`` are the same corpus, and resuming one into the other is the same
+    batch run twice rather than two corpora in one root.
+    """
+    return {
+        "characters": [character.upper() for character in request.characters],
+        "ascensions": list(request.ascensions),
+        "seeds": [canonicalize_seed(seed) for seed in request.seeds],
+    }
+
+
+def _describe(resolved: Any) -> str:
+    """One resolved request, phrased for a message that has to name two of them."""
+    if not isinstance(resolved, dict):
+        return repr(resolved)
+    return (
+        f"characters {resolved.get('characters')}, Ascensions {resolved.get('ascensions')} "
+        f"and seeds {resolved.get('seeds')}"
+    )
+
+
+def _read_summary(root: Path) -> dict[str, Any] | None:
+    """The corpus summary an artifact root holds, or ``None`` when it holds no corpus yet.
+
+    A ``summary.json`` this module did not write is refused rather than adopted or overwritten:
+    the repository writes one for other corpora (``python/native_rollout_farm.py``), and a batch
+    resumed into another tool's manifest would report one corpus while writing another.
+    """
+    path = root / SUMMARY_FILE
+    if not path.is_file():
+        return None
+    try:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CorpusConflictError(f"{path} is not a readable corpus summary: {error}") from error
+    if not isinstance(summary, dict) or summary.get("schema") != CORPUS_SCHEMA:
+        raise CorpusConflictError(f"{path} is not a {CORPUS_SCHEMA} summary; refusing to write a corpus beside it")
+    return summary
+
+
+def _resume(root: Path, request: ScenarioRequest, workers: int, compression: int) -> _Resume:
+    """What a batch can keep from the corpus already in the root, refusing anything else.
+
+    A shard counts as complete when the summary records it complete *and* its file is still there:
+    one that landed after the last summary write is redone, which costs one shard and cannot change
+    the corpus. A request, a worker count, a compression level or a game build that differs from the
+    recorded one is an input error, because writing into it would put two corpora — or one corpus at
+    two shard boundaries, or under two compression levels, or with rows from two builds — under one
+    name without saying so.
+    """
+    summary = _read_summary(root)
+    if summary is None:
+        return _Resume({}, None)
+    resolved = _request_identity(request)
+    if summary.get("request") != resolved:
+        raise CorpusConflictError(
+            f"the corpus at {root} is of {_describe(summary.get('request'))}, not of {_describe(resolved)}"
+        )
+    if summary.get("workers") != workers:
+        raise CorpusConflictError(
+            f"the corpus at {root} was written by {summary.get('workers')} workers; resuming it with "
+            f"{workers} would move the shard boundaries"
+        )
+    if summary.get("compression") != compression:
+        raise CorpusConflictError(
+            f"the corpus at {root} was written at gzip level {summary.get('compression')}; resuming "
+            f"it at level {compression} would leave one corpus whose shards were not all written alike"
+        )
+    outcomes: dict[int, _ShardOutcome] = {}
+    for recorded in summary.get("shards") or []:
+        if not isinstance(recorded, dict) or not recorded.get("complete"):
+            continue
+        index = recorded.get("index")
+        if not isinstance(index, int) or not (root / str(recorded.get("file"))).is_file():
+            continue
+        outcomes[index] = _ShardOutcome(
+            _recorded_counts(recorded.get("rows")), int(recorded.get("worker_replacements", 0))
+        )
+    return _Resume(outcomes, summary.get("game_build"))
+
+
+def _recorded_counts(counts: Any) -> dict[str, int]:
+    """The row counts a summary entry recorded, with every declared type present."""
+    recorded = counts if isinstance(counts, dict) else {}
+    return {record_type: int(recorded.get(record_type, 0)) for record_type in ROW_TYPES}
+
+
+class _Corpus:
+    """One batch's artifact root while it is being written.
+
+    The summary is the corpus's manifest, and it is rewritten — in one atomic move, so a reader
+    never sees half of one — every time a shard lands. That is what makes a killed batch say what
+    it wrote, the next run resume it, and a replacement visible instead of inferred.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        elements: Sequence[_Element],
+        request: ScenarioRequest,
+        workers: int,
+        compression: int,
+        resume: _Resume,
+    ) -> None:
+        self.root = root
+        self.elements = list(elements)
+        self.workers = workers
+        self.compression = compression
+        self._request = _request_identity(request)
+        self._shards = _shards(self.elements, workers)
+        self._build = copy.deepcopy(resume.build)
+        self._outcomes = dict(resume.outcomes)
+        self._lock = threading.Lock()
+
+    @property
+    def pending(self) -> list[_Shard]:
+        """The shards this batch still has to write, in request order."""
+        return [shard for shard in self._shards if shard.index not in self._outcomes]
+
+    def write(self, shard: _Shard, factory: Callable[[int], CorpusWorker]) -> None:
+        """Write one shard: every row of every element it owns, in element order.
+
+        The rows go to a temporary beside the shard's own name and are moved into place once the
+        whole shard is written, so a shard file is always a whole shard: a batch that stops part-way
+        leaves the shards that landed readable, and one temporary that the next run overwrites.
+
+        A worker that dies is replaced rather than ending the batch. The element it died on is a
+        failure row already, so the elements after it are still recorded — on the replacement — and
+        the replacement is counted for the summary.
+        """
+        path = shard.path(self.root)
+        temporary = path.with_name(path.name + ".part")
+        counts = _empty_counts()
+        replacements = 0
+        worker: CorpusWorker | None = None
+        try:
+            with gzip.open(temporary, "wt", encoding="utf-8", compresslevel=self.compression) as handle:
+                if shard.elements:
+                    worker, retried = _start_worker(factory, shard.index)
+                    self.observe(worker)
+                    replacements += int(retried)
+                    for element_index in shard.elements:
+                        for row in _rows_for_element(self.elements[element_index], worker):
+                            handle.write(encode_row(row))
+                            _add(counts, row["record_type"])
+                        if not worker.alive():
+                            _close(worker)
+                            worker, _ = _start_worker(factory, shard.index)
+                            self.observe(worker)
+                            replacements += 1
+            os.replace(temporary, path)
+        finally:
+            _close(worker)
+            temporary.unlink(missing_ok=True)
+        self.record(shard.index, _ShardOutcome(counts, replacements))
+
+    def observe(self, worker: CorpusWorker) -> None:
+        """Hold every worker of the batch to the one game build the corpus is of.
+
+        The first worker to start says which build that is; a worker that reports another one stops
+        the batch, because rows from two builds are not one corpus and nothing downstream could
+        tell.
+        """
+        with self._lock:
+            if self._build is None:
+                self._build = copy.deepcopy(worker.build)
+            elif worker.build != self._build:
+                raise CorpusConflictError(
+                    f"the corpus at {self.root} is of game build {self._build}, this worker runs "
+                    f"{worker.build}; refusing to mix two builds in one corpus"
+                )
+
+    def record(self, index: int, outcome: _ShardOutcome) -> None:
+        """Record what one shard wrote, and rewrite the summary so the record survives a crash."""
+        with self._lock:
+            self._outcomes[index] = outcome
+            if self._build is not None:
+                _write_summary(self.root, self.summary())
+
+    def summary(self) -> dict[str, Any]:
+        """The corpus as a summary reports it: the request, the build, and every shard of it."""
+        counts = _empty_counts()
+        replacements = 0
+        shards: list[dict[str, Any]] = []
+        for shard in self._shards:
+            outcome = self._outcomes.get(shard.index)
+            if outcome is not None:
+                for record_type, count in outcome.counts.items():
+                    counts[record_type] += count
+                replacements += outcome.replacements
+            shards.append({
+                "index": shard.index,
+                "file": shard.name,
+                "elements": list(shard.elements),
+                **_tally(outcome.counts if outcome is not None else _empty_counts()),
+                "worker_replacements": outcome.replacements if outcome is not None else 0,
+                "complete": outcome is not None,
+            })
+        return {
+            "schema": CORPUS_SCHEMA,
+            "request": self._request,
+            "game_build": copy.deepcopy(self._build),
+            "workers": self.workers,
+            "compression": self.compression,
+            "elements": len(self.elements),
+            "shards": shards,
+            **_tally(counts),
+            "worker_replacements": replacements,
+            "complete": all(shard["complete"] for shard in shards),
+        }
+
+    def write_summary(self) -> dict[str, Any]:
+        """Write the corpus's summary and return it, which is what a caller reports."""
+        with self._lock:
+            summary = self.summary()
+            _write_summary(self.root, summary)
+            return summary
+
+
+def _write_summary(root: Path, summary: dict[str, Any]) -> None:
+    """Put the summary where a reader finds it, and never half of one.
+
+    The bytes go to a sibling temporary and are moved into place in one step, so a reader — and a
+    resume, after a batch was killed mid-write — sees either the previous summary or this one. The
+    temporary is not a shard name, so a reader collecting ``*.jsonl.gz`` never sees it.
+    """
+    path = root / SUMMARY_FILE
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _start_worker(factory: Callable[[int], CorpusWorker], shard: int) -> tuple[CorpusWorker, bool]:
+    """Start one shard's worker, giving a worker that cannot start a second attempt.
+
+    A worker that dies before it answers anything is replaced exactly as one that dies mid-run, so a
+    process that would not come up does not fail a batch that could have run without it; the second
+    attempt is what the caller counts as a replacement. A second failure is the host rather than the
+    batch — nothing else would work either — and is raised with the worker's own error.
+    """
+    try:
+        return factory(shard), False
+    except Exception:  # noqa: BLE001 — any failure to start is a worker that did not come up
+        return factory(shard), True
+
+
+def _close(worker: CorpusWorker | None) -> None:
+    """Shut one worker down, best effort: a worker that will not exit cleanly has not damaged a
+    corpus whose rows are already written, and its failure is not one this batch has to report."""
+    if worker is not None:
+        with contextlib.suppress(Exception):
+            worker.close()
+

@@ -96,8 +96,11 @@ with `mode=0o700` (`_pytest/tmpdir.py:139,158`, `_pytest/pathlib.py:232`) and th
 directory created that way even to the process that created it, so every `tmp_path` test fails at setup
 and session cleanup fails again. An in-repo `--basetemp` does not help — the same `mkdir` is used for it — so run
 the suite where the file policy allows it; tests that only touch files they create themselves are
-unaffected. Leftover `.tools\tmp\pytest-*` directories cannot be listed or deleted from inside the
-sandbox.
+unaffected. A directory made with a plain `mkdir` in the host's temporary area is writable and
+removable here, so a test that needs a writable root probes for exactly that and falls back to the
+gitignored `artifacts/` tree only where the probe is refused — `tests/test_scenarios.py`'s
+`_corpus_area` is that probe, and ADR-0005 is why it asks rather than assumes. Leftover
+`.tools\tmp\pytest-*` directories cannot be listed or deleted from inside the sandbox.
 
 **Godot picks the wrong .NET runtime.** Left alone, the host rolls the worker forward to the machine's
 newest runtime and Harmony reports `CoreCLR version 10.0.12 is not supported`; pinning

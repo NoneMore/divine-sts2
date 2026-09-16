@@ -27,6 +27,11 @@ a generated scenario makes — with the game, not with the generator's own helpe
   cannot reproduce;
 * the same request on a second worker produces the same rows, field for field (byte-identical
   *output* is ticket 10's, and needs the serialiser this script does not use);
+* **the batch is a corpus** (``--corpus``): the three IRONCLAD@A0 sample seeds are written through
+  ``generate_corpus`` into an artifact root with one worker per shard, read back the way the
+  repository's corpus readers read one, and shown to be the rows this script already validated
+  field by field; a second run of the same request then resumes that corpus without starting a
+  worker and without touching the shards it already wrote;
 * **no acceptance sample produced a failure row**: the oracle compares recorded scenarios, so an
   element the generator could not record fails this script with the stage and the error named,
   rather than being read as if it were a scenario. That holds in ``--snapshot`` mode too: there
@@ -53,9 +58,17 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).parent))
 from act_variant_acceptance import rolled_act_variant
 from ancient_room_acceptance import neow_offer
-from sts2_native_sim import NativeWorkerPool
+from compile_native_rollouts import shard_paths
+from sts2_native_sim import NativeWorker, NativeWorkerPool
 from sts2_native_sim.ancient import MAP_CHOICE, ancient_action, choice_actions
-from sts2_native_sim.scenarios import SCENARIO_RECORD, ScenarioRequest, canonicalize_seed, generate_rows
+from sts2_native_sim.scenarios import (
+    SCENARIO_RECORD,
+    ScenarioRequest,
+    canonicalize_seed,
+    generate_corpus,
+    generate_rows,
+    read_corpus,
+)
 from sts2_native_sim.schema import validate_observation
 
 _EVENT_COMPLETE = "event_complete"
@@ -63,6 +76,9 @@ _EVENT_COMPLETE = "event_complete"
 #: one entry for the Ancient room and one for the node.
 _ROW_ONE_POINT_TYPE = "Monster"
 _FIRST_FIGHT_FLOOR = 2
+#: The sample seeds the corpus check writes: the first character at Ascension 0, so one element per
+#: shard at the default worker count, and one of them non-canonical like the rest of the sample.
+_CORPUS_SEEDS = ("SCENAR10A01", "ANCIENT01", "GYMSCENAR10")
 
 
 @dataclass(frozen=True)
@@ -543,10 +559,90 @@ def _assert_observed(records: dict[str, list[dict[str, Any]]]) -> None:
                 raise AssertionError(f"{sample.label}: {key} moved ({value} -> {facts[key]})")
 
 
+def _corpus_request() -> ScenarioRequest:
+    """The corpus check's request: the sample's IRONCLAD@A0 seeds, one element per shard."""
+    return ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=_CORPUS_SEEDS)
+
+
+def _assert_corpus(
+    root: Path, build: dict[str, Any], records: dict[str, list[dict[str, Any]]], workers: int
+) -> dict[str, Any]:
+    """Write the sample as a corpus, read it back, and resume it without redoing a shard.
+
+    The rows the corpus holds are the rows this script has already compared with the shipped game
+    field by field, so comparing them here compares the *corpus* — the shard split, the concurrent
+    writers, the compressed files and the reader convention — rather than the record again. The
+    second half of the check is the resumability claim: the same request run again into the same
+    root starts no worker, rewrites no shard and reports the same summary.
+    """
+    request = _corpus_request()
+    started: list[int] = []
+
+    def factory(shard: int) -> NativeWorker:
+        started.append(shard)
+        return NativeWorker()
+
+    summary = generate_corpus(request, workers, root, worker_factory=factory)
+    expected = [
+        row
+        for seed in _CORPUS_SEEDS
+        for sample in _SAMPLE if sample.seed == seed
+        for row in records[sample.label]
+    ]
+
+    def check(condition: bool, message: str) -> None:
+        if not condition:
+            raise AssertionError(f"the corpus at {root}: {message}")
+
+    # One worker per shard that owns an element, and none for a shard that does not: with three
+    # elements, the first three shards own one each, however many workers the batch was given.
+    working = list(range(min(workers, len(_CORPUS_SEEDS))))
+    written = {path.name: path.read_bytes() for path in root.glob("*.jsonl.gz")}
+    shards = [f"worker-{index:0{max(2, len(str(workers - 1)))}d}.jsonl.gz" for index in range(workers)]
+    check(started == working, f"the batch started workers {started}, not one per working shard {working}")
+    check(sorted(written) == shards, f"the batch wrote {sorted(written)}, not one shard per worker")
+    check(summary["game_build"] == build, "the summary does not name the build the runs were played on")
+    check(summary["workers"] == workers, "the summary does not name the worker count")
+    check(
+        summary["request"] == {
+            "characters": ["IRONCLAD"],
+            "ascensions": [0],
+            # The request the corpus is *of*, so a non-canonical declaration is recorded resolved:
+            # `ANCIENT01` and `anc1ent01` name one corpus, and the raw form is kept per row.
+            "seeds": [canonicalize_seed(seed) for seed in _CORPUS_SEEDS],
+        },
+        f"the summary names the request as {summary['request']}",
+    )
+    check(
+        summary["rows"] == {SCENARIO_RECORD: len(expected), "failure": 0} and summary["complete"],
+        f"the summary counts {summary['rows']} for {len(expected)} recorded rows, complete={summary['complete']}",
+    )
+    check(list(read_corpus(root)) == expected, "the shards do not read back as the records this run validated")
+    # The repository's own reader for a corpus directory must collect exactly these shards.
+    check(
+        [path.name for path in shard_paths([str(root)])] == sorted(written),
+        "an existing corpus reader does not collect the shards this batch wrote",
+    )
+
+    resumed = generate_corpus(request, workers, root, worker_factory=factory)
+    check(started == working, "resuming a complete corpus started a worker")
+    check(resumed == summary, "resuming a complete corpus changed the summary")
+    check(
+        {path.name: path.read_bytes() for path in root.glob("*.jsonl.gz")} == written,
+        "resuming a complete corpus rewrote a shard",
+    )
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workers", type=int, default=3, help="native workers to spread the sample over")
     parser.add_argument("--snapshot", action="store_true", help="print the per-sample facts instead of asserting")
+    parser.add_argument(
+        "--corpus", type=Path,
+        help="also write the sample's first three seeds as a sharded corpus into this artifact root, "
+             "read it back and resume it",
+    )
     arguments = parser.parse_args()
 
     with NativeWorkerPool(arguments.workers) as pool:
@@ -590,6 +686,9 @@ def main() -> None:
         again = _rows(pool.workers[(len(_SAMPLE) + 2) % arguments.workers], first)
         if again != records[first.label]:
             raise AssertionError(f"{first.label}: the same request run twice produced different rows")
+
+        if arguments.corpus is not None:
+            _assert_corpus(arguments.corpus, build, records, arguments.workers)
 
         print(json.dumps({
             "success": True,

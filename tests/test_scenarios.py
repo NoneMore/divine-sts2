@@ -1,41 +1,55 @@
-"""Offline tests for the generated scenario record, through its public interface.
+"""Offline tests for the generated scenario record, through its public interfaces.
 
-`sts2_native_sim.scenarios.generate_rows` is the seam: a request goes in, rows come out.
-Everything asserted here is a property of the rows — including the batch behaviour, which is
-asserted through the same seam rather than by calling an expansion helper — so the
-generator's internal loop is free to change. The run it drives is a fake worker built from
-the captures in `tests/fixtures/canonical-observations.json` — recorded from the
-shipped-game-backed native worker — so the record is built from the shape a real capture has,
-and the combat block's schema check is a real one rather than a parse of a hand-written stub.
+Two seams, and every test is written at one of them. `sts2_native_sim.scenarios.generate_rows`
+turns a request into rows; `sts2_native_sim.scenarios.generate_corpus` turns a request and a
+worker count into a corpus in an artifact root. Everything asserted here is a property of what
+comes out of one of those two — including the batch behaviour, which is asserted through the same
+seams rather than by calling an expansion helper — so the generator's internal loop is free to
+change. The run it drives is a fake worker built from the captures in
+`tests/fixtures/canonical-observations.json` — recorded from the shipped-game-backed native worker
+— so the record is built from the shape a real capture has, and the combat block's schema check is
+a real one rather than a parse of a hand-written stub.
 
 A request is the product of the characters, Ascensions and run seeds it declares, plus one
 dimension the run itself supplies: the Ancient choices the seed's run offers. The fake routes
 every step by action id, every offered choice included, so an action the run never offered is
 a `KeyError` rather than a silent success — which is what makes "a seed records exactly the
 choices its run offers" and "the fixed rule picked *this* node" observations about the
-generator instead of assumptions about the double. It can be told to die on one step, which is
-how an element that cannot produce a scenario is forced: a failure is a row of the corpus, so
-it is asserted as one here rather than as an exception escaping the batch.
+generator instead of assumptions about the double. It can be told to fail one step — which is
+how an element that cannot produce a scenario is forced, a failure being a row of the corpus
+rather than an exception escaping the batch — or to die on one step, which is how a crashed
+worker is forced; it can also be told to be slow, which is how a deliberately late worker is.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import shutil
+import tempfile
+import time
+import uuid
+from collections import Counter
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Self
 
 import pytest
+from sts2_native_sim import scenarios
 from sts2_native_sim.client import NativeSimError
 from sts2_native_sim.scenarios import (
+    CORPUS_SCHEMA,
     ERROR_RUN,
     FAILURE_RECORD,
     ROW_SCHEMA,
     SCENARIO_RECORD,
+    SUMMARY_FILE,
     RunWorker,
     ScenarioRequest,
     ScenarioRequestError,
+    generate_corpus,
     generate_rows,
+    read_corpus,
     summarize_rows,
 )
 from sts2_native_sim.schema import validate_observation
@@ -90,6 +104,8 @@ class FakeRunWorker:
         leave: str = "run_map_after_ancient",
         crash_on: dict[str, BaseException] | None = None,
         crash_on_resets: dict[int, BaseException] | None = None,
+        die_on: dict[str, BaseException] | None = None,
+        delay_seconds: float = 0.0,
     ) -> None:
         self.offer = list(offer)
         #: The offered relics that also have a legal action. The event reports every one of
@@ -102,10 +118,18 @@ class FakeRunWorker:
         self.nested_choice = nested_choice
         self.row_one = row_one
         self.leave = leave
-        #: The action ids this worker dies on, and — by 1-based ordinal — the runs it dies
-        #: starting, so a failure can be forced at one step, or on one drive, of a batch.
+        #: The action ids this worker fails on, and — by 1-based ordinal — the runs it fails
+        #: starting, so a failure can be forced at one step, or on one drive, of a batch. A
+        #: failure is recorded as a row and this worker stays usable.
         self.crash_on = dict(crash_on or {})
         self.crash_on_resets = dict(crash_on_resets or {})
+        #: The action ids this worker *dies* on: it fails the same way, and then reports itself
+        #: dead, which is what a batch replaces a worker for. And the seconds it takes before
+        #: every run it starts, which is how a deliberately late worker is built.
+        self.die_on = dict(die_on or {})
+        self.delay_seconds = delay_seconds
+        self.dead = False
+        self.closed = False
         self.resets = 0
         #: The build every run this worker plays is on, as `NativeWorker.hello` reports it.
         self.build: dict[str, Any] = copy.deepcopy(CAPTURES["run_combat_action"]["game_build"])
@@ -117,6 +141,8 @@ class FakeRunWorker:
     # -- the seam the generator uses -----------------------------------------------------
 
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
         self.resets += 1
         if self.resets in self.crash_on_resets:
             raise self.crash_on_resets[self.resets]
@@ -148,9 +174,20 @@ class FakeRunWorker:
 
     def run_step(self, action_id: str) -> dict[str, Any]:
         self.steps.append(action_id)
+        if action_id in self.die_on:
+            self.dead = True
+            raise self.die_on[action_id]
         if action_id in self.crash_on:
             raise self.crash_on[action_id]
         return self._next(self._routes[action_id])
+
+    def alive(self) -> bool:
+        """Whether this worker is still usable, as a batch asks before replacing one."""
+        return not self.dead
+
+    def close(self) -> None:
+        """Shut the worker down, which a batch does once per shard it wrote."""
+        self.closed = True
 
     def __enter__(self) -> Self:
         return self
@@ -822,62 +859,441 @@ def test_the_same_element_fails_again_with_the_same_error_kind() -> None:
         assert {row["error"]["kind"] for row in first if row["record_type"] == FAILURE_RECORD} == {kind}
 
 
+# -- the sharded corpus ------------------------------------------------------------------
+
+
+class _BatchStopped(BaseException):
+    """A batch that stopped the way a killed process does: nothing catches it, nothing records it.
+
+    It is a `BaseException` on purpose. Everything the generator records as a row is an
+    `Exception`; only the death of the batch itself is outside that vocabulary.
+    """
+
+
+@pytest.fixture
+def corpus_root() -> Iterator[Path]:
+    """A writable artifact root a corpus can be written into, removed again afterwards."""
+    root = _corpus_area() / uuid.uuid4().hex
+    root.mkdir(parents=True)
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _corpus_area() -> Path:
+    """Where a corpus test may write: the host's temporary area where it allows a writable
+    directory, and the gitignored `artifacts/` tree inside the repository where it does not.
+
+    pytest cannot make this directory for the test: `tmp_path` is created with mode 0o700, and this
+    checkout's file sandbox refuses a write inside such a directory even to the process that created
+    it, which is why 22 tests in this suite error on this host. So the adaptation asks the host the
+    question itself — ADR-0005's rule for an adaptation, and the reason this probe is the fixture
+    rather than a note to the next reader — and falls back to the repository tree, which the file
+    policy does allow, only where the probe is refused.
+    """
+    area = Path(tempfile.gettempdir())
+    probe = area / f"sts2-scenario-corpus-probe-{uuid.uuid4().hex}"
+    try:
+        probe.mkdir()
+        (probe / "probe").write_text("", encoding="utf-8")
+    except OSError:
+        return Path(__file__).resolve().parents[1] / "artifacts" / "pytest-scenario-corpus"
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    return area
+
+
+def _four_element_request() -> ScenarioRequest:
+    """Two characters by two seeds, so a two-worker batch owns two elements per shard."""
+    return ScenarioRequest(characters=("IRONCLAD", "DEFECT"), ascensions=(0,), seeds=("SEED1", "SEED2"))
+
+
+def _fresh_worker(_shard: int) -> FakeRunWorker:
+    """One fresh double per shard, which is what a real worker factory builds."""
+    return FakeRunWorker()
+
+
+def _recording_worker(created: list[int], **options: Any) -> Callable[[int], FakeRunWorker]:
+    """A factory that says which shards it was asked for, and builds the same double for each."""
+    def build(shard: int) -> FakeRunWorker:
+        created.append(shard)
+        return FakeRunWorker(**options)
+    return build
+
+
+def _shard_rows(root: Path, name: str) -> list[dict[str, Any]]:
+    """One shard's rows, read back through the corpus reader a caller would use."""
+    return list(read_corpus(root / name))
+
+
+def _read_corpus(root: Path) -> list[dict[str, Any]]:
+    """Every row of a corpus, in the shard order the repository's corpus readers collect them."""
+    return list(read_corpus(root))
+
+
+def _recorded_summary(root: Path) -> dict[str, Any]:
+    """The corpus's summary, as a reader of the artifact root finds it."""
+    return json.loads((root / SUMMARY_FILE).read_text(encoding="utf-8"))
+
+
+def _wait_until(condition: Callable[[], bool], timeout: float = 30.0) -> None:
+    """Block until another shard's worker has durably recorded something, or fail the test."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if condition():
+                return
+        except (OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.005)
+    raise AssertionError("the corpus never recorded the shard this test was waiting for")
+
+
+def test_a_batch_writes_one_shard_per_worker_and_a_summary_that_names_them(corpus_root: Path) -> None:
+    summary = generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=_fresh_worker)
+
+    # Two workers, two shards, and the summary is the file a reader finds beside them.
+    assert sorted(path.name for path in corpus_root.glob("*.jsonl.gz")) == ["worker-00.jsonl.gz", "worker-01.jsonl.gz"]
+    assert _recorded_summary(corpus_root) == summary
+    assert summary["schema"] == CORPUS_SCHEMA
+    assert summary["request"] == {
+        "characters": ["IRONCLAD", "DEFECT"], "ascensions": [0], "seeds": ["SEED1", "SEED2"],
+    }
+    assert summary["game_build"] == FakeRunWorker().build
+    assert summary["workers"] == 2
+
+    # Four elements of three offered choices each, split into contiguous blocks of two elements.
+    assert summary["rows"] == {SCENARIO_RECORD: 12, FAILURE_RECORD: 0}
+    assert (summary["succeeded"], summary["failed"], summary["total"]) == (12, 0, 12)
+    assert summary["worker_replacements"] == 0
+    assert summary["complete"] is True
+    assert [
+        (shard["index"], shard["file"], shard["elements"], shard["total"], shard["worker_replacements"], shard["complete"])
+        for shard in summary["shards"]
+    ] == [
+        (0, "worker-00.jsonl.gz", [0, 1], 6, 0, True),
+        (1, "worker-01.jsonl.gz", [2, 3], 6, 0, True),
+    ]
+
+
+def test_shard_assignment_and_row_order_are_fixed_by_the_request_and_not_by_completion_timing(
+    corpus_root: Path,
+) -> None:
+    """A deliberately late worker moves no row to another shard and changes no row's position."""
+    request = _four_element_request()
+    # The second shard's worker takes its time before every run it starts, so the first shard is
+    # finished and recorded long before it.
+    def slow(shard: int) -> FakeRunWorker:
+        return FakeRunWorker(delay_seconds=0.01 if shard else 0.0)
+
+    generate_corpus(request, 2, corpus_root, worker_factory=slow)
+
+    # The elements the request expands to, in order, are the rows `generate_rows` produces; the
+    # shards are that sequence cut into the blocks the request assigns, whatever the timing.
+    expected = generate_rows(request, FakeRunWorker())
+    assert [_shard_rows(corpus_root, "worker-00.jsonl.gz"), _shard_rows(corpus_root, "worker-01.jsonl.gz")] == [
+        expected[:6], expected[6:],
+    ]
+    assert [shard["elements"] for shard in _recorded_summary(corpus_root)["shards"]] == [[0, 1], [2, 3]]
+
+
+def test_a_seed_that_fails_leaves_the_other_shards_intact_and_the_batch_completes(corpus_root: Path) -> None:
+    request = _four_element_request()
+    # The second shard's worker cannot reach the Ancient room, which is a failure of both of its
+    # elements and of nothing else.
+    def failing(shard: int) -> FakeRunWorker:
+        return FakeRunWorker(crash_on={ANCIENT_ACTION: WORKER_CRASH} if shard else {})
+
+    summary = generate_corpus(request, 2, corpus_root, worker_factory=failing)
+    assert _shard_rows(corpus_root, "worker-00.jsonl.gz") == generate_rows(request, FakeRunWorker())[:6]
+    failed = _shard_rows(corpus_root, "worker-01.jsonl.gz")
+    assert [row["record_type"] for row in failed] == [FAILURE_RECORD, FAILURE_RECORD]
+    assert {row["stage"] for row in failed} == {"ancient_room"}
+    # The batch completed, and it says how much of it is not a scenario.
+    assert summary["complete"] is True
+    assert summary["rows"] == {SCENARIO_RECORD: 6, FAILURE_RECORD: 2}
+    assert (summary["succeeded"], summary["failed"], summary["total"]) == (6, 2, 8)
+
+
+def test_a_batch_resumes_without_redoing_a_completed_shard_or_changing_its_records(corpus_root: Path) -> None:
+    request = _four_element_request()
+    created: list[int] = []
+
+    def interrupting(shard: int) -> FakeRunWorker:
+        created.append(shard)
+        if shard == 1:
+            # The batch stops once the first shard is durably recorded, so what is left behind is
+            # the state a killed process leaves: one complete shard and one that never landed.
+            _wait_until(lambda: _recorded_summary(corpus_root)["shards"][0]["complete"])
+            raise _BatchStopped
+        return FakeRunWorker()
+
+    with pytest.raises(_BatchStopped):
+        generate_corpus(request, 2, corpus_root, worker_factory=interrupting)
+
+    assert created == [0, 1]
+    assert sorted(path.name for path in corpus_root.glob("*.jsonl.gz")) == ["worker-00.jsonl.gz"]
+    assert _recorded_summary(corpus_root)["complete"] is False
+    written, recorded = (corpus_root / "worker-00.jsonl.gz").read_bytes(), _shard_rows(corpus_root, "worker-00.jsonl.gz")
+
+    created.clear()
+    summary = generate_corpus(request, 2, corpus_root, worker_factory=_recording_worker(created))
+
+    # Only the shard that never landed drew a worker, and the completed shard was left alone.
+    assert created == [1]
+    assert (corpus_root / "worker-00.jsonl.gz").read_bytes() == written
+    assert _shard_rows(corpus_root, "worker-00.jsonl.gz") == recorded
+    assert summary["complete"] is True
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+
+
+def test_a_worker_that_reports_another_game_build_stops_the_batch(corpus_root: Path) -> None:
+    """One corpus is of one build: rows from two would be indistinguishable once written."""
+    other = copy.deepcopy(FakeRunWorker().build)
+    other["version"] = "another-build"
+
+    def mismatched(shard: int) -> FakeRunWorker:
+        if shard == 0:
+            return FakeRunWorker()
+        _wait_until(lambda: _recorded_summary(corpus_root)["shards"][0]["complete"])
+        worker = FakeRunWorker()
+        worker.build = other
+        return worker
+
+    with pytest.raises(ScenarioRequestError) as raised:
+        generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=mismatched)
+
+    assert "another-build" in str(raised.value)
+    assert not (corpus_root / "worker-01.jsonl.gz").exists(), "a shard was written on the wrong build"
+    assert _recorded_summary(corpus_root)["game_build"] == FakeRunWorker().build
+
+
+def test_a_batch_whose_shards_are_all_recorded_reuses_them_without_starting_a_worker(corpus_root: Path) -> None:
+    request = _four_element_request()
+    first = generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker)
+    created: list[int] = []
+
+    again = generate_corpus(request, 2, corpus_root, worker_factory=_recording_worker(created))
+
+    assert created == [], "a batch that had nothing left to write started a worker"
+    assert again == first
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+
+
+def test_a_crashed_worker_is_replaced_and_the_replacement_is_visible_in_the_summary(corpus_root: Path) -> None:
+    request = _four_element_request()
+    built: Counter[int] = Counter()
+
+    def dying(shard: int) -> FakeRunWorker:
+        built[shard] += 1
+        # The first shard's first worker dies on its first element; its replacement is healthy.
+        if shard == 0 and built[shard] == 1:
+            return FakeRunWorker(die_on={ANCIENT_ACTION: WORKER_CRASH})
+        return FakeRunWorker()
+
+    summary = generate_corpus(request, 2, corpus_root, worker_factory=dying)
+
+    assert (built[0], built[1]) == (2, 1), "the crashed shard's worker was not replaced, or another was"
+    assert summary["worker_replacements"] == 1
+    assert [shard["worker_replacements"] for shard in summary["shards"]] == [1, 0]
+    # The element the worker died on is a failure row, and the element after it was still
+    # recorded — on the replacement, which is why the batch survived the crash.
+    rows = _shard_rows(corpus_root, "worker-00.jsonl.gz")
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD, SCENARIO_RECORD]
+    assert rows[0]["error"]["kind"] == "worker_crashed"
+    assert _shard_rows(corpus_root, "worker-01.jsonl.gz") == generate_rows(request, FakeRunWorker())[6:]
+    assert summary["complete"] is True
+
+
+def test_a_batch_with_more_workers_than_elements_still_writes_one_shard_per_worker(corpus_root: Path) -> None:
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1",))
+    created: list[int] = []
+
+    summary = generate_corpus(request, 2, corpus_root, worker_factory=_recording_worker(created))
+
+    assert sorted(path.name for path in corpus_root.glob("*.jsonl.gz")) == ["worker-00.jsonl.gz", "worker-01.jsonl.gz"]
+    assert created == [0], "a shard that owns no element started a worker"
+    assert summary["shards"][1]["elements"] == []
+    assert summary["shards"][1]["complete"] is True
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+
+
+def test_shard_names_stay_in_shard_order_past_the_second_digit(corpus_root: Path) -> None:
+    """A corpus is collected by name, so a batch of a hundred shards must not sort `worker-100` first."""
+    request = ScenarioRequest(
+        characters=("IRONCLAD",), ascensions=(0,), seeds=tuple(f"SEED{index:03d}" for index in range(101))
+    )
+
+    summary = generate_corpus(request, 101, corpus_root, worker_factory=_fresh_worker)
+
+    names = [path.name for path in sorted(corpus_root.glob("*.jsonl.gz"))]
+    assert names == [shard["file"] for shard in summary["shards"]], "name order is not shard order"
+    assert names[:2] == ["worker-000.jsonl.gz", "worker-001.jsonl.gz"] and names[-1] == "worker-100.jsonl.gz"
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+
+
+def test_the_repositorys_existing_corpus_reader_collects_the_shards_it_wrote(corpus_root: Path) -> None:
+    """`compile_native_rollouts` is the repository's reader for a corpus of shards: it must find
+    this corpus's files and parse them, which is what "an existing reader can consume it" means."""
+    from compile_native_rollouts import shard_paths
+
+    generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=_fresh_worker)
+
+    assert shard_paths([str(corpus_root)]) == [
+        corpus_root / "worker-00.jsonl.gz", corpus_root / "worker-01.jsonl.gz",
+    ]
+
+
+def test_a_worker_that_cannot_start_is_replaced_and_the_batch_completes(corpus_root: Path) -> None:
+    """A process that will not come up is a worker, not a corpus: it is replaced like a crash."""
+    created: Counter[int] = Counter()
+
+    def failing_to_start(shard: int) -> FakeRunWorker:
+        created[shard] += 1
+        if shard == 0 and created[shard] == 1:
+            raise NativeSimError("worker_crashed", "worker exited 1")
+        return FakeRunWorker()
+
+    summary = generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=failing_to_start)
+
+    assert (created[0], created[1]) == (2, 1), "a worker that would not start was not replaced"
+    assert summary["worker_replacements"] == 1
+    assert _shard_rows(corpus_root, "worker-00.jsonl.gz") == generate_rows(_four_element_request(), FakeRunWorker())[:6]
+    assert summary["complete"] is True
+
+
+def test_a_worker_that_will_not_start_twice_stops_the_batch(corpus_root: Path) -> None:
+    def never_starts(_shard: int) -> FakeRunWorker:
+        raise NativeSimError("worker_crashed", "worker exited 1")
+
+    with pytest.raises(NativeSimError):
+        generate_corpus(_four_element_request(), 1, corpus_root, worker_factory=never_starts)
+
+
+def test_a_root_holding_another_request_is_refused_before_anything_is_written(corpus_root: Path) -> None:
+    generate_corpus(ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1",)), 1, corpus_root,
+                    worker_factory=_fresh_worker)
+    before = _recorded_summary(corpus_root)
+    created: list[int] = []
+
+    with pytest.raises(ScenarioRequestError) as raised:
+        generate_corpus(ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED2",)), 1, corpus_root,
+                        worker_factory=_recording_worker(created))
+
+    assert created == [], "a refused request started a worker"
+    assert "SEED1" in str(raised.value) and "SEED2" in str(raised.value)
+    assert _recorded_summary(corpus_root) == before
+
+
+def test_resuming_with_another_worker_count_is_refused_rather_than_moving_shard_boundaries(corpus_root: Path) -> None:
+    request = _four_element_request()
+    generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker)
+    created: list[int] = []
+
+    with pytest.raises(ScenarioRequestError) as raised:
+        generate_corpus(request, 3, corpus_root, worker_factory=_recording_worker(created))
+
+    assert created == []
+    assert "2" in str(raised.value) and "3" in str(raised.value)
+
+
+def test_resuming_at_another_compression_level_is_refused(corpus_root: Path) -> None:
+    """A corpus is written one way: its shards cannot be at two gzip levels under one summary."""
+    request = _four_element_request()
+    generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker, compression=3)
+    created: list[int] = []
+
+    with pytest.raises(ScenarioRequestError) as raised:
+        generate_corpus(request, 2, corpus_root, worker_factory=_recording_worker(created), compression=6)
+
+    assert created == []
+    assert "3" in str(raised.value) and "6" in str(raised.value)
+
+
+def test_a_root_holding_a_summary_this_batch_did_not_write_is_refused(corpus_root: Path) -> None:
+    """`native_rollout_farm` writes a `summary.json` too, and adopting it would mix two corpora."""
+    (corpus_root / SUMMARY_FILE).write_text('{"workers": 6}\n', encoding="utf-8")
+    created: list[int] = []
+
+    with pytest.raises(ScenarioRequestError):
+        generate_corpus(_four_element_request(), 1, corpus_root, worker_factory=_recording_worker(created))
+
+    assert created == []
+    assert json.loads((corpus_root / SUMMARY_FILE).read_text(encoding="utf-8")) == {"workers": 6}
+
+
+def test_the_written_corpus_reads_back_through_the_repositorys_corpus_convention(corpus_root: Path) -> None:
+    request = _four_element_request()
+    summary = generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker)
+
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+    assert [shard["file"] for shard in summary["shards"]] == [
+        path.name for path in sorted(corpus_root.glob("*.jsonl.gz"))
+    ]
+
+
 # -- the console entry point -------------------------------------------------------------
 
 
-def test_the_console_entry_point_writes_every_row_of_the_batch_it_generates(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_the_console_entry_point_writes_the_batch_as_a_corpus(
+    corpus_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sts2_native_sim import cli
 
-    monkeypatch.setattr(cli, "NativeWorker", lambda **_: FakeRunWorker())
+    monkeypatch.setattr(scenarios, "NativeWorker", lambda **_: FakeRunWorker())
     with pytest.raises(SystemExit) as raised:
         cli.main([
             "scenario",
             "--character", "IRONCLAD",
             "--character", "DEFECT",
             "--ascension", "0",
+            "--workers", "2",
+            "--output-dir", str(corpus_root),
             "--seed", "ancient01",
         ])
     assert raised.value.code == 0
 
     request = ScenarioRequest(characters=("IRONCLAD", "DEFECT"), ascensions=(0,), seeds=("ancient01",))
-    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
-    assert [json.loads(line) for line in lines] == generate_rows(request, FakeRunWorker())
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+    assert "6 scenario rows, 0 failure rows" in capsys.readouterr().err
 
 
 def test_the_console_entry_point_writes_failure_rows_and_reports_the_counts(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    corpus_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sts2_native_sim import cli
 
-    monkeypatch.setattr(cli, "NativeWorker", lambda **_: FakeRunWorker(row_one="event"))
+    monkeypatch.setattr(scenarios, "NativeWorker", lambda **_: FakeRunWorker(row_one="event"))
     with pytest.raises(SystemExit) as raised:
-        cli.main(["scenario", "--character", "IRONCLAD", "--seed", "ancient01"])
+        cli.main(["scenario", "--character", "IRONCLAD", "--seed", "ancient01", "--output-dir", str(corpus_root)])
     assert raised.value.code == 0
 
     request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("ancient01",))
     captured = capsys.readouterr()
-    assert [json.loads(line) for line in captured.out.splitlines() if line.strip()] == generate_rows(
-        request, FakeRunWorker(row_one="event")
-    ), "a failure row was not written as a row"
+    assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker(row_one="event")), (
+        "a failure row was not written as a row"
+    )
     assert "0 scenario rows, 3 failure rows" in captured.err
 
 
-def test_the_console_entry_point_refuses_a_colliding_request_without_writing_anything(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_the_console_entry_point_refuses_a_colliding_request_without_starting_a_worker(
+    corpus_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sts2_native_sim import cli
 
-    written: list[Any] = []
-    monkeypatch.setattr(cli, "NativeWorker", lambda **_: FakeRunWorker())
-    monkeypatch.setattr(cli, "_write_rows", lambda rows, output: written.append(rows))
+    started: list[int] = []
+    monkeypatch.setattr(scenarios, "NativeWorker", lambda **_: started.append(1) or FakeRunWorker())
 
     with pytest.raises(SystemExit) as raised:
-        cli.main(["scenario", "--character", "IRONCLAD", "--seed", "ANCIENT01", "--seed", "anc1ent01"])
+        cli.main([
+            "scenario", "--character", "IRONCLAD", "--seed", "ANCIENT01", "--seed", "anc1ent01",
+            "--output-dir", str(corpus_root),
+        ])
 
     assert raised.value.code == 2
-    assert written == [], "a rejected request wrote output"
+    assert started == [], "a rejected request started a worker"
+    assert list(corpus_root.iterdir()) == [], "a rejected request wrote output"
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "ANCIENT01" in captured.err and "anc1ent01" in captured.err

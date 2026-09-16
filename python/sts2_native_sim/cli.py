@@ -14,7 +14,7 @@ from typing import Any
 
 from .client import NativeWorker
 from .paths import DiscoveryError, REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_game_root, find_godot, find_host_assembly
-from .scenarios import ScenarioRequest, ScenarioRequestError, generate_rows, summarize_rows
+from .scenarios import ScenarioRequest, ScenarioRequestError, generate_corpus
 
 SUPPORTED_BUILD = {
     "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
@@ -98,21 +98,7 @@ def doctor(deep: bool = False) -> dict[str, Any]:
     return checks
 
 
-def _write_rows(rows: list[dict[str, Any]], output: str) -> None:
-    """Write rows as JSONL, with each row's keys in the order the record declares them.
-
-    ``sort_keys`` is left off on purpose: a record is built in a declared key order, and that
-    order is what makes a corpus diffable, so it is written rather than re-derived.
-    """
-    payload = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
-    if output == "-":
-        sys.stdout.write(payload)
-        sys.stdout.flush()
-    else:
-        Path(output).write_text(payload, encoding="utf-8", newline="\n")
-
-
-def _report_counts(summary: dict[str, Any]) -> None:
+def _report_counts(summary: dict[str, Any], root: str) -> None:
     """Say how many rows each type the batch produced, so a corpus that lost elements is visible.
 
     A failure row is a row, so the corpus is still written and the exit status still reports that
@@ -122,9 +108,10 @@ def _report_counts(summary: dict[str, Any]) -> None:
     def count(number: int, noun: str) -> str:
         return f"{number} {noun} row" if number == 1 else f"{number} {noun} rows"
 
+    shards = "1 shard" if summary["workers"] == 1 else f"{summary['workers']} shards"
     print(
-        f"divine-sts2 scenario: {count(summary['succeeded'], 'scenario')}, "
-        f"{count(summary['failed'], 'failure')}",
+        f"divine-sts2 scenario: {shards} under {root}: "
+        f"{count(summary['succeeded'], 'scenario')}, {count(summary['failed'], 'failure')}",
         file=sys.stderr,
     )
 
@@ -150,7 +137,18 @@ def main(argv: list[str] | None = None) -> None:
         "--seed", action="append", required=True, metavar="SEED",
         help="a run seed, in any form the shipped game accepts; repeat for more than one",
     )
-    scenario_parser.add_argument("--output", default="-", help="where to write the JSONL rows; '-' writes to stdout")
+    scenario_parser.add_argument(
+        "--workers", type=int, default=1, metavar="N",
+        help="native workers to spread the batch over; each writes one shard (default 1)",
+    )
+    scenario_parser.add_argument(
+        "--output-dir", required=True, metavar="DIR",
+        help="artifact root for the corpus; a root already holding this request is resumed",
+    )
+    scenario_parser.add_argument(
+        "--compression", type=int, default=3, choices=range(10),
+        help="gzip compression level of the shards (default 3)",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
@@ -164,16 +162,23 @@ def main(argv: list[str] | None = None) -> None:
             ascensions=tuple(args.ascension or (0,)),
             seeds=tuple(args.seed),
         )
-        with NativeWorker() as worker:
-            try:
-                rows = generate_rows(request, worker)
-            except ScenarioRequestError as error:
-                # An input error is not a run failure: say what is wrong with the request and
-                # write nothing, rather than half a corpus.
-                print(f"divine-sts2 scenario: {error}", file=sys.stderr)
-                raise SystemExit(2) from error
-        _write_rows(rows, args.output)
-        _report_counts(summarize_rows(rows))
+        try:
+            # No worker factory is passed, so the batch builds its own workers — one per shard, and
+            # only for a shard it still has to write. The request and the artifact root are checked,
+            # and a corpus already there is read, before the first of them is built, so a request
+            # this batch cannot run says so on a host with no game installed.
+            summary = generate_corpus(
+                request,
+                args.workers,
+                args.output_dir,
+                compression=args.compression,
+            )
+        except ScenarioRequestError as error:
+            # An input error is not a run failure: say what is wrong and write nothing, rather
+            # than half a corpus.
+            print(f"divine-sts2 scenario: {error}", file=sys.stderr)
+            raise SystemExit(2) from error
+        _report_counts(summary, args.output_dir)
         raise SystemExit(0)
 
 

@@ -47,3 +47,11 @@ _Avoid_: Sample, fixture, seed dump
 **Failure row**:
 A row of a generated corpus standing in for one element the generator could not turn into a scenario: the stage the run stopped at, an error kind and message, and the recipe resolved so far — never a combat initial state.
 _Avoid_: Error record, dropped seed, skipped element
+
+**Corpus shard**:
+One worker's contiguous block of a generated corpus's expanded request, written as a single compressed JSONL file beside its siblings under the corpus's artifact root. Which elements a shard holds follows from the request and the worker count alone, never from which worker finished first.
+_Avoid_: Chunk, partition, worker file
+
+**Corpus summary**:
+The file beside a generated corpus's shards that names the request, the game build, the worker count, the shards and the rows by type. It is also what a resumed batch reads to learn which shards are already written.
+_Avoid_: Index file, metadata, sidecar

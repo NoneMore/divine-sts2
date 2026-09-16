@@ -303,6 +303,15 @@ class NativeWorker:
         state = self.observe()
         return {"reset": copy.deepcopy(self._reset_state), "reset_request": copy.deepcopy(self._reset_request), "history": list(self._history), "expected_hash": state["state_hash"]}
 
+    def alive(self) -> bool:
+        """Whether this worker's process is still running, so a caller can replace a dead one.
+
+        A worker whose process has exited answers nothing but ``worker_crashed``, and the caller that
+        owns the process is the one that can build another; this is that question, asked of the
+        worker rather than of its ``process``.
+        """
+        return self.process.poll() is None
+
     @property
     def memory_bytes(self) -> int:
         try:
