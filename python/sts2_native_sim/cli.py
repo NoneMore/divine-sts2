@@ -14,7 +14,7 @@ from typing import Any
 
 from .client import NativeWorker
 from .paths import DiscoveryError, REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_game_root, find_godot, find_host_assembly
-from .scenarios import ScenarioRequest, generate_rows
+from .scenarios import ScenarioRequest, ScenarioRequestError, generate_rows
 
 SUPPORTED_BUILD = {
     "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
@@ -119,12 +119,21 @@ def main(argv: list[str] | None = None) -> None:
     doctor_parser.add_argument("--deep", action="store_true", help="hash game files and start a native worker")
     doctor_parser.add_argument("--json", action="store_true", help="emit compact JSON")
     scenario_parser = subcommands.add_parser(
-        "scenario", help="record the act-1 opening scenario a character, Ascension and run seed produce"
+        "scenario", help="record the act-1 opening scenarios a character, Ascension and seed set produce"
     )
-    scenario_parser.add_argument("--character", required=True, help="the character to start the run as, e.g. IRONCLAD")
-    scenario_parser.add_argument("--ascension", type=int, default=0, help="the Ascension to start the run at")
-    scenario_parser.add_argument("--seed", required=True, help="the run seed, in any form the shipped game accepts")
-    scenario_parser.add_argument("--output", default="-", help="where to write the JSONL row; '-' writes to stdout")
+    scenario_parser.add_argument(
+        "--character", action="append", required=True, metavar="CHARACTER",
+        help="a character to start runs as, e.g. IRONCLAD; repeat for more than one",
+    )
+    scenario_parser.add_argument(
+        "--ascension", action="append", type=int, metavar="N",
+        help="an Ascension to start runs at; repeat for more than one (default 0)",
+    )
+    scenario_parser.add_argument(
+        "--seed", action="append", required=True, metavar="SEED",
+        help="a run seed, in any form the shipped game accepts; repeat for more than one",
+    )
+    scenario_parser.add_argument("--output", default="-", help="where to write the JSONL rows; '-' writes to stdout")
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
@@ -133,9 +142,19 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0 if report["ok"] else 1)
 
     if args.command == "scenario":
-        request = ScenarioRequest(character=args.character, ascension=args.ascension, seed=args.seed)
+        request = ScenarioRequest(
+            characters=tuple(args.character),
+            ascensions=tuple(args.ascension or (0,)),
+            seeds=tuple(args.seed),
+        )
         with NativeWorker() as worker:
-            rows = generate_rows(request, worker)
+            try:
+                rows = generate_rows(request, worker)
+            except ScenarioRequestError as error:
+                # An input error is not a run failure: say what is wrong with the request and
+                # write nothing, rather than half a corpus.
+                print(f"divine-sts2 scenario: {error}", file=sys.stderr)
+                raise SystemExit(2) from error
         _write_rows(rows, args.output)
         raise SystemExit(0)
 

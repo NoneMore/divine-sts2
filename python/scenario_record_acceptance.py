@@ -10,8 +10,10 @@ a generated scenario makes — with the game, not with the generator's own helpe
 * the Act variant on the record is the one an independent port of the shipped act roll
   produces for that canonical seed;
 * the offered Ancient options are the ones an independent port of ``Neow``'s
-  ``GenerateInitialOptions`` produces, *in the order the run offered them*, and the choice the
-  record took is the first of them;
+  ``GenerateInitialOptions`` produces, *in the order the run offered them*;
+* **every Ancient choice the run offers is recorded**: one row per offered option, in offer
+  order, each row taking the option at its own index and carrying the same offer and the same
+  run identity — so no opening is invented and none is skipped;
 * the row-1 node is on row 1 and typed ``Monster``, and the record names its coordinate;
 * the combat initial state is a canonical observation, validates against the published
   schema, and carries the enemies with their generated HP, every ordered pile — the hand and
@@ -23,12 +25,13 @@ a generated scenario makes — with the game, not with the generator's own helpe
   "paste the seed into the shipped game's custom run screen and the same fight is there": it
   shows the record carries enough to reproduce the situation and nothing that a fresh run
   cannot reproduce;
-* the same request on a second worker produces a row that is equal to the first, field for field
-  (byte-identical *output* is ticket 10's, and needs the serialiser this script does not use).
+* the same request on a second worker produces the same rows, field for field (byte-identical
+  *output* is ticket 10's, and needs the serialiser this script does not use).
 
 The nested choice is resolved by a fixed rule (the first legal action the prompt reports), so
-the sample says which nested-prompt kinds it actually covered: a sample that resolved no
-nested choice would leave the rule unobserved on this build.
+the sample says which nested-prompt kinds it actually covered: the recorded table carries the
+kinds each Ancient choice's row resolved, and a kind that stops being covered is a failure
+rather than a silent narrowing.
 
 Requires the shipped game and a Godot-hosted worker (the repository's ``*_acceptance.py``
 convention). ``--snapshot`` prints the per-sample facts instead of asserting them, which is
@@ -89,7 +92,8 @@ _SAMPLE = (
 # record answered, the node it travelled to, the encounter and the fight's state hash. The
 # table pins the sample's coverage — three prompt-free records and three that resolved a
 # nested choice, `card_choice` and `custom_reward_choice` among them — so a change in either
-# is visible rather than silent.
+# is visible rather than silent. Each entry is the row for the *first* offered choice; the
+# other choices have a row of their own, and `_assert_enumeration` covers those.
 _OBSERVED_BUILD = "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52"
 _OBSERVED: dict[str, dict[str, Any]] = {
     "IRONCLAD@A0/SCENAR10A01": {
@@ -143,6 +147,134 @@ _OBSERVED: dict[str, dict[str, Any]] = {
     },
 }
 
+# What the batch recorded for each sample, one entry per Ancient choice the run offered, in
+# offer order: the choice taken, the nested-prompt kinds that choice's row resolved, the node it
+# travelled to, and the fight's state hash. This is the enumeration the generator promises —
+# every offered choice, and nothing but offered choices — pinned against the game. Maintained
+# with `--snapshot`, whose `choices` list is this literal.
+_OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
+    "IRONCLAD@A0/SCENAR10A01": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "ARCANE_SCROLL"},
+            "nested_kinds": [],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "8CB1BA64112F0F3C3FCC23CFAA2B3A8A763EB1906B5BA727A8E898BCB0EC467C",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "LAVA_ROCK"},
+            "nested_kinds": [],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "B131A6AE2F6F20E1AE07DAB003262B14EF242A327E6479CEFF18460F1546CA65",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
+            "nested_kinds": [],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "3F6B437EE520C61A02F4490D7AF07BA829B389162AB01B291220F53859150514",
+        },
+    ],
+    "IRONCLAD@A0/ANCIENT01": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "92807FCE02322DEB374757D3089819469491647BD61436CEBB6338D7D02935B4",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "GOLDEN_PEARL"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "24C84A8D6149F61B3404ED9A7BD2751482E55642D08CDEEEF95F2C9B08CF63AF",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "PRECARIOUS_SHEARS"},
+            "nested_kinds": ["card_choice"],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "39728C896A5AA22C2ACBA91D5F3C350F2AA82C3F1F08AE06B5A5C3A003BCF452",
+        },
+    ],
+    "IRONCLAD@A0/GYMSCENAR10": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "53ACDAB2886CC07E57CB14AC5D26FB2CF1876AB6E51AA94B4A0805150D8933C3",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "SCROLL_BOXES"},
+            "nested_kinds": ["option_choice"],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "C0A5E68ECE7056DEF167A4351172AAFFE07884F18BFC3D4CAC3708C41C4BA3A6",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "76FDECEFE556B89D3A853C8B7F201D854E4D720A30198C5D7B9783EA5ADCA46C",
+        },
+    ],
+    "IRONCLAD@A2/ANCIENT03": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "NEW_LEAF"},
+            "nested_kinds": ["card_choice"],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "D2193DDC0B599467E3906395BD51673E03C61F8FB9D9F6DEF17092C3A47C90E1",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "NEOWS_TORMENT"},
+            "nested_kinds": [],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "539C0AFC8B87CE0B593C67023C8A0F4D033B357C531639342EBFB10E36DC28E2",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "NEOWS_BONES"},
+            "nested_kinds": ["custom_reward_choice", "card_choice", "custom_reward_choice"],
+            "node": {"col": 1, "row": 1, "point_type": "Monster"},
+            "state_hash": "3198B7540CDE7FD461694231F3A0490E3C0BAD3EA0C1F90223A8B7300940D5FC",
+        },
+    ],
+    "DEFECT@A0/TRACERBULLET": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "PRECISE_SCISSORS"},
+            "nested_kinds": ["card_choice"],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "DAAB57C1BEE778896E9598164EF7FAB3A1BE7BF992527E66BA956FBE4BDDA69E",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "BOOMING_CONCH"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "370BD043FB3BE1CA3F989CBFE2A31175D05C887C5F6CAE8E14044B12C29D0FF0",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "SILKEN_TRESS"},
+            "nested_kinds": [],
+            "node": {"col": 0, "row": 1, "point_type": "Monster"},
+            "state_hash": "71A681A9F718461170F90B4EC7E938B3910463155FA381A749FFFE5A1CB33958",
+        },
+    ],
+    "DEFECT@A0/ANCIENT06": [
+        {
+            "ancient_choice": {"option_index": 0, "relic_model_id": "LOST_COFFER"},
+            "nested_kinds": ["custom_reward_choice", "custom_reward_choice"],
+            "node": {"col": 2, "row": 1, "point_type": "Monster"},
+            "state_hash": "923DDDF8E11C99D3CED8B2CCA159A3950ECA52A9EDEBBB08DCECE251378F5416",
+        },
+        {
+            "ancient_choice": {"option_index": 1, "relic_model_id": "NEOWS_TALISMAN"},
+            "nested_kinds": [],
+            "node": {"col": 2, "row": 1, "point_type": "Monster"},
+            "state_hash": "50D432CF8CB4CE50291AE8D0D26962C0BF7612BA4ECA1DA1FA479356E6C7E263",
+        },
+        {
+            "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
+            "nested_kinds": [],
+            "node": {"col": 2, "row": 1, "point_type": "Monster"},
+            "state_hash": "09A0BB5AC6E1780BE003A97FA1A44C01F039D30B5040B35D93A913DC790B5F47",
+        },
+    ],
+}
+
 
 def _run_state(sample: Sample, seed: str) -> dict[str, Any]:
     """The run-start request for one sample: the fully unlocked shipped starting loadout."""
@@ -161,12 +293,17 @@ def _run_state(sample: Sample, seed: str) -> dict[str, Any]:
     }
 
 
-def _record(worker: Any, sample: Sample) -> dict[str, Any]:
-    request = ScenarioRequest(character=sample.character, ascension=sample.ascension, seed=sample.seed)
-    rows = generate_rows(request, worker)
-    if len(rows) != 1:
-        raise AssertionError(f"{sample.label}: one request produced {len(rows)} rows")
-    return rows[0]
+def _rows(worker: Any, sample: Sample) -> list[dict[str, Any]]:
+    """Every row one acceptance sample records: one per Ancient choice its run offers.
+
+    The sample declares one character, one Ascension and one seed. The Ancient choices are the
+    fourth dimension of the request and the run supplies them, so this one call is the sample's
+    whole batch.
+    """
+    request = ScenarioRequest(
+        characters=(sample.character,), ascensions=(sample.ascension,), seeds=(sample.seed,)
+    )
+    return generate_rows(request, worker)
 
 
 def _replay(worker: Any, sample: Sample, row: dict[str, Any]) -> str:
@@ -228,7 +365,7 @@ def _replay(worker: Any, sample: Sample, row: dict[str, Any]) -> str:
     return worker.run_step(action["action_id"])["state_hash"]
 
 
-def _facts(sample: Sample, row: dict[str, Any]) -> dict[str, Any]:
+def _facts(row: dict[str, Any]) -> dict[str, Any]:
     recipe = row["recipe"]
     return {
         "canonical_seed": recipe["seed"],
@@ -243,7 +380,20 @@ def _facts(sample: Sample, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _assert_record(worker: Any, sample: Sample, row: dict[str, Any], build: dict[str, Any]) -> None:
+def _choice_facts(row: dict[str, Any]) -> dict[str, Any]:
+    """What one element of a sample's batch recorded: the choice, and what taking it produced."""
+    recipe = row["recipe"]
+    return {
+        "ancient_choice": recipe["ancient_choice"],
+        "nested_kinds": [nested["kind"] for nested in recipe["nested_choices"]],
+        "node": recipe["node"],
+        "state_hash": row["state_hash"],
+    }
+
+
+def _assert_record(
+    worker: Any, sample: Sample, row: dict[str, Any], offered_index: int, build: dict[str, Any]
+) -> None:
     """Every claim one row makes about the run that produced it."""
     recipe, state = row["recipe"], row["combat_initial_state"]
     canonical = canonicalize_seed(sample.seed)
@@ -275,8 +425,8 @@ def _assert_record(worker: Any, sample: Sample, row: dict[str, Any], build: dict
     check(offered == expected_offer, f"the record offers {offered}, the ported offer is {expected_offer}")
     check([option["option_index"] for option in recipe["ancient_options"]] == list(range(len(offered))),
           "the offered options do not report their offer order")
-    check(recipe["ancient_choice"]["option_index"] == 0 and recipe["ancient_choice"]["relic_model_id"] == offered[0],
-          f"the choice taken is {recipe['ancient_choice']}, not the first offered option")
+    check(recipe["ancient_choice"] == recipe["ancient_options"][offered_index],
+          f"the choice taken is {recipe['ancient_choice']}, not the option at index {offered_index}")
     for nested in recipe["nested_choices"]:
         check(nested["selected_index"] == 0,
               f"a {nested['kind']} was resolved by index {nested['selected_index']}, not the first legal action")
@@ -313,22 +463,56 @@ def _assert_record(worker: Any, sample: Sample, row: dict[str, Any], build: dict
     check(replayed == row["state_hash"], f"the replay reached {replayed}, the record says {row['state_hash']}")
 
 
-def _assert_coverage(records: dict[str, dict[str, Any]]) -> None:
-    """The sample has to say which nested-prompt kinds it actually covered."""
-    kinds = sorted({nested["kind"] for row in records.values() for nested in row["recipe"]["nested_choices"]})
-    if not kinds:
-        raise AssertionError("no sample resolved a nested choice, so the nested-choice rule is unobserved here")
-    recorded = sorted({kind for facts in _OBSERVED.values() for kind in facts["nested_kinds"]})
-    if kinds != recorded:
-        raise AssertionError(f"the sample covered {kinds}, the recorded coverage is {recorded}")
+def _assert_enumeration(sample: Sample, rows: list[dict[str, Any]]) -> None:
+    """Every Ancient choice the run offers has a row, and no row invents a choice.
+
+    The rows' choices, in order, have to be exactly the offer the run reports: choice *k*'s row
+    takes offered option *k*. Every row of one sample shares the run's identity — character,
+    Ascension, seed, Act variant, the offer and the node — so the choice is the dimension the rows
+    differ by; what a choice resolved is that row's own record, not a second dimension.
+    """
+    offered = rows[0]["recipe"]["ancient_options"]
+    choices = [row["recipe"]["ancient_choice"] for row in rows]
+    if len(rows) != len(offered):
+        raise AssertionError(f"{sample.label}: the run offers {len(offered)} choices, the batch recorded {len(rows)} rows")
+    if choices != offered:
+        raise AssertionError(f"{sample.label}: the rows took {choices}, the run offers {offered}")
+    for key in ("character", "ascension", "seed", "act_variant", "ancient_options", "node"):
+        values = {json.dumps(row["recipe"][key], sort_keys=True) for row in rows}
+        if len(values) != 1:
+            raise AssertionError(f"{sample.label}: the rows of one run disagree about {key}: {sorted(values)}")
 
 
-def _assert_observed(records: dict[str, dict[str, Any]]) -> None:
-    """The recorded table is a statement about one build; fail closed when it disagrees."""
+def _assert_observed_choices(records: dict[str, list[dict[str, Any]]]) -> None:
+    """The recorded batch is a statement about one build; fail closed when it disagrees.
+
+    One entry per Ancient choice the run offered, in offer order — so this pins the enumeration
+    the generator promises (every offered choice, and nothing but offered choices) together with
+    what taking each choice produced, including the nested-prompt kinds each row resolved. A
+    nested kind that stops being covered is a failure rather than a silent narrowing.
+    """
+    if not _OBSERVED_CHOICES:
+        raise AssertionError("the recorded choice table is empty; record it with --snapshot")
+    for sample in _SAMPLE:
+        facts = [_choice_facts(row) for row in records[sample.label]]
+        recorded = _OBSERVED_CHOICES.get(sample.label)
+        if recorded is None:
+            raise AssertionError(f"{sample.label}: the recorded choice table has no entry for this sample")
+        if facts != recorded:
+            raise AssertionError(f"{sample.label}: the batch's choices moved\nrecorded: {recorded}\nnow: {facts}")
+
+
+def _assert_observed(records: dict[str, list[dict[str, Any]]]) -> None:
+    """The recorded table is a statement about one build; fail closed when it disagrees.
+
+    Each entry pins the row for the sample's first offered choice; the rest of the batch has no
+    recorded counterpart of its own, and :func:`_assert_enumeration` and :func:`_assert_record`
+    hold those to the run itself.
+    """
     if not _OBSERVED:
         raise AssertionError("the observed table is empty; record it with --snapshot before trusting this run")
     for sample in _SAMPLE:
-        facts, recorded = _facts(sample, records[sample.label]), _OBSERVED.get(sample.label)
+        facts, recorded = _facts(records[sample.label][0]), _OBSERVED.get(sample.label)
         if recorded is None:
             raise AssertionError(f"{sample.label}: the observed table has no entry for this sample")
         for key, value in recorded.items():
@@ -344,12 +528,18 @@ def main() -> None:
 
     with NativeWorkerPool(arguments.workers) as pool:
         records = {
-            sample.label: _record(pool.workers[index % arguments.workers], sample)
+            sample.label: _rows(pool.workers[index % arguments.workers], sample)
             for index, sample in enumerate(_SAMPLE)
         }
         if arguments.snapshot:
             print(json.dumps(
-                {sample.label: _facts(sample, records[sample.label]) for sample in _SAMPLE},
+                {
+                    sample.label: {
+                        "first_choice": _facts(records[sample.label][0]),
+                        "choices": [_choice_facts(row) for row in records[sample.label]],
+                    }
+                    for sample in _SAMPLE
+                },
                 indent=2, sort_keys=True,
             ))
             return
@@ -361,25 +551,32 @@ def main() -> None:
                 f"{build['assembly_sha256']}; re-record it with --snapshot"
             )
         _assert_observed(records)
-        _assert_coverage(records)
+        _assert_observed_choices(records)
         for index, sample in enumerate(_SAMPLE):
-            _assert_record(pool.workers[index % arguments.workers], sample, records[sample.label], build)
+            rows = records[sample.label]
+            _assert_enumeration(sample, rows)
+            for offered_index, row in enumerate(rows):
+                _assert_record(pool.workers[index % arguments.workers], sample, row, offered_index, build)
 
-        # Determinism: the same request on another worker produces the same row.
+        # Determinism: the same request on another worker produces the same rows.
         first, second = _SAMPLE[0], _SAMPLE[1]
-        repeated = _record(pool.workers[(len(_SAMPLE) + 1) % arguments.workers], second)
+        repeated = _rows(pool.workers[(len(_SAMPLE) + 1) % arguments.workers], second)
         if repeated != records[second.label]:
-            raise AssertionError(f"{second.label}: a second worker produced a different row")
-        again = _record(pool.workers[(len(_SAMPLE) + 2) % arguments.workers], first)
+            raise AssertionError(f"{second.label}: a second worker produced different rows")
+        again = _rows(pool.workers[(len(_SAMPLE) + 2) % arguments.workers], first)
         if again != records[first.label]:
-            raise AssertionError(f"{first.label}: the same request run twice produced a different row")
+            raise AssertionError(f"{first.label}: the same request run twice produced different rows")
 
         print(json.dumps({
             "success": True,
             "game_build": build,
-            "samples": [_facts(sample, records[sample.label]) for sample in _SAMPLE],
+            "samples": [_facts(records[sample.label][0]) for sample in _SAMPLE],
+            "rows_per_sample": {sample.label: len(records[sample.label]) for sample in _SAMPLE},
             "nested_kinds_covered": sorted({
-                nested["kind"] for row in records.values() for nested in row["recipe"]["nested_choices"]
+                nested["kind"]
+                for rows in records.values()
+                for row in rows
+                for nested in row["recipe"]["nested_choices"]
             }),
             "repeated": [first.label, second.label],
         }, indent=2))
