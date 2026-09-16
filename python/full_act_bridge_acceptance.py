@@ -76,8 +76,8 @@ def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]
             # When attacking, prioritize attacks targeting lowest HP enemy
             attacks = [a for a in plays if ":target:" in a.get("action_id", "")]
             if attacks:
-                enemies = obs.get("combat", {}).get("enemies", [])
-                alive_enemies = [e for e in enemies if e.get("is_alive", True) and e.get("hp", 0) > 0]
+                enemies = [c for c in obs.get("combat", {}).get("creatures", []) if c.get("side") == "Enemy"]
+                alive_enemies = [e for e in enemies if e.get("alive", True) and e.get("hp", 0) > 0]
                 if alive_enemies:
                     lowest_hp_enemy = min(alive_enemies, key=lambda e: e.get("hp", 999))
                     target_id = lowest_hp_enemy.get("combat_id")

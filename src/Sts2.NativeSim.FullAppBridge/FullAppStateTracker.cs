@@ -11,13 +11,15 @@ using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Events;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.MonsterMoves.Intents;
+using MegaCrit.Sts2.Core.MonsterMoves.MonsterMoveStateMachine;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
 public static class FullAppStateTracker
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
+    private static readonly JsonSerializerOptions JsonOptions = BridgeJson.Options;
 
     public static (ObservationDto Observation, List<LegalActionDto> LegalActions) CreateStateSnapshot(
         string phase,
@@ -79,13 +81,37 @@ public static class FullAppStateTracker
 
         if (phase == "combat" && combatManager is not null && combatManager.IsInProgress && player is not null)
         {
+            ICombatState? combatState = combatManager.DebugOnlyGetState();
+
             var combatObs = new CombatObservationDto
             {
+                // The encounter's own id: the identity `catalog` lists, the trace exporter reports
+                // and the simulator's `combat.encounter` carries. A fight that cannot name itself
+                // reports none, the way the simulator reports none, rather than an empty string.
+                Encounter = combatState?.Encounter?.Id.Entry,
                 Turn = player.PlayerCombatState?.TurnNumber ?? 1,
+                // The granular turn phase, in the shipped enum's own words — the same word the
+                // simulator reports on `combat.phase`. `python/sts2_native_sim/decision_vocabulary.py`
+                // is the one place that says which decision kind each word is a boundary for.
+                Phase = player.PlayerCombatState?.Phase.ToString() ?? "",
+                Energy = player.PlayerCombatState?.Energy ?? 0,
+                MaxEnergy = player.PlayerCombatState?.MaxEnergy ?? 0,
+                Stars = player.PlayerCombatState?.Stars ?? 0,
                 DrawPileCount = PileType.Draw.GetPile(player).Cards.Count,
                 DiscardPileCount = PileType.Discard.GetPile(player).Cards.Count,
                 ExhaustPileCount = PileType.Exhaust.GetPile(player).Cards.Count,
             };
+
+            // Every creature, the player's own row included, in the native order the simulator and
+            // the trace exporter both report — the player is a creature with a side, not only a
+            // set of flattened scalars.
+            if (combatState is not null)
+            {
+                foreach (Creature creature in combatState.Creatures)
+                {
+                    combatObs.Creatures.Add(CreatureObservation(creature));
+                }
+            }
 
             var handCards = PileType.Hand.GetPile(player).Cards;
             for (int i = 0; i < handCards.Count; i++)
@@ -128,29 +154,6 @@ public static class FullAppStateTracker
                             Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
                         });
                     }
-                }
-            }
-
-            ICombatState? combatState = combatManager.DebugOnlyGetState();
-            if (combatState is not null)
-            {
-                foreach (var enemy in combatState.Enemies.OrderBy(e => e.CombatId))
-                {
-                    var enemyDto = new EnemyObservationDto
-                    {
-                        CombatId = enemy.CombatId ?? 0,
-                        ModelId = enemy.ModelId.Entry,
-                        Hp = enemy.CurrentHp,
-                        MaxHp = enemy.MaxHp,
-                        Block = enemy.Block,
-                        IsAlive = enemy.IsAlive,
-                        Intent = enemy.Monster?.NextMove.Id ?? "",
-                    };
-                    foreach (var p in enemy.Powers)
-                    {
-                        enemyDto.Powers[p.Id.Entry] = p.Amount;
-                    }
-                    combatObs.Enemies.Add(enemyDto);
                 }
             }
 
@@ -444,6 +447,56 @@ public static class FullAppStateTracker
 
         obs.StateHash = ComputeHash(obs);
         return (obs, legalActions);
+    }
+
+    /// <summary>
+    /// One creature row, worded exactly as the simulator words the same row in its own per-combat
+    /// projection, so the two compare field by field. Every member read here is a public member of
+    /// the game assembly this mod already references; nothing is reached by reflection, and nothing
+    /// reaches into the simulator's own assembly.
+    /// </summary>
+    private static CreatureObservationDto CreatureObservation(Creature creature)
+    {
+        var row = new CreatureObservationDto
+        {
+            CombatId = creature.CombatId,
+            ModelId = creature.ModelId.Entry,
+            Side = creature.Side.ToString(),
+            Hp = creature.CurrentHp,
+            MaxHp = creature.MaxHp,
+            Block = creature.Block,
+            Alive = creature.IsAlive,
+        };
+
+        MoveState? move = creature.Monster?.NextMove;
+        if (move is not null)
+        {
+            var nextMove = new NextMoveObservationDto { Id = move.Id };
+            foreach (AbstractIntent intent in move.Intents)
+            {
+                var intentRow = new IntentObservationDto
+                {
+                    IntentType = intent.IntentType.ToString(),
+                    Implementation = intent.GetType().Name,
+                };
+                if (intent is AttackIntent attack)
+                {
+                    // The damage the shipped hook chain resolves the intent to, which is what the
+                    // game displays. The simulator calls the very same method on the same intent.
+                    intentRow.Damage = attack.GetSingleDamage(creature.CombatState?.Allies ?? [], creature);
+                    intentRow.Repeats = attack.Repeats;
+                }
+                nextMove.Intents.Add(intentRow);
+            }
+            row.NextMove = nextMove;
+        }
+
+        foreach (PowerModel power in creature.Powers)
+        {
+            row.Powers.Add(new PowerObservationDto { ModelId = power.Id.Entry, Amount = power.Amount });
+        }
+
+        return row;
     }
 
     private static string ComputeHash(ObservationDto obs)

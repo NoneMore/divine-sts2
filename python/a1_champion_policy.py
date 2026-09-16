@@ -165,7 +165,7 @@ class A1ChampionController:
             return "end_turn"
 
         combat_obs = obs.get("combat", {})
-        enemies = [e for e in combat_obs.get("enemies", []) if e.get("is_alive", True)]
+        enemies = [c for c in combat_obs.get("creatures", []) if c.get("side") == "Enemy" and c.get("alive", True)]
 
         # 1. Lethal Detection
         attacks = [p for p in plays if ":target:" in p.get("action_id", "") or "Attack" in p.get("description", "")]
@@ -179,8 +179,13 @@ class A1ChampionController:
                         return attack["action_id"]
 
         # 2. Incoming Damage Threat Mitigation
-        total_incoming_threat = sum(e.get("damage", 6) for e in enemies if "Attack" in e.get("intent", "") or "Strike" in e.get("intent", ""))
-        player_block = combat_obs.get("player_block", 0)
+        total_incoming_threat = sum(
+            intent.get("damage", 0) * max(1, int(intent.get("repeats", 1)))
+            for enemy in enemies
+            for intent in (enemy.get("next_move") or {}).get("intents", [])
+            if intent.get("intent_type") == "Attack"
+        )
+        player_block = obs.get("player_block", 0)
         defends = [p for p in plays if any(k in p.get("description", "").upper() for k in ["DEFEND", "BLOCK", "SHRUG", "SURVIVOR", "GLACIER", "HALO", "KINETIC"])]
 
         # If threatened by incoming lethal or heavy attack and need block

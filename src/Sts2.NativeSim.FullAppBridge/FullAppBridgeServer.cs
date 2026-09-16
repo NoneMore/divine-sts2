@@ -96,7 +96,7 @@ public static class FullAppBridgeServer
                     Id = request.Id,
                     Result = result,
                 };
-                string responseJson = JsonSerializer.Serialize(response);
+                string responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
                 await writer.WriteLineAsync(responseJson);
             }
             catch (Exception ex)
@@ -106,7 +106,7 @@ public static class FullAppBridgeServer
                     Id = 0,
                     Error = ex.Message,
                 };
-                await writer.WriteLineAsync(JsonSerializer.Serialize(errorResponse));
+                await writer.WriteLineAsync(JsonSerializer.Serialize(errorResponse, BridgeJson.Options));
             }
         }
     }
