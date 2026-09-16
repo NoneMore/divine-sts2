@@ -7,11 +7,19 @@ This script drives one real ``SlayTheSpire2.exe`` headless through the act-1 Anc
 row-1 fight, and checks the combat block field by field against the shape the simulator and the
 trace exporter already report — the encounter, the granular turn phase, energy and max energy and
 stars inside the combat block, every creature with its side, its complete ordered intent list and
-its powers, and the player's own creature row.
+its powers, the player's own creature row, and the fight's five ordered piles of cards with each
+card's identity, model, type, target, cost, cost-x flag, upgrades, enchantment and native state.
 
 The turn phase is checked through ``sts2_native_sim.decision_vocabulary``, which is the one place
 that says which simulator decision kind a bridge phase word stands for, so a phase word the
 mapping does not know fails here rather than in the field-by-field parity run.
+
+Two things this run cannot observe by itself, and says so rather than implying otherwise: whether
+the bridge's hand cost agrees with the repository's other projections of the same card (there is no
+second projection of a hand card on the bridge, so that agreement is the field-by-field parity
+run's to check, and the accessor is pinned offline in ``tests/test_bridge_observation_shape.py``),
+and whether an upgrade count is real (a starting deck is unupgraded, so the field is observed
+present and typed here and its accessor is pinned offline).
 
 Requires the shipped game (the repository's ``*_acceptance.py`` convention). The sandbox is
 hard-linked beside the install, so it has to sit on the install's volume.
@@ -34,10 +42,35 @@ CHARACTER = "IRONCLAD"
 ASCENSION = 0
 
 #: The fields a fight has to name for the parity contract to be comparable at all.
-REQUIRED_COMBAT_KEYS = ("encounter", "turn", "phase", "energy", "max_energy", "stars", "creatures")
+REQUIRED_COMBAT_KEYS = ("encounter", "turn", "phase", "energy", "max_energy", "stars", "creatures", "piles")
 #: Every creature row reports these. `next_move` is not among them: a creature with no move (the
 #: player) has none, and every projection drops the member rather than writing null.
 REQUIRED_CREATURE_KEYS = ("combat_id", "model_id", "side", "hp", "max_hp", "block", "alive", "powers")
+
+#: The five piles, in the order every projection reports them: each pile's name, and the game's own
+#: word for its type. The bridge states this order, the offline shape test states it independently
+#: and so does this script, so a projection that stops agreeing fails rather than being normalised.
+PILE_ORDER = (
+    ("Hand", "Hand"),
+    ("DrawPile", "Draw"),
+    ("DiscardPile", "Discard"),
+    ("ExhaustPile", "Exhaust"),
+    ("PlayPile", "Play"),
+)
+
+#: Every card member and the type it is reported as. `enchantment` is not among them: a card carries
+#: one only when it is enchanted, and every projection drops the null member rather than writing null.
+CARD_FIELD_TYPES: dict[str, type] = {
+    "instance_id": str,
+    "net_id": int,
+    "model_id": str,
+    "card_type": str,
+    "target_type": str,
+    "energy_cost": int,
+    "costs_x": bool,
+    "upgrades": int,
+    "native_state": dict,
+}
 
 #: What the bridge hands the driver on the way to the fight, so a stall names where it stalled.
 MAX_STEPS = 40
@@ -50,6 +83,43 @@ MAX_FIGHT_TURNS = 4
 def _check(condition: bool, record: dict[str, Any], message: str) -> None:
     if not condition:
         raise AssertionError(f"{message}\nobserved: {json.dumps(record, indent=2, sort_keys=True)}")
+
+
+def _pile(observation: dict[str, Any], name: str) -> dict[str, Any]:
+    for pile in observation["combat"]["piles"]:
+        if pile["name"] == name:
+            return pile
+    reported = [pile["name"] for pile in observation["combat"]["piles"]]
+    raise AssertionError(f"the fight reports no {name} pile: {reported}")
+
+
+def _cards(observation: dict[str, Any]) -> list[dict[str, Any]]:
+    return [card for pile in observation["combat"]["piles"] for card in pile["cards"]]
+
+
+def _cards_by_identity(observation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {card["instance_id"]: card for card in _cards(observation)}
+
+
+def _draw_pile_order(observation: dict[str, Any]) -> list[tuple[str, str]]:
+    """The draw pile as what a policy learns from: its order, in the bridge's own identities."""
+    return [(card["instance_id"], card["model_id"]) for card in _pile(observation, "DrawPile")["cards"]]
+
+
+def _identity_drift(before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> list[str]:
+    """Identities a rebuilt observation gives to a card whose attributes disagree with the earlier read.
+
+    Only the attributes that cannot legitimately differ between two reads of one card are compared:
+    a cost modifier can be granted and expire within a fight, and `native_state` is a card's evolving
+    state (a Genetic Algorithm's stored block, say), so neither is an identity.
+    """
+    stable = ("model_id", "card_type", "target_type", "costs_x", "upgrades")
+    return [
+        f"{instance_id}: {tuple(earlier[key] for key in stable)} -> {tuple(card[key] for key in stable)}"
+        for instance_id, card in after.items()
+        if (earlier := before.get(instance_id)) is not None
+        and tuple(earlier[key] for key in stable) != tuple(card[key] for key in stable)
+    ]
 
 
 def _drive_to_first_fight(client: FullAppBridgeClient, observation: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -79,13 +149,16 @@ def _drive_to_first_fight(client: FullAppBridgeClient, observation: dict[str, An
     raise AssertionError(f"no fight within {MAX_STEPS} decisions; phases seen {phases}")
 
 
-def _check_combat_block(observation: dict[str, Any]) -> dict[str, Any]:
+def _check_combat_block(observation: dict[str, Any], *, complete_piles: bool = False) -> dict[str, Any]:
     combat = observation["combat"]
     record = {"combat": combat, "phases_seen_on_the_way": None}
 
     missing = [key for key in REQUIRED_COMBAT_KEYS if key not in combat]
     _check(not missing, record, f"the combat block does not report {missing}")
     _check("enemies" not in combat, record, "the combat block still carries its own enemy rows")
+    _check("hand" not in combat, record, "the combat block still carries the older hand list")
+    counted = [key for key in combat if key.endswith("_pile_count")]
+    _check(not counted, record, f"the combat block still counts piles instead of reporting them: {counted}")
 
     encounter = combat["encounter"]
     _check(isinstance(encounter, str) and bool(encounter), record, f"the fight does not name its encounter: {encounter!r}")
@@ -160,7 +233,38 @@ def _check_combat_block(observation: dict[str, Any]) -> dict[str, Any]:
     _check(any(enemy.get("next_move") and enemy["next_move"]["intents"] for enemy in enemies), record,
            "no enemy reports an ordered intent list")
 
+    # The five ordered piles, which is where a draw pile's order — what a policy learns from — and
+    # every card's identity live.
+    piles = combat["piles"]
+    _check([(pile["name"], pile["type"]) for pile in piles] == list(PILE_ORDER), record,
+           f"the fight does not report its five piles in order: {[(pile['name'], pile['type']) for pile in piles]}")
+    cards = _cards(observation)
+    identities = [card["instance_id"] for card in cards]
+    _check(len(set(identities)) == len(identities), record, "two cards of the fight share one bridge instance id")
+    _check(all(isinstance(identity, str) and identity for identity in identities), record,
+           f"a card carries no instance id: {identities}")
+    if complete_piles:
+        # On the turn a fight opens, the five piles are the deck: every card of it is in one of them.
+        _check(len(cards) == len(observation["deck_cards"]), record,
+               f"the five piles hold {len(cards)} cards, not the deck's {len(observation['deck_cards'])}")
+    for index, card in enumerate(cards):
+        missing = [key for key in CARD_FIELD_TYPES if key not in card]
+        _check(not missing, record, f"card {index} does not report {missing}")
+        for key, reported_as in CARD_FIELD_TYPES.items():
+            _check(type(card[key]) is reported_as, record,
+                   f"card {index} reports {key} as {card[key]!r}, not {reported_as.__name__}")
+        _check(card["net_id"] >= 0 and card["energy_cost"] >= 0 and card["upgrades"] >= 0, record,
+               f"card {index} reports a negative quantity: {card}")
+        identity = (card["instance_id"], card["model_id"], card["card_type"])
+        _check(all(identity), record, f"card {index} reports an empty identity: {identity!r}")
+        if "enchantment" in card:
+            _check(set(card["enchantment"]) == {"model_id", "amount"}, record,
+                   f"card {index} reports its enchantment as {card['enchantment']!r}")
+    _check(any(card["energy_cost"] > 0 for card in cards), record,
+           "no card of the fight costs energy, so the cost field is not being read from the card")
+
     record["phases_seen_on_the_way"] = None
+    record["piles"] = {pile["name"]: len(pile["cards"]) for pile in piles}
     return record
 
 
@@ -178,12 +282,27 @@ def main(argv: list[str] | None = None) -> int:
         started = client.start_run(seed=SEED, character=CHARACTER, ascension=ASCENSION)
         observation, phases = _drive_to_first_fight(client, started["observation"])
 
-        record = _check_combat_block(observation)
+        record = _check_combat_block(observation, complete_piles=True)
         record["phases_seen_on_the_way"] = phases
         record["state_hash_at_the_first_fight"] = observation["state_hash"]
+        record["draw_pile_at_the_first_fight"] = _draw_pile_order(observation)
+
+        # The same state, read twice: a draw pile's order is what a policy learns from, and an
+        # identity minted per observation would make two reads of one state look like two states.
+        again = client.observe()
+        _check(again is not None, record, "the bridge reports no observation on a second read")
+        _check(_draw_pile_order(again) == _draw_pile_order(observation), record,
+               "the draw pile's order changed between two reads of one state")
+        _check(_cards_by_identity(again) == _cards_by_identity(observation), record,
+               "the bridge's card identities changed between two reads of one state")
 
         # A weak fight opens with no powers on either side, so the power row is observed by playing
-        # the fight on: the first fight's enemies grant one with a debuff.
+        # the fight on: the first fight's enemies grant one with a debuff. Every observation on the
+        # way is checked, and each one is a rebuilt observation of the same fight, so the identities
+        # the bridge minted at the first fight have to still name the same cards.
+        opening_hand = len(_pile(observation, "Hand")["cards"])
+        previous = _cards_by_identity(observation)
+        surviving_identities = 0
         turns_played: list[int] = []
         powers_seen: list[dict[str, Any]] = []
         while not powers_seen and len(turns_played) < MAX_FIGHT_TURNS:
@@ -193,6 +312,12 @@ def main(argv: list[str] | None = None) -> int:
             if not observation.get("combat"):
                 break
             _check_combat_block(observation)
+            current = _cards_by_identity(observation)
+            drift = _identity_drift(previous, current)
+            _check(not drift, record,
+                   f"a rebuilt observation reused an instance id for a different card: {drift}")
+            surviving_identities = max(surviving_identities, len(set(previous) & set(current)))
+            previous = current
             turns_played.append(observation["combat"]["turn"])
             powers_seen = [
                 {"creature": creature["model_id"], "side": creature["side"], **power}
@@ -200,9 +325,15 @@ def main(argv: list[str] | None = None) -> int:
                 for power in creature["powers"]
             ]
         _check(bool(powers_seen), record, f"no creature reported a power within {MAX_FIGHT_TURNS} turns")
+        # Ending a turn moves the hand rather than replacing it, so every card that was in the
+        # opening hand is still one of the fight's cards, under the identity it was minted with.
+        _check(surviving_identities >= opening_hand, record,
+               f"only {surviving_identities} of the opening hand's {opening_hand} cards kept their identity "
+               "across a rebuilt observation, so the registry does not survive one")
 
         record["turns_played_before_powers"] = turns_played
         record["powers_seen"] = powers_seen
+        record["cards_keeping_their_identity_across_a_rebuild"] = surviving_identities
         record["state_hash_at_powers"] = observation["state_hash"]
         print(json.dumps({"success": True, "seed": SEED, "character": CHARACTER, "ascension": ASCENSION, **record},
                          indent=2, sort_keys=True))

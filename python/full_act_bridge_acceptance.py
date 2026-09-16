@@ -27,6 +27,14 @@ from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientCo
 from sts2_native_sim.paths import find_game_root
 
 
+def pile_cards(obs: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    """The cards of one of the fight's ordered piles, by the name the bridge reports it under."""
+    for pile in obs.get("combat", {}).get("piles", []):
+        if pile.get("name") == name:
+            return list(pile.get("cards", []))
+    return []
+
+
 def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]]) -> str:
     """
     Generic, non-archetype, non-content-specific autonomous policy for Act 1 navigation.
@@ -46,8 +54,10 @@ def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]
 
         plays = [a for a in legal_actions if a.get("action_type") == "play_card" or a.get("action_id", "").startswith("play_card:")]
         if plays:
-            hand = obs.get("combat", {}).get("hand", [])
-            hand_by_idx = {c.get("index", idx): c for idx, c in enumerate(hand)}
+            # The hand is the first of the fight's ordered piles, and a legal play names its
+            # position in that pile.
+            hand = pile_cards(obs, "Hand")
+            hand_by_idx = dict(enumerate(hand))
 
             # Defensive cards: target_type == "Self" or non-targeted
             def is_defensive(act: Dict[str, Any]) -> bool:
@@ -59,7 +69,7 @@ def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]
             def get_card_cost(act: Dict[str, Any]) -> int:
                 idx = act.get("metadata", {}).get("card_index")
                 if idx is not None and idx in hand_by_idx:
-                    return int(hand_by_idx[idx].get("cost", 1))
+                    return int(hand_by_idx[idx].get("energy_cost", 1))
                 return 1
 
             # Balanced defense: if current block is low (< 12), establish block first

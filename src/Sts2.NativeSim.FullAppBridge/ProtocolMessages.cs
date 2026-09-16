@@ -44,12 +44,11 @@ public sealed class LegalActionDto
 public sealed class ObservationDto
 {
     // The bridge's own observation version, not the simulator's: the two observations are
-    // different encodings of one state. 3 is the combat block converging on the simulator's
-    // per-combat projection (the encounter, the granular phase, energy, max energy and stars, and
-    // creature rows with a side, their intents and their powers). The ordered piles and the run
-    // block are still to converge, and each moves this number again when it does.
+    // different encodings of one state. 4 is the fight's five ordered piles of converged card rows
+    // replacing the hand list and the three pile counts. The run block and the inventory are still
+    // to converge, and each moves this number again when it does.
     [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; set; } = 3;
+    public int SchemaVersion { get; set; } = 4;
 
     [JsonPropertyName("phase")]
     public string Phase { get; set; } = "";
@@ -117,9 +116,9 @@ public sealed class ObservationDto
 
 /// <summary>
 /// A fight as the simulator's own per-combat projection words it, so the two encoders' combat
-/// blocks compare field by field instead of being two vocabularies for one situation. The hand and
-/// the pile counts are the bridge's older card seam, kept beside the converged fields until the
-/// ordered `piles` the simulator and the trace exporter both report replace them.
+/// blocks compare field by field instead of being two vocabularies for one situation. Every pile is
+/// its ordered contents — a draw pile's order is what a policy learns from, and a count is not a
+/// substitute — and every card is <see cref="CardObservationDto"/>.
 /// </summary>
 public sealed class CombatObservationDto
 {
@@ -148,38 +147,78 @@ public sealed class CombatObservationDto
     [JsonPropertyName("creatures")]
     public List<CreatureObservationDto> Creatures { get; set; } = new();
 
-    [JsonPropertyName("hand")]
-    public List<CardObservationDto> Hand { get; set; } = new();
-
-    [JsonPropertyName("draw_pile_count")]
-    public int DrawPileCount { get; set; }
-
-    [JsonPropertyName("discard_pile_count")]
-    public int DiscardPileCount { get; set; }
-
-    [JsonPropertyName("exhaust_pile_count")]
-    public int ExhaustPileCount { get; set; }
+    [JsonPropertyName("piles")]
+    public List<PileObservationDto> Piles { get; set; } = new();
 }
 
+/// <summary>
+/// One pile: the hand, the draw pile, the discard pile, the exhaust pile or the play pile, in the
+/// order every projection reports them. `type` is the game's own word for the pile the bridge
+/// walked, so the pairing of a name and a type is never the bridge's own invention.
+/// </summary>
+public sealed class PileObservationDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
+
+    [JsonPropertyName("cards")]
+    public List<CardObservationDto> Cards { get; set; } = new();
+}
+
+/// <summary>
+/// One card of one pile, worded exactly as the simulator's own pile projection words it, so two
+/// encoders' cards for one situation compare field by field. `instance_id` is the bridge's own
+/// identity — minted by <see cref="CardIdentityRegistry"/>, because card instances belong to
+/// whichever encoder produced the state and two encoders will never agree on them — while `net_id`
+/// is an identity the game itself mints and is therefore reported literally.
+/// </summary>
 public sealed class CardObservationDto
 {
-    [JsonPropertyName("index")]
-    public int Index { get; set; }
+    [JsonPropertyName("instance_id")]
+    public string InstanceId { get; set; } = "";
 
-    [JsonPropertyName("card_id")]
-    public string CardId { get; set; } = "";
+    [JsonPropertyName("net_id")]
+    public uint NetId { get; set; }
 
-    [JsonPropertyName("cost")]
-    public int Cost { get; set; }
+    [JsonPropertyName("model_id")]
+    public string ModelId { get; set; } = "";
 
-    [JsonPropertyName("can_play")]
-    public bool CanPlay { get; set; }
+    [JsonPropertyName("card_type")]
+    public string CardType { get; set; } = "";
 
     [JsonPropertyName("target_type")]
     public string TargetType { get; set; } = "";
 
+    // The cost every other projection reports: the one the card would actually be played for,
+    // after modifiers, not the card's own canonical number.
+    [JsonPropertyName("energy_cost")]
+    public int EnergyCost { get; set; }
+
+    [JsonPropertyName("costs_x")]
+    public bool CostsX { get; set; }
+
     [JsonPropertyName("upgrades")]
     public int Upgrades { get; set; }
+
+    // Absent rather than null on a card that is not enchanted, which is how every other projection
+    // reports the two cases.
+    [JsonPropertyName("enchantment")]
+    public EnchantmentObservationDto? Enchantment { get; set; }
+
+    [JsonPropertyName("native_state")]
+    public SortedDictionary<string, object?> NativeState { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class EnchantmentObservationDto
+{
+    [JsonPropertyName("model_id")]
+    public string ModelId { get; set; } = "";
+
+    [JsonPropertyName("amount")]
+    public int Amount { get; set; }
 }
 
 /// <summary>

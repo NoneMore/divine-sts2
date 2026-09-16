@@ -9,17 +9,25 @@ using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Events;
+using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.MonsterMoves.MonsterMoveStateMachine;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves.Runs;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
 public static class FullAppStateTracker
 {
     private static readonly JsonSerializerOptions JsonOptions = BridgeJson.Options;
+
+    /// <summary>
+    /// The bridge's card identities, so a card reported in one observation is the same card in the
+    /// next. Card instance ids are the encoder's own, so nothing else can supply them.
+    /// </summary>
+    private static readonly CardIdentityRegistry CardIdentities = new();
 
     public static (ObservationDto Observation, List<LegalActionDto> LegalActions) CreateStateSnapshot(
         string phase,
@@ -82,6 +90,9 @@ public static class FullAppStateTracker
         if (phase == "combat" && combatManager is not null && combatManager.IsInProgress && player is not null)
         {
             ICombatState? combatState = combatManager.DebugOnlyGetState();
+            // The player's own combat state: the scope the bridge's card identities belong to, so a
+            // new fight mints its ids from the start again, and the piles this observation walks.
+            PlayerCombatState? combatPlayer = player.PlayerCombatState;
 
             var combatObs = new CombatObservationDto
             {
@@ -97,9 +108,11 @@ public static class FullAppStateTracker
                 Energy = player.PlayerCombatState?.Energy ?? 0,
                 MaxEnergy = player.PlayerCombatState?.MaxEnergy ?? 0,
                 Stars = player.PlayerCombatState?.Stars ?? 0,
-                DrawPileCount = PileType.Draw.GetPile(player).Cards.Count,
-                DiscardPileCount = PileType.Discard.GetPile(player).Cards.Count,
-                ExhaustPileCount = PileType.Exhaust.GetPile(player).Cards.Count,
+                // The five combat piles as their ordered contents. A draw pile's order is what a
+                // policy learns from, and it is invisible in a count, so nothing here counts.
+                Piles = combatPlayer is null
+                    ? new List<PileObservationDto>()
+                    : CombatPiles(combatPlayer).Select(pile => PileObservation(combatPlayer, pile.Name, pile.Pile)).ToList(),
             };
 
             // Every creature, the player's own row included, in the native order the simulator and
@@ -113,20 +126,11 @@ public static class FullAppStateTracker
                 }
             }
 
-            var handCards = PileType.Hand.GetPile(player).Cards;
+            var handCards = combatPlayer is null ? Array.Empty<CardModel>() : combatPlayer.Hand.Cards;
             for (int i = 0; i < handCards.Count; i++)
             {
                 CardModel card = handCards[i];
                 bool canPlay = card.CanPlay();
-                combatObs.Hand.Add(new CardObservationDto
-                {
-                    Index = i,
-                    CardId = card.Id.Entry,
-                    Cost = card.EnergyCost.Canonical,
-                    CanPlay = canPlay,
-                    TargetType = card.TargetType.ToString(),
-                });
-
                 if (canPlay)
                 {
                     if (card.TargetType.IsSingleTarget() && card.TargetType != TargetType.Self)
@@ -497,6 +501,110 @@ public static class FullAppStateTracker
         }
 
         return row;
+    }
+
+    /// <summary>
+    /// The five combat piles, in the order the simulator and the trace exporter report them: the
+    /// hand first, then every pile a card can move to, and the play pile — a card mid-play, which no
+    /// earlier bridge projection represented at all — last.
+    /// </summary>
+    private static IReadOnlyList<(string Name, CardPile Pile)> CombatPiles(PlayerCombatState state) =>
+    [
+        ("Hand", state.Hand),
+        ("DrawPile", state.DrawPile),
+        ("DiscardPile", state.DiscardPile),
+        ("ExhaustPile", state.ExhaustPile),
+        ("PlayPile", state.PlayPile),
+    ];
+
+    /// <summary>
+    /// One pile as its ordered contents. The name is the bridge's, so a caller finds the hand or the
+    /// draw pile by the same word the simulator uses; the type is the game's own word for the pile
+    /// that was walked, so the pairing of a name and a type is the game's rather than the bridge's.
+    /// </summary>
+    private static PileObservationDto PileObservation(PlayerCombatState fight, string name, CardPile pile)
+    {
+        var row = new PileObservationDto
+        {
+            Name = name,
+            Type = pile.Type.ToString(),
+        };
+        foreach (CardModel card in pile.Cards)
+        {
+            row.Cards.Add(CardObservation(fight, card));
+        }
+        return row;
+    }
+
+    /// <summary>
+    /// One card row, worded exactly as the simulator words the same row in its own pile projection,
+    /// so two encoders' cards for one situation compare field by field. Every member read here is a
+    /// public member of the game assembly this mod already references; nothing reaches into the
+    /// simulator's own assembly.
+    /// </summary>
+    private static CardObservationDto CardObservation(PlayerCombatState fight, CardModel card)
+    {
+        return new CardObservationDto
+        {
+            // The bridge's own identity, because a card instance belongs to whichever encoder
+            // produced the state: a comparison treats this one structurally, not literally.
+            InstanceId = CardIdentities.IdFor(fight, card),
+            // An identity the game itself mints, so a comparison treats this one literally.
+            NetId = NetCombatCardDb.Instance.GetCardId(card),
+            ModelId = card.Id.Entry,
+            CardType = card.Type.ToString(),
+            TargetType = card.TargetType.ToString(),
+            // The cost the other projections report — what the card would be played for, modifiers
+            // included — rather than the card's own canonical number, so two projections of one card
+            // cannot disagree about it.
+            EnergyCost = card.EnergyCost.GetResolved(),
+            CostsX = card.EnergyCost.CostsX,
+            // The upgrade level the card actually carries, which the hand used to declare and never
+            // populate.
+            Upgrades = card.CurrentUpgradeLevel,
+            Enchantment = card.Enchantment is null ? null : new EnchantmentObservationDto
+            {
+                ModelId = card.Enchantment.Id.Entry,
+                Amount = card.Enchantment.Amount,
+            },
+            NativeState = SavedNativeState(card),
+        };
+    }
+
+    /// <summary>
+    /// A card's own saved state as the other projections report it: one entry per saved scalar
+    /// property, ordered by name, so two encoders' native states for one card compare key by key.
+    /// A saved property group that holds models or nested cards is not part of the projection, which
+    /// is the group set the simulator's own pile projection reads.
+    /// </summary>
+    private static SortedDictionary<string, object?> SavedNativeState(CardModel card)
+    {
+        SortedDictionary<string, object?> state = new(StringComparer.Ordinal);
+        SavedProperties? props = card.ToSerializable().Props;
+        if (props is null)
+        {
+            return state;
+        }
+
+        AddSavedProperties(props.ints, state);
+        AddSavedProperties(props.bools, state);
+        AddSavedProperties(props.strings, state);
+        AddSavedProperties(props.intArrays, state);
+        return state;
+    }
+
+    /// <summary>One saved property group's entries, by property name.</summary>
+    private static void AddSavedProperties<T>(List<SavedProperties.SavedProperty<T>>? properties, SortedDictionary<string, object?> state)
+    {
+        if (properties is null)
+        {
+            return;
+        }
+
+        foreach (SavedProperties.SavedProperty<T> property in properties)
+        {
+            state[property.name] = property.value;
+        }
     }
 
     private static string ComputeHash(ObservationDto obs)
