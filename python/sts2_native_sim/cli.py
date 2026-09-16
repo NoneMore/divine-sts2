@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .client import NativeWorker
 from .paths import DiscoveryError, REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_game_root, find_godot, find_host_assembly
+from .scenarios import ScenarioRequest, generate_rows
 
 SUPPORTED_BUILD = {
     "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
@@ -79,8 +81,6 @@ def doctor(deep: bool = False) -> dict[str, Any]:
             if actual != expected:
                 failures.append(f"Unsupported game build: {key}={actual}; expected {expected}.")
         try:
-            from .client import NativeWorker
-
             with NativeWorker() as worker:
                 checks["worker_hello"] = worker.hello()
                 checks["worker_catalog_counts"] = {
@@ -98,18 +98,46 @@ def doctor(deep: bool = False) -> dict[str, Any]:
     return checks
 
 
+def _write_rows(rows: list[dict[str, Any]], output: str) -> None:
+    """Write rows as JSONL, with each row's keys in the order the record declares them.
+
+    ``sort_keys`` is left off on purpose: a record is built in a declared key order, and that
+    order is what makes a corpus diffable, so it is written rather than re-derived.
+    """
+    payload = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
+    if output == "-":
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+    else:
+        Path(output).write_text(payload, encoding="utf-8", newline="\n")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="divine-sts2")
     subcommands = parser.add_subparsers(dest="command", required=True)
     doctor_parser = subcommands.add_parser("doctor", help="validate the local game/tool installation")
     doctor_parser.add_argument("--deep", action="store_true", help="hash game files and start a native worker")
     doctor_parser.add_argument("--json", action="store_true", help="emit compact JSON")
+    scenario_parser = subcommands.add_parser(
+        "scenario", help="record the act-1 opening scenario a character, Ascension and run seed produce"
+    )
+    scenario_parser.add_argument("--character", required=True, help="the character to start the run as, e.g. IRONCLAD")
+    scenario_parser.add_argument("--ascension", type=int, default=0, help="the Ascension to start the run at")
+    scenario_parser.add_argument("--seed", required=True, help="the run seed, in any form the shipped game accepts")
+    scenario_parser.add_argument("--output", default="-", help="where to write the JSONL row; '-' writes to stdout")
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
         report = doctor(args.deep)
         print(json.dumps(report, indent=None if args.json else 2, default=str))
         raise SystemExit(0 if report["ok"] else 1)
+
+    if args.command == "scenario":
+        request = ScenarioRequest(character=args.character, ascension=args.ascension, seed=args.seed)
+        with NativeWorker() as worker:
+            rows = generate_rows(request, worker)
+        _write_rows(rows, args.output)
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

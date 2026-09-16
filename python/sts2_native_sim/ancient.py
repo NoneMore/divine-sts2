@@ -21,12 +21,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
-from .client import NativeWorker, NativeWorkerPool
+from .client import NativeWorkerPool
 
 ANCIENT_POINT_TYPE = "Ancient"
 EVENT_COMPLETE = "event_complete"
+#: The action id that leaves a finished event room and hands the run back its map.
+LEAVE_EVENT_ACTION = "leave_event"
 #: The decision kind the run reports once the Ancient's choice, and everything it opened,
 #: has been resolved. The room still has to be left; see :func:`leave_ancient`.
 MAP_CHOICE = "map_choice"
@@ -47,10 +49,30 @@ PROMPT_FREE_CHOICES = frozenset({
 _MAX_NESTED_STEPS = 64
 
 
+class RunStepWorker(Protocol):
+    """What driving a decision needs of a worker: one run-mode step, by action id.
+
+    The loop below never needs a native worker's resets or its branch handles, so a caller
+    holding anything that can step a run — a real worker, or a double in a test — can drive
+    the room.
+    """
+
+    def run_step(self, action_id: str) -> dict[str, Any]: ...
+
+
+def map_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """The run's legal map actions, in the order the environment reports them.
+
+    That order is a contract of its own: a scenario travels to the first of these, and the
+    Ancient room is the first of them typed ``Ancient``.
+    """
+    return [action for action in state.get("legal_actions") or [] if action.get("kind") == "choose_map"]
+
+
 def ancient_action(state: dict[str, Any]) -> dict[str, Any] | None:
     """The run-start map action that opens the act's Ancient room, if one is offered."""
-    for action in state.get("legal_actions") or []:
-        if action.get("kind") == "choose_map" and action.get("parameters", {}).get("point_type") == ANCIENT_POINT_TYPE:
+    for action in map_actions(state):
+        if action.get("parameters", {}).get("point_type") == ANCIENT_POINT_TYPE:
             return action
     return None
 
@@ -90,7 +112,7 @@ class DrivenChoice:
 
 
 def drive_choice(
-    worker: NativeWorker,
+    worker: RunStepWorker,
     action: dict[str, Any],
     *,
     choose: Callable[[dict[str, Any]], str] | None = None,
@@ -118,7 +140,7 @@ def drive_choice(
     return DrivenChoice(tuple(decisions), state)
 
 
-def leave_ancient(worker: NativeWorker, state: dict[str, Any]) -> dict[str, Any]:
+def leave_ancient(worker: RunStepWorker, state: dict[str, Any]) -> dict[str, Any]:
     """Finish the Ancient room and return the run's map state.
 
     The choice is the first offered one that opens no second prompt
@@ -133,7 +155,7 @@ def leave_ancient(worker: NativeWorker, state: dict[str, Any]) -> dict[str, Any]
             raise ValueError("the Ancient room offers no choice to take")
         choice = choices[0]
     drive_choice(worker, choice)
-    return worker.run_step("leave_event")
+    return worker.run_step(LEAVE_EVENT_ACTION)
 
 
 def start_past_ancient(pool: NativeWorkerPool, reset: dict[str, Any]) -> list[dict[str, Any]]:
