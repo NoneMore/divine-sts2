@@ -94,9 +94,14 @@ build, and probing reachability is neither cheap nor reliable.
 **pytest needs a writable temp root.** Measured, not inferred: pytest creates every temporary directory
 with `mode=0o700` (`_pytest/tmpdir.py:139,158`, `_pytest/pathlib.py:232`) and this sandbox refuses a
 directory created that way even to the process that created it, so every `tmp_path` test fails at setup
-and session cleanup fails again. An in-repo `--basetemp` does not help — the same `mkdir` is used for it — so run
-the suite where the file policy allows it; tests that only touch files they create themselves are
-unaffected. A directory made with a plain `mkdir` in the host's temporary area is writable and
+and session cleanup fails again. An in-repo `--basetemp` does not help — the same `mkdir` is used for
+it — and neither does `PYTEST_DEBUG_TEMPROOT`, which only moves the root — so run the suite outside the
+file policy; tests that only touch files they create themselves are unaffected. This is a known upstream
+sandbox defect rather than a property of this checkout: as the report describes it, the mode attaches an
+explicit security descriptor that discards the inheritance the restricted token depends on, so the
+creator locks itself out
+([deepseek-harness#463](https://github.com/deepseek-ai/deepseek-harness/discussions/463)). A directory
+made with a plain `mkdir` in the host's temporary area is writable and
 removable here, so a test that needs a writable root probes for exactly that and falls back to the
 gitignored `artifacts/` tree only where the probe is refused — `tests/test_scenarios.py`'s
 `_corpus_area` is that probe, and ADR-0005 is why it asks rather than assumes. Leftover

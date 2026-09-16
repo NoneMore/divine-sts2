@@ -1,5 +1,10 @@
 # Agent guide
 
+## Related repositories
+
+When work needs Slay the Spire 2 decompiled source, mod frameworks, or implementations from related
+projects, inspect the sibling directories under `..`.
+
 ## Agent skills
 
 ### Issue tracker
