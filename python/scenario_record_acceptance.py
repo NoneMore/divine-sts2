@@ -26,7 +26,11 @@ a generated scenario makes — with the game, not with the generator's own helpe
   shows the record carries enough to reproduce the situation and nothing that a fresh run
   cannot reproduce;
 * the same request on a second worker produces the same rows, field for field (byte-identical
-  *output* is ticket 10's, and needs the serialiser this script does not use).
+  *output* is ticket 10's, and needs the serialiser this script does not use);
+* **no acceptance sample produced a failure row**: the oracle compares recorded scenarios, so an
+  element the generator could not record fails this script with the stage and the error named,
+  rather than being read as if it were a scenario. That holds in ``--snapshot`` mode too: there
+  are no facts to record for a fight that does not exist.
 
 The nested choice is resolved by a fixed rule (the first legal action the prompt reports), so
 the sample says which nested-prompt kinds it actually covered: the recorded table carries the
@@ -483,6 +487,25 @@ def _assert_enumeration(sample: Sample, rows: list[dict[str, Any]]) -> None:
             raise AssertionError(f"{sample.label}: the rows of one run disagree about {key}: {sorted(values)}")
 
 
+def _assert_no_failures(records: dict[str, list[dict[str, Any]]]) -> None:
+    """Refuse a batch that recorded a failure, naming what the generator could not record.
+
+    The generator records an element it cannot drive as a failure row and carries on, which is
+    what a corpus wants; this script wants the opposite, because a failure row is not a scenario
+    and every claim below reads recipe fields a failure row may not have reached. The check names
+    only what every failure row is contracted to carry, so a future row type fails with this
+    message rather than a `KeyError`.
+    """
+    for sample in _SAMPLE:
+        for row in records[sample.label]:
+            if row["record_type"] != SCENARIO_RECORD:
+                failure = row.get("error") or {}
+                raise AssertionError(
+                    f"{sample.label}: the batch recorded a {row['record_type']} row at stage "
+                    f"{row.get('stage')} — {failure.get('kind')}: {failure.get('message')}"
+                )
+
+
 def _assert_observed_choices(records: dict[str, list[dict[str, Any]]]) -> None:
     """The recorded batch is a statement about one build; fail closed when it disagrees.
 
@@ -531,6 +554,7 @@ def main() -> None:
             sample.label: _rows(pool.workers[index % arguments.workers], sample)
             for index, sample in enumerate(_SAMPLE)
         }
+        _assert_no_failures(records)
         if arguments.snapshot:
             print(json.dumps(
                 {

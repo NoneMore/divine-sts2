@@ -45,9 +45,15 @@ def _spawn_without_windows_error_dialogs(command: list[str], **options: Any) -> 
 
 
 class NativeSimError(RuntimeError):
+    """A worker or protocol failure: a stable ``code``, the worker's own ``message``, its details.
+
+    ``message`` is kept apart from ``str(self)`` — which is the code and the message together, for
+    a log line — so a caller that records the failure can name the kind and the text separately.
+    """
+
     def __init__(self, code: str, message: str, details: Any = None):
         super().__init__(f"{code}: {message}")
-        self.code, self.details = code, details
+        self.code, self.message, self.details = code, message, details
 
 
 def _defaults() -> tuple[Path, Path, Path]:

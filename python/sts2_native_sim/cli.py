@@ -14,7 +14,7 @@ from typing import Any
 
 from .client import NativeWorker
 from .paths import DiscoveryError, REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_game_root, find_godot, find_host_assembly
-from .scenarios import ScenarioRequest, ScenarioRequestError, generate_rows
+from .scenarios import ScenarioRequest, ScenarioRequestError, generate_rows, summarize_rows
 
 SUPPORTED_BUILD = {
     "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
@@ -112,6 +112,23 @@ def _write_rows(rows: list[dict[str, Any]], output: str) -> None:
         Path(output).write_text(payload, encoding="utf-8", newline="\n")
 
 
+def _report_counts(summary: dict[str, Any]) -> None:
+    """Say how many rows each type the batch produced, so a corpus that lost elements is visible.
+
+    A failure row is a row, so the corpus is still written and the exit status still reports that
+    the command did what it was asked; the counts are what a caller checks to learn whether the
+    corpus is complete, rather than parsing the rows back.
+    """
+    def count(number: int, noun: str) -> str:
+        return f"{number} {noun} row" if number == 1 else f"{number} {noun} rows"
+
+    print(
+        f"divine-sts2 scenario: {count(summary['succeeded'], 'scenario')}, "
+        f"{count(summary['failed'], 'failure')}",
+        file=sys.stderr,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="divine-sts2")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -156,6 +173,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"divine-sts2 scenario: {error}", file=sys.stderr)
                 raise SystemExit(2) from error
         _write_rows(rows, args.output)
+        _report_counts(summarize_rows(rows))
         raise SystemExit(0)
 
 

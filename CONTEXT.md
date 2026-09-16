@@ -43,3 +43,7 @@ _Avoid_: Map variant, act 1 variant (the map itself does not vary)
 **Generated scenario**:
 A recorded run-start situation together with the choices that produced it, such that the shipped game can reproduce it from the same run seed.
 _Avoid_: Sample, fixture, seed dump
+
+**Failure row**:
+A row of a generated corpus standing in for one element the generator could not turn into a scenario: the stage the run stopped at, an error kind and message, and the recipe resolved so far — never a combat initial state.
+_Avoid_: Error record, dropped seed, skipped element

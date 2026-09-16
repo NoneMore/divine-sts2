@@ -13,7 +13,9 @@ dimension the run itself supplies: the Ancient choices the seed's run offers. Th
 every step by action id, every offered choice included, so an action the run never offered is
 a `KeyError` rather than a silent success — which is what makes "a seed records exactly the
 choices its run offers" and "the fixed rule picked *this* node" observations about the
-generator instead of assumptions about the double.
+generator instead of assumptions about the double. It can be told to die on one step, which is
+how an element that cannot produce a scenario is forced: a failure is a row of the corpus, so
+it is asserted as one here rather than as an exception escaping the batch.
 """
 from __future__ import annotations
 
@@ -24,14 +26,17 @@ from pathlib import Path
 from typing import Any, Self
 
 import pytest
+from sts2_native_sim.client import NativeSimError
 from sts2_native_sim.scenarios import (
+    ERROR_RUN,
+    FAILURE_RECORD,
     ROW_SCHEMA,
     SCENARIO_RECORD,
     RunWorker,
-    ScenarioGenerationError,
     ScenarioRequest,
     ScenarioRequestError,
     generate_rows,
+    summarize_rows,
 )
 from sts2_native_sim.schema import validate_observation
 
@@ -49,6 +54,14 @@ RECORDED_OFFER = ("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS")
 #: The canonical seed the sample request uses. `ANCIENT01` is *not* canonical — the shipped
 #: transform rewrites its `I` — which makes it the natural non-canonical sample.
 SEED = "ANC1ENT01"
+#: A worker failure, as the real worker reports one: a stable code, a message, and details that
+#: must not reach a row.
+WORKER_CRASH = NativeSimError("worker_crashed", "worker exited 1", {"logs": ["boom"]})
+
+
+def _choice_action(index: int, relic: str) -> str:
+    """The action id that takes an offered Ancient choice, as the environment names it."""
+    return f"choose_event:{index}:NEOW.pages.INITIAL.options.{relic}"
 
 
 def _result(observation: dict[str, Any], state_hash: str) -> dict[str, Any]:
@@ -75,6 +88,8 @@ class FakeRunWorker:
         nested_choice: int = 0,
         row_one: str = "combat",
         leave: str = "run_map_after_ancient",
+        crash_on: dict[str, BaseException] | None = None,
+        crash_on_resets: dict[int, BaseException] | None = None,
     ) -> None:
         self.offer = list(offer)
         #: The offered relics that also have a legal action. The event reports every one of
@@ -87,6 +102,13 @@ class FakeRunWorker:
         self.nested_choice = nested_choice
         self.row_one = row_one
         self.leave = leave
+        #: The action ids this worker dies on, and — by 1-based ordinal — the runs it dies
+        #: starting, so a failure can be forced at one step, or on one drive, of a batch.
+        self.crash_on = dict(crash_on or {})
+        self.crash_on_resets = dict(crash_on_resets or {})
+        self.resets = 0
+        #: The build every run this worker plays is on, as `NativeWorker.hello` reports it.
+        self.build: dict[str, Any] = copy.deepcopy(CAPTURES["run_combat_action"]["game_build"])
         self.reset_request: dict[str, Any] | None = None
         self.steps: list[str] = []
         self.last_hash: str | None = None
@@ -95,6 +117,9 @@ class FakeRunWorker:
     # -- the seam the generator uses -----------------------------------------------------
 
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
+        self.resets += 1
+        if self.resets in self.crash_on_resets:
+            raise self.crash_on_resets[self.resets]
         self.reset_request = copy.deepcopy(state)
         observation = copy.deepcopy(CAPTURES["run_map_choice"])
         observation["run"]["seed"] = state["seed"]
@@ -123,6 +148,8 @@ class FakeRunWorker:
 
     def run_step(self, action_id: str) -> dict[str, Any]:
         self.steps.append(action_id)
+        if action_id in self.crash_on:
+            raise self.crash_on[action_id]
         return self._next(self._routes[action_id])
 
     def __enter__(self) -> Self:
@@ -152,7 +179,7 @@ class FakeRunWorker:
         return dict(enumerate(list(self.offer) + [relic for relic in self.takeable if relic not in self.offer]))
 
     def _choice_action(self, index: int, relic: str) -> str:
-        return f"choose_event:{index}:NEOW.pages.INITIAL.options.{relic}"
+        return _choice_action(index, relic)
 
     def _event_choice(self) -> dict[str, Any]:
         options, actions = [], []
@@ -384,26 +411,24 @@ def test_a_seed_records_exactly_the_ancient_choices_its_run_offers() -> None:
         assert [row["recipe"]["ancient_options"] for row in rows] == [offered] * len(offer)
 
 
-def test_a_reported_choice_no_action_can_take_fails_rather_than_being_skipped() -> None:
-    worker = FakeRunWorker(takeable=("LAVA_ROCK", "PHIAL_HOLSTER"))
+def test_a_reported_choice_no_action_can_take_is_recorded_as_a_failure_row() -> None:
+    row = _row(takeable=("LAVA_ROCK", "PHIAL_HOLSTER"))
 
-    with pytest.raises(ScenarioGenerationError) as raised:
-        generate_rows(_request(), worker)
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "ancient_choice"
+    assert "option 2" in row["error"]["message"] and "no legal action" in row["error"]["message"]
+    # A choice no action can take was never taken, so the recipe does not name one.
+    assert "ancient_choice" not in row["recipe"]
+    assert row["recipe"]["act_variant"] == CAPTURES["run_combat_action"]["run"]["act_variant"]
 
-    assert raised.value.stage == "ancient_choice"
-    assert "option 2" in str(raised.value) and "no legal action" in str(raised.value)
 
+def test_a_choice_the_event_does_not_report_is_recorded_as_a_failure_row() -> None:
+    row = _row(offer=("LAVA_ROCK", "PHIAL_HOLSTER"), takeable=("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS"))
 
-def test_a_choice_the_event_does_not_report_fails_rather_than_being_taken() -> None:
-    worker = FakeRunWorker(
-        offer=("LAVA_ROCK", "PHIAL_HOLSTER"), takeable=("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS")
-    )
-
-    with pytest.raises(ScenarioGenerationError) as raised:
-        generate_rows(_request(), worker)
-
-    assert raised.value.stage == "ancient_choice"
-    assert "does not report" in str(raised.value)
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "ancient_choice"
+    assert "does not report" in row["error"]["message"]
+    assert "ancient_choice" not in row["recipe"]
 
 
 def test_two_records_for_one_seed_share_the_run_and_differ_in_the_ancient_choice() -> None:
@@ -528,15 +553,18 @@ def test_a_nested_bundle_pick_records_the_options_it_selected() -> None:
     }]
 
 
-def test_a_nested_selection_that_names_no_option_ids_fails_rather_than_recording_nothing() -> None:
-    worker = FakeRunWorker(offer=("HEFTY_TABLET", "FISHING_ROD", "SILKEN_TRESS"),
-                           nested=(_silent_card_choice(),))
+def test_a_nested_selection_that_names_no_option_ids_is_recorded_as_a_failure_row() -> None:
+    rows = _rows(offer=("HEFTY_TABLET", "FISHING_ROD", "SILKEN_TRESS"), nested=(_silent_card_choice(),))
+    row = rows[0]
 
-    with pytest.raises(ScenarioGenerationError) as raised:
-        generate_rows(_request(), worker)
-
-    assert raised.value.stage == "ancient_choice"
-    assert "option ids" in str(raised.value)
+    assert row["record_type"] == FAILURE_RECORD
+    # The run reached the fight, but the choice that opened this prompt is what could not be
+    # recorded, so the stage is the choice's own rather than the phase the drive finished in.
+    assert row["stage"] == "ancient_choice"
+    assert "option ids" in row["error"]["message"]
+    assert row["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": "HEFTY_TABLET"}
+    # The offer was already known, so the choices that could be recorded still were.
+    assert [other["record_type"] for other in rows] == [FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD]
 
 
 def test_a_choice_that_opens_no_prompt_records_no_nested_choice() -> None:
@@ -614,23 +642,184 @@ def test_the_record_stores_no_state_handle_and_no_portable_branch() -> None:
     assert "state-hash" in json.dumps(row), "the state hash is recorded, as the ticket asks"
 
 
-# -- failing closed ----------------------------------------------------------------------
+# -- failure rows ------------------------------------------------------------------------
 
 
-def test_a_run_that_does_not_reach_a_fight_fails_at_the_stage_it_stopped_at() -> None:
-    with pytest.raises(ScenarioGenerationError) as raised:
-        generate_rows(_request(), FakeRunWorker(row_one="event"))
-
-    assert raised.value.stage == "first_combat"
-    assert "event_choice" in str(raised.value)
+def _choice_crash(offer: tuple[str, ...], index: int) -> dict[str, BaseException]:
+    """A crash on one offered choice's own action, and on nothing else."""
+    return {_choice_action(index, offer[index]): WORKER_CRASH}
 
 
-def test_a_room_that_does_not_hand_back_the_map_fails_at_the_leaving_stage() -> None:
-    with pytest.raises(ScenarioGenerationError) as raised:
-        generate_rows(_request(), FakeRunWorker(leave="run_event_choice"))
+def test_a_run_that_does_not_reach_a_fight_is_recorded_as_a_failure_row() -> None:
+    row = _row(row_one="event")
 
-    assert raised.value.stage == "leave_ancient"
-    assert "event_choice" in str(raised.value)
+    assert row["schema"] == ROW_SCHEMA
+    assert row["record_type"] == FAILURE_RECORD
+    assert set(row["game_build"]) == {"version", "assembly_sha256", "pck_sha256"}
+    assert row["stage"] == "first_combat"
+    # The tag a reader counts on, spelled out: a failure row's kind is part of the corpus format.
+    assert row["error"]["kind"] == "run" == ERROR_RUN
+    assert "event_choice" in row["error"]["message"]
+
+
+def test_a_room_that_does_not_hand_back_the_map_is_recorded_as_a_failure_row() -> None:
+    row = _row(leave="run_event_choice")
+
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "leave_ancient"
+    assert "event_choice" in row["error"]["message"]
+
+
+def test_a_failure_row_carries_the_recipe_resolved_so_far_and_no_combat_state() -> None:
+    row = _row(row_one="event")
+
+    # The same envelope a scenario row carries, minus the fight and with the failure in its place.
+    assert set(row) == {"schema", "record_type", "game_build", "recipe", "stage", "error"}
+    assert set(row["recipe"]) == {"character", "ascension", "seed", "act_variant", "ancient_choice"}
+    assert row["recipe"]["character"] == "IRONCLAD"
+    assert row["recipe"]["ascension"] == 0
+    assert row["recipe"]["seed"] == SEED
+    assert row["recipe"]["act_variant"] == CAPTURES["run_combat_action"]["run"]["act_variant"]
+    assert row["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": RECORDED_OFFER[0]}
+    # No combat state, partial or otherwise: there is no state to carry and no hash of one, and
+    # the recipe stops where the run stopped rather than where the generation meant to go.
+    assert "combat_initial_state" not in row and "state_hash" not in row
+    assert "node" not in row["recipe"] and "encounter" not in row["recipe"]
+
+
+def test_a_failure_row_keeps_the_raw_seed_diagnostic_when_the_caller_supplied_one() -> None:
+    row = generate_rows(_request("ANCIENT01"), FakeRunWorker(row_one="event"))[0]
+
+    assert set(row["recipe"]) == {"character", "ascension", "seed", "raw_seed", "act_variant", "ancient_choice"}
+    assert row["recipe"]["seed"] == SEED and row["recipe"]["raw_seed"] == "ANCIENT01"
+
+
+def test_a_failure_before_the_choice_is_known_carries_only_what_the_run_reached() -> None:
+    rows = _rows(crash_on={ANCIENT_ACTION: WORKER_CRASH})
+
+    # The offer is exactly what this failure prevented learning, so the element owes one row and
+    # no more: there is nothing to say how many choices the run would have offered.
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "ancient_room"
+    assert set(row["recipe"]) == {"character", "ascension", "seed", "act_variant"}
+
+
+def test_a_first_drive_that_stops_after_the_offer_still_gives_every_choice_a_row() -> None:
+    """The offer was read before the failure, so the elements after it are known and are recorded."""
+    worker = FakeRunWorker(row_one="event")
+
+    rows = _rows(worker=worker)
+
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD] * len(RECORDED_OFFER)
+    assert [row["recipe"]["ancient_choice"] for row in rows] == [
+        {"option_index": index, "relic_model_id": relic} for index, relic in enumerate(RECORDED_OFFER)
+    ]
+    assert {row["stage"] for row in rows} == {"first_combat"}
+    assert summarize_rows(rows)["failed"] == len(RECORDED_OFFER)
+    assert worker.steps.count(FIRST_ROW_ONE_ACTION) == len(RECORDED_OFFER), "a failed element was retried"
+
+
+def test_a_later_drive_that_stops_early_still_names_the_choice_it_is_for() -> None:
+    """A choice the run offered is part of the element's identity even before its own drive reads it."""
+    rows = _rows(crash_on_resets={2: WORKER_CRASH})
+
+    assert [row["record_type"] for row in rows] == [SCENARIO_RECORD, FAILURE_RECORD, SCENARIO_RECORD]
+    stopped = rows[1]
+    assert stopped["stage"] == "run_start"
+    assert stopped["recipe"]["ancient_choice"] == {"option_index": 1, "relic_model_id": RECORDED_OFFER[1]}
+    assert "combat_initial_state" not in stopped
+
+
+def test_a_run_that_never_starts_carries_the_declared_recipe_alone() -> None:
+    row = _row(crash_on_resets={1: WORKER_CRASH})
+
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "run_start"
+    assert set(row["recipe"]) == {"character", "ascension", "seed"}
+
+
+def test_a_worker_error_is_recorded_with_the_workers_own_code_as_its_kind() -> None:
+    row = _row(crash_on={"leave_event": WORKER_CRASH})
+
+    assert row["record_type"] == FAILURE_RECORD
+    assert row["stage"] == "leave_ancient"
+    # The worker's own code is the kind and its own text is the message, without the two repeated.
+    assert row["error"] == {"kind": "worker_crashed", "message": "worker exited 1"}
+    assert "logs" not in json.dumps(row), "the worker's details leaked into the row"
+    # The recipe went as far as the worker did, so the choice the run had taken is on it.
+    assert row["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": RECORDED_OFFER[0]}
+
+
+def test_a_failing_element_is_recorded_once_and_the_rest_of_the_request_still_completes() -> None:
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1", "SEED2"))
+    worker = FakeRunWorker(crash_on={ANCIENT_ACTION: WORKER_CRASH})
+
+    rows = generate_rows(request, worker)
+
+    # One failure row per element that failed, in the request's order, and the run after it was
+    # still driven: a failure is recorded rather than retried, and it does not end the batch.
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD, FAILURE_RECORD]
+    assert [row["recipe"]["seed"] for row in rows] == ["SEED1", "SEED2"]
+    assert summarize_rows(rows) == {
+        "rows": {SCENARIO_RECORD: 0, FAILURE_RECORD: 2},
+        "succeeded": 0,
+        "failed": 2,
+        "total": 2,
+    }
+    assert worker.steps.count(ANCIENT_ACTION) == 2, "a failed element was attempted more than once"
+
+
+def test_a_choice_that_fails_leaves_the_choices_after_it_recorded() -> None:
+    offer = ("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS")
+    worker = FakeRunWorker(offer=offer, crash_on=_choice_crash(offer, 1))
+
+    rows = _rows(worker=worker)
+
+    assert [row["record_type"] for row in rows] == [SCENARIO_RECORD, FAILURE_RECORD, SCENARIO_RECORD]
+    assert rows[1]["recipe"]["ancient_choice"] == {"option_index": 1, "relic_model_id": offer[1]}
+    assert worker.steps.count(_choice_action(1, offer[1])) == 1, "a failed element was attempted more than once"
+
+
+def test_the_summary_counts_the_rows_that_succeeded_and_the_rows_that_failed() -> None:
+    offer = ("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS")
+
+    assert summarize_rows(_rows(offer=offer, crash_on=_choice_crash(offer, 1))) == {
+        "rows": {SCENARIO_RECORD: 2, FAILURE_RECORD: 1},
+        "succeeded": 2,
+        "failed": 1,
+        "total": 3,
+    }
+    # A batch that lost nothing says so, rather than leaving a reader to infer it from an absent
+    # row type.
+    assert summarize_rows(_rows()) == {
+        "rows": {SCENARIO_RECORD: len(RECORDED_OFFER), FAILURE_RECORD: 0},
+        "succeeded": len(RECORDED_OFFER),
+        "failed": 0,
+        "total": len(RECORDED_OFFER),
+    }
+
+
+def test_the_summary_refuses_a_row_type_it_does_not_know() -> None:
+    """A corpus that gained a third row type must not be counted as if it had lost rows."""
+    with pytest.raises(ValueError):
+        summarize_rows([{"record_type": "episode_summary"}])
+
+
+def test_the_same_element_fails_again_with_the_same_error_kind() -> None:
+    offer = ("LAVA_ROCK", "PHIAL_HOLSTER", "SILKEN_TRESS")
+    cases: tuple[tuple[dict[str, Any], str], ...] = (
+        ({"row_one": "event"}, ERROR_RUN),
+        ({"crash_on_resets": {1: WORKER_CRASH}}, "worker_crashed"),
+        ({"offer": offer, "crash_on": _choice_crash(offer, 1)}, "worker_crashed"),
+    )
+
+    for options, kind in cases:
+        first, second = _rows(**options), _rows(**options)
+
+        assert first == second, f"a re-run of {options} is not the same rows"
+        assert {row["error"]["kind"] for row in first if row["record_type"] == FAILURE_RECORD} == {kind}
 
 
 # -- the console entry point -------------------------------------------------------------
@@ -655,6 +844,24 @@ def test_the_console_entry_point_writes_every_row_of_the_batch_it_generates(
     request = ScenarioRequest(characters=("IRONCLAD", "DEFECT"), ascensions=(0,), seeds=("ancient01",))
     lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
     assert [json.loads(line) for line in lines] == generate_rows(request, FakeRunWorker())
+
+
+def test_the_console_entry_point_writes_failure_rows_and_reports_the_counts(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sts2_native_sim import cli
+
+    monkeypatch.setattr(cli, "NativeWorker", lambda **_: FakeRunWorker(row_one="event"))
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["scenario", "--character", "IRONCLAD", "--seed", "ancient01"])
+    assert raised.value.code == 0
+
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("ancient01",))
+    captured = capsys.readouterr()
+    assert [json.loads(line) for line in captured.out.splitlines() if line.strip()] == generate_rows(
+        request, FakeRunWorker(row_one="event")
+    ), "a failure row was not written as a row"
+    assert "0 scenario rows, 3 failure rows" in captured.err
 
 
 def test_the_console_entry_point_refuses_a_colliding_request_without_writing_anything(
