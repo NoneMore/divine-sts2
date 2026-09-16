@@ -18,11 +18,14 @@ choices its run offers" and "the fixed rule picked *this* node" observations abo
 generator instead of assumptions about the double. It can be told to fail one step — which is
 how an element that cannot produce a scenario is forced, a failure being a row of the corpus
 rather than an exception escaping the batch — or to die on one step, which is how a crashed
-worker is forced; it can also be told to be slow, which is how a deliberately late worker is.
+worker is forced; it can also be told to be slow, which is how a deliberately late worker is,
+or to serve a fight with a floating-point quantity in it, which is how a state the record
+cannot hold is forced.
 """
 from __future__ import annotations
 
 import copy
+import gzip
 import hashlib
 import json
 import shutil
@@ -47,6 +50,7 @@ from sts2_native_sim.scenarios import (
     RunWorker,
     ScenarioRequest,
     ScenarioRequestError,
+    encode_row,
     generate_corpus,
     generate_rows,
     read_corpus,
@@ -106,6 +110,7 @@ class FakeRunWorker:
         crash_on_resets: dict[int, BaseException] | None = None,
         die_on: dict[str, BaseException] | None = None,
         delay_seconds: float = 0.0,
+        float_quantity: bool = False,
     ) -> None:
         self.offer = list(offer)
         #: The offered relics that also have a legal action. The event reports every one of
@@ -128,6 +133,11 @@ class FakeRunWorker:
         #: every run it starts, which is how a deliberately late worker is built.
         self.die_on = dict(die_on or {})
         self.delay_seconds = delay_seconds
+        #: Whether the fight this worker serves has a floating-point quantity in it. A record's
+        #: quantities are integers and strings, so this is how an element the generator cannot
+        #: record is forced rather than assumed impossible — and it is a state a schema check
+        #: accepts, because `1.0` is an integer to JSON Schema.
+        self.float_quantity = float_quantity
         self.dead = False
         self.closed = False
         self.resets = 0
@@ -209,6 +219,8 @@ class FakeRunWorker:
         if self.reset_request is not None:
             observation["run"]["seed"] = self.reset_request["seed"]
             observation["run"]["ascension"] = self.reset_request["ascension"]
+        if self.float_quantity and name == "run_combat_action":
+            observation["combat"]["energy"] = 3.0
         return observation
 
     def _choice_indices(self) -> dict[int, str]:
@@ -789,6 +801,25 @@ def test_a_worker_error_is_recorded_with_the_workers_own_code_as_its_kind() -> N
     assert row["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": RECORDED_OFFER[0]}
 
 
+def test_a_captured_state_with_a_floating_point_quantity_becomes_a_failure_row() -> None:
+    """A quantity the record cannot hold is that element's failure, not a corpus that drifts.
+
+    `3.0` and `3` are one number and two byte strings, and the schema check accepts both — `1.0` is
+    an integer to JSON Schema — so the record refuses the float itself, and it is refused where the
+    row is built, so the element is a failure row in a batch that still completes.
+    """
+    rows = _rows(float_quantity=True)
+
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD] * len(RECORDED_OFFER)
+    row = rows[0]
+    assert row["stage"] == "record"
+    assert row["error"]["kind"] == ERROR_RUN
+    assert "combat.energy" in row["error"]["message"] and "3.0" in row["error"]["message"]
+    # A state the record cannot carry is not carried at all, partially or otherwise.
+    assert "combat_initial_state" not in row and "state_hash" not in row
+    assert row["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": RECORDED_OFFER[0]}
+
+
 def test_a_failing_element_is_recorded_once_and_the_rest_of_the_request_still_completes() -> None:
     request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1", "SEED2"))
     worker = FakeRunWorker(crash_on={ANCIENT_ACTION: WORKER_CRASH})
@@ -871,14 +902,32 @@ class _BatchStopped(BaseException):
 
 
 @pytest.fixture
-def corpus_root() -> Iterator[Path]:
-    """A writable artifact root a corpus can be written into, removed again afterwards."""
-    root = _corpus_area() / uuid.uuid4().hex
-    root.mkdir(parents=True)
+def corpus_roots() -> Iterator[Callable[[], Path]]:
+    """A factory for writable artifact roots a corpus can be written into, removed again afterwards.
+
+    A test that compares two runs of one request needs two roots, and a test that compares one
+    request at several worker counts needs several, so the fixture makes them on demand rather than
+    deciding for the test how many corpora it is allowed to write.
+    """
+    created: list[Path] = []
+
+    def make() -> Path:
+        root = _corpus_area() / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        created.append(root)
+        return root
+
     try:
-        yield root
+        yield make
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        for root in created:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def corpus_root(corpus_roots: Callable[[], Path]) -> Path:
+    """One writable artifact root a corpus can be written into, removed again afterwards."""
+    return corpus_roots()
 
 
 def _corpus_area() -> Path:
@@ -935,6 +984,26 @@ def _read_corpus(root: Path) -> list[dict[str, Any]]:
 def _recorded_summary(root: Path) -> dict[str, Any]:
     """The corpus's summary, as a reader of the artifact root finds it."""
     return json.loads((root / SUMMARY_FILE).read_text(encoding="utf-8"))
+
+
+def _corpus_files(root: Path) -> dict[str, bytes]:
+    """Everything a corpus wrote into its root, by name, as the bytes a diff of two corpora holds.
+
+    The shards, compressed as they are, and the summary beside them: regenerating a corpus and
+    diffing it compares all of them, so all of them are what must not move.
+    """
+    return {path.name: path.read_bytes() for path in sorted(root.iterdir()) if path.is_file()}
+
+
+def _gzip_metadata(data: bytes) -> tuple[int, bytes]:
+    """A gzip member's flags byte and modification time: the two header fields a writer may stamp.
+
+    Read out of a gzip member as the format defines it, which is how "the metadata is pinned" is a
+    measurement rather than a claim about the writer: the flags byte says whether a file name is
+    embedded and the four bytes after it are the modification time.
+    """
+    assert data[:2] == b"\x1f\x8b", "the shard is not a gzip member"
+    return data[3], data[4:8]
 
 
 def _wait_until(condition: Callable[[], bool], timeout: float = 30.0) -> None:
@@ -1231,6 +1300,201 @@ def test_the_written_corpus_reads_back_through_the_repositorys_corpus_convention
     assert [shard["file"] for shard in summary["shards"]] == [
         path.name for path in sorted(corpus_root.glob("*.jsonl.gz"))
     ]
+
+
+def test_two_runs_of_one_request_write_a_byte_identical_corpus(
+    corpus_roots: Callable[[], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The clock is not part of a corpus, so the two runs are written far apart in clock terms.
+
+    A gzip member carries a modification time, and the writer this repository's other corpora use
+    takes it from the clock. Moving the clock between the two runs is what makes this a check rather
+    than a hope: a writer that stamps the time writes different compressed bytes for the second root
+    while every row agrees, and a writer that pins the metadata writes both roots alike.
+    """
+    request = _four_element_request()
+    first, second = corpus_roots(), corpus_roots()
+
+    monkeypatch.setattr(time, "time", lambda: 1_000_000.0)
+    generate_corpus(request, 2, first, worker_factory=_fresh_worker)
+    monkeypatch.setattr(time, "time", lambda: 2_000_000.0)
+    generate_corpus(request, 2, second, worker_factory=_fresh_worker)
+
+    written = _corpus_files(first)
+    assert sorted(written) == [SUMMARY_FILE, "worker-00.jsonl.gz", "worker-01.jsonl.gz"]
+    assert written == _corpus_files(second)
+    assert _read_corpus(second) == generate_rows(request, FakeRunWorker())
+
+
+def test_a_shard_holds_the_row_bytes_and_the_line_ending_the_record_declares(corpus_root: Path) -> None:
+    """A shard's uncompressed bytes are the serialised rows, and nothing about the host.
+
+    A text-mode gzip handle translates ``\\n`` to the platform's line separator, so the same corpus
+    written on Windows is not the same bytes as the same corpus written anywhere else — and a reader
+    that decodes with universal newlines never sees the difference, which is what makes it worth a
+    test rather than a note.
+    """
+    request = _four_element_request()
+    generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker)
+
+    payload = gzip.decompress((corpus_root / "worker-00.jsonl.gz").read_bytes())
+
+    rows = generate_rows(request, FakeRunWorker())
+    assert payload == "".join(encode_row(row) for row in rows[:6]).encode("utf-8")
+    assert b"\r" not in payload and payload.endswith(b"\n")
+
+
+def test_a_shard_is_written_with_no_embedded_name_and_no_timestamp(corpus_root: Path) -> None:
+    """The two gzip header fields a writer may stamp, read out of a shard a batch wrote.
+
+    A run twice in the same second would agree by luck; a name the writer happened to choose — a
+    temporary's — would make the bytes a property of the file layout rather than of the rows. Both
+    fields are read here, because pinning the timestamp is what a clock cannot prove on its own.
+    """
+    generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=_fresh_worker)
+
+    for name in ("worker-00.jsonl.gz", "worker-01.jsonl.gz"):
+        flags, mtime = _gzip_metadata((corpus_root / name).read_bytes())
+        assert flags & 0x08 == 0, "the shard embeds the file name it was written as"
+        assert mtime == b"\x00\x00\x00\x00", "the shard is stamped with the clock"
+
+
+def test_another_worker_count_produces_the_same_rows_at_other_shard_boundaries(
+    corpus_roots: Callable[[], Path],
+) -> None:
+    """The invariant across worker counts is the row set; the boundaries are the worker count's."""
+    request = _four_element_request()
+    expected = generate_rows(request, FakeRunWorker())
+    boundaries: dict[int, list[list[int]]] = {}
+
+    for workers in (1, 2, 3, 4):
+        root = corpus_roots()
+        summary = generate_corpus(request, workers, root, worker_factory=_fresh_worker)
+        boundaries[workers] = [shard["elements"] for shard in summary["shards"]]
+
+        assert len(list(root.glob("*.jsonl.gz"))) == workers, "a worker count did not name the shard count"
+        assert _read_corpus(root) == expected, f"{workers} workers read back as other rows"
+
+    # Four elements, so the block a shard owns is a restatement of the worker count — and no two of
+    # these are the same split, which is what "a different worker count moves the boundaries" means.
+    assert boundaries == {
+        1: [[0, 1, 2, 3]],
+        2: [[0, 1], [2, 3]],
+        3: [[0, 1], [2], [3]],
+        4: [[0], [1], [2], [3]],
+    }
+
+
+def test_a_corpus_is_byte_identical_when_the_workers_finish_in_another_order(
+    corpus_roots: Callable[[], Path],
+) -> None:
+    """A slow worker changes when a row lands, never which bytes a shard holds."""
+    request = _four_element_request()
+    first, second = corpus_roots(), corpus_roots()
+
+    def first_shard_late(shard: int) -> FakeRunWorker:
+        return FakeRunWorker(delay_seconds=0.02 if shard == 0 else 0.0)
+
+    def second_shard_late(shard: int) -> FakeRunWorker:
+        return FakeRunWorker(delay_seconds=0.02 if shard == 1 else 0.0)
+
+    generate_corpus(request, 2, first, worker_factory=second_shard_late)
+    generate_corpus(request, 2, second, worker_factory=first_shard_late)
+
+    assert _corpus_files(first) == _corpus_files(second)
+
+
+# -- the bytes a corpus is made of --------------------------------------------------------
+
+
+def _no_floats(token: str) -> Any:
+    """Refuse a floating-point token, which is how a float in a row's *bytes* is caught."""
+    raise AssertionError(f"a row serialised {token}, a floating-point number")
+
+
+def _reversed_keys(record: dict[str, Any]) -> dict[str, Any]:
+    """One of the record's own documents with its keys in the reverse order."""
+    return {key: record[key] for key in reversed(list(record))}
+
+
+def _serialised(request: ScenarioRequest, worker: RunWorker) -> str:
+    """One request's rows as the bytes a shard holds them in: one serialised line per row."""
+    return "".join(encode_row(row) for row in generate_rows(request, worker))
+
+
+def test_no_row_serialises_a_floating_point_quantity() -> None:
+    """Every quantity a record carries is an integer or a string, and its bytes say so.
+
+    The line is parsed with a float parser that refuses to parse one, so it is the serialised bytes
+    that are checked and not the row a reader gets back: `1e-05` and `0.30000000000000004` are what a
+    drift looks like in a corpus, and neither is what an integer looks like.
+    """
+    rows = generate_rows(_four_element_request(), FakeRunWorker())
+
+    assert len(rows) == 4 * len(RECORDED_OFFER)
+    for row in rows:
+        json.loads(encode_row(row), parse_float=_no_floats)
+
+
+def test_a_row_is_written_in_the_declared_key_order_and_not_the_order_it_holds() -> None:
+    """The record declares its key order, so the same record is the same line however it was built."""
+    row = _row()
+
+    assert list(json.loads(encode_row(row))) == [
+        "schema", "record_type", "game_build", "recipe", "combat_initial_state", "state_hash",
+    ]
+    recipe = json.loads(encode_row(row))["recipe"]
+    assert list(recipe) == [
+        "character", "ascension", "seed", "act_variant", "ancient_options", "ancient_choice",
+        "nested_choices", "node", "encounter",
+    ]
+    assert list(recipe["ancient_options"][0]) == ["option_index", "relic_model_id"]
+    assert list(recipe["ancient_choice"]) == ["option_index", "relic_model_id"]
+    assert list(recipe["node"]) == ["col", "row", "point_type"]
+
+    # The record's own documents, in another order, are the same bytes: the order is the
+    # declaration's and not the caller's.
+    scrambled = _reversed_keys(row)
+    scrambled["recipe"] = _reversed_keys(row["recipe"])
+    for nested in ("ancient_choice", "node"):
+        scrambled["recipe"][nested] = _reversed_keys(row["recipe"][nested])
+    assert encode_row(scrambled) == encode_row(row)
+
+    # A failure row's own keys and its error's are declared the same way.
+    failure = json.loads(encode_row(_row(row_one="event")))
+    assert list(failure) == ["schema", "record_type", "game_build", "recipe", "stage", "error"]
+    assert list(failure["error"]) == ["kind", "message"]
+    assert list(failure["recipe"]) == ["character", "ascension", "seed", "act_variant", "ancient_choice"]
+
+    # The two values the *worker* owns are written as the capture reported them, in its order: their
+    # shape is the published schema's — which is not a serialisation order — and the byte guarantee
+    # is scoped to one game build, which is what fixes that order along with the values.
+    capture = CAPTURES["run_combat_action"]
+    state = json.loads(encode_row(row))["combat_initial_state"]
+    assert list(state) == list(capture)
+    assert list(state["combat"]) == list(capture["combat"])
+    assert list(state["run"]) == list(capture["run"])
+
+
+def test_the_same_request_serialises_to_the_same_bytes_through_the_rows_interface() -> None:
+    """The row seam's format pin: one compact UTF-8 line per row, with the declared separators.
+
+    A shard is these lines, gzipped, so this is where a row's line shape is fixed — and unlike the
+    corpus-level tests above it is a pin rather than a discriminator: two runs of a deterministic
+    generator serialised the same way are the same bytes whether or not the serialiser was ever at
+    fault. What it holds is that a row stays one line with the declared separators, which is what
+    makes the gzip metadata the only thing a corpus diff could still be reporting.
+    """
+    first = _serialised(_request("ancient01"), FakeRunWorker())
+    second = _serialised(_request("ancient01"), FakeRunWorker())
+
+    assert first == second
+    lines = first.splitlines(keepends=True)
+    assert len(lines) == len(RECORDED_OFFER) and all(line.endswith("\n") for line in lines)
+    for line in lines:
+        # The separators and the encoding are the record's, not an encoder default's: the line is
+        # exactly what the declared serialisation of its own content is.
+        assert line == json.dumps(json.loads(line), separators=(",", ":")) + "\n"
 
 
 # -- the console entry point -------------------------------------------------------------

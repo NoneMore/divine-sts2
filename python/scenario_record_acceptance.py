@@ -25,13 +25,15 @@ a generated scenario makes — with the game, not with the generator's own helpe
   "paste the seed into the shipped game's custom run screen and the same fight is there": it
   shows the record carries enough to reproduce the situation and nothing that a fresh run
   cannot reproduce;
-* the same request on a second worker produces the same rows, field for field (byte-identical
-  *output* is ticket 10's, and needs the serialiser this script does not use);
+* the same request on a second worker produces the same rows, field for field;
 * **the batch is a corpus** (``--corpus``): the three IRONCLAD@A0 sample seeds are written through
   ``generate_corpus`` into an artifact root with one worker per shard, read back the way the
   repository's corpus readers read one, and shown to be the rows this script already validated
   field by field; a second run of the same request then resumes that corpus without starting a
-  worker and without touching the shards it already wrote;
+  worker and without touching the shards it already wrote; and a third write of the same request
+  into a sibling root is the same bytes — the copy is left beside the corpus, so a mismatch has two
+  corpora to compare — which makes byte-identity what the game's own output does and not only what
+  the offline suite asserts;
 * **no acceptance sample produced a failure row**: the oracle compares recorded scenarios, so an
   element the generator could not record fails this script with the stage and the error named,
   rather than being read as if it were a scenario. That holds in ``--snapshot`` mode too: there
@@ -50,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +66,7 @@ from sts2_native_sim import NativeWorker, NativeWorkerPool
 from sts2_native_sim.ancient import MAP_CHOICE, ancient_action, choice_actions
 from sts2_native_sim.scenarios import (
     SCENARIO_RECORD,
+    SUMMARY_FILE,
     ScenarioRequest,
     canonicalize_seed,
     generate_corpus,
@@ -564,16 +568,28 @@ def _corpus_request() -> ScenarioRequest:
     return ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=_CORPUS_SEEDS)
 
 
+def _corpus_bytes(root: Path) -> dict[str, bytes]:
+    """Every file a corpus wrote, by name: the compressed shards and the summary beside them.
+
+    Regenerating a corpus and diffing it compares all of them, so all of them are what the
+    byte-identity check holds still.
+    """
+    return {path.name: path.read_bytes() for path in sorted(root.iterdir()) if path.is_file()}
+
+
 def _assert_corpus(
     root: Path, build: dict[str, Any], records: dict[str, list[dict[str, Any]]], workers: int
 ) -> dict[str, Any]:
-    """Write the sample as a corpus, read it back, and resume it without redoing a shard.
+    """Write the sample as a corpus, read it back, resume it, and write it again byte for byte.
 
     The rows the corpus holds are the rows this script has already compared with the shipped game
     field by field, so comparing them here compares the *corpus* — the shard split, the concurrent
     writers, the compressed files and the reader convention — rather than the record again. The
     second half of the check is the resumability claim: the same request run again into the same
-    root starts no worker, rewrites no shard and reports the same summary.
+    root starts no worker, rewrites no shard and reports the same summary. The third is ticket 10's:
+    the same request, game build and worker count written into a sibling root is the same bytes,
+    which is a claim only the game's own rows can make worth checking — and the sibling is left in
+    place, so a mismatch leaves two corpora rather than a message.
     """
     request = _corpus_request()
     started: list[int] = []
@@ -597,10 +613,17 @@ def _assert_corpus(
     # One worker per shard that owns an element, and none for a shard that does not: with three
     # elements, the first three shards own one each, however many workers the batch was given.
     working = list(range(min(workers, len(_CORPUS_SEEDS))))
-    written = {path.name: path.read_bytes() for path in root.glob("*.jsonl.gz")}
+    written = _corpus_bytes(root)
     shards = [f"worker-{index:0{max(2, len(str(workers - 1)))}d}.jsonl.gz" for index in range(workers)]
-    check(started == working, f"the batch started workers {started}, not one per working shard {working}")
-    check(sorted(written) == shards, f"the batch wrote {sorted(written)}, not one shard per worker")
+    check(
+        started == working,
+        f"the batch started workers {started}, not one per working shard {working} — this check writes "
+        f"a corpus, so it wants a root that does not hold one yet",
+    )
+    check(
+        sorted(written) == sorted([*shards, SUMMARY_FILE]),
+        f"the batch wrote {sorted(written)}, not one shard per worker plus its summary",
+    )
     check(summary["game_build"] == build, "the summary does not name the build the runs were played on")
     check(summary["workers"] == workers, "the summary does not name the worker count")
     check(
@@ -620,17 +643,26 @@ def _assert_corpus(
     check(list(read_corpus(root)) == expected, "the shards do not read back as the records this run validated")
     # The repository's own reader for a corpus directory must collect exactly these shards.
     check(
-        [path.name for path in shard_paths([str(root)])] == sorted(written),
+        [path.name for path in shard_paths([str(root)])] == shards,
         "an existing corpus reader does not collect the shards this batch wrote",
     )
 
     resumed = generate_corpus(request, workers, root, worker_factory=factory)
     check(started == working, "resuming a complete corpus started a worker")
     check(resumed == summary, "resuming a complete corpus changed the summary")
-    check(
-        {path.name: path.read_bytes() for path in root.glob("*.jsonl.gz")} == written,
-        "resuming a complete corpus rewrote a shard",
-    )
+    check(_corpus_bytes(root) == written, "resuming a complete corpus rewrote a file")
+
+    # The byte-identity claim, against the game: the same request, build and worker count written a
+    # second time into a sibling root. A copy still there from an earlier run is removed first,
+    # because a resumed root would be compared with itself rather than written again — and the copy
+    # is left in place afterwards, so a mismatch has two corpora to compare rather than one and a
+    # message.
+    repeated = root.with_name(root.name + "-repeat")
+    shutil.rmtree(repeated, ignore_errors=True)
+    started.clear()
+    generate_corpus(request, workers, repeated, worker_factory=factory)
+    check(started == working, f"the second write started workers {started}, not {working}")
+    check(_corpus_bytes(repeated) == written, f"the second write at {repeated} is not the same bytes")
     return summary
 
 
@@ -641,7 +673,7 @@ def main() -> None:
     parser.add_argument(
         "--corpus", type=Path,
         help="also write the sample's first three seeds as a sharded corpus into this artifact root, "
-             "read it back and resume it",
+             "read it back and resume it, and write it once more into <root>-repeat to compare the bytes",
     )
     arguments = parser.parse_args()
 

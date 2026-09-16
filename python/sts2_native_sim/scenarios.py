@@ -44,8 +44,8 @@ What one row carries
     This is what a caller needs to reach the same fight in the shipped game. A failure row
     carries the same recipe only as far as the element resolved it, never a field of the fight.
 ``stage`` / ``error``
-    A failure row's stage — the phase of the generation the run stopped in — and the error's
-    kind and message.
+    A failure row's stage — the phase of the generation the run stopped in, or ``record`` for a
+    drive that reached its fight and could not record it — and the error's kind and message.
 ``combat_initial_state``
     The canonical observation of the fight at the moment it has begun and before the player
     has made any decision: the run's position and RNG counters, the encounter, turn, phase,
@@ -102,6 +102,15 @@ one without being told about it.
   worker count and the shards.
 * **A shard is written beside its own name and moved into place**, so a shard file is always a
   whole shard, and a batch that stops in the middle leaves the shards that landed readable.
+* **Two runs of one request are the same bytes.** For a fixed request, game build and worker count,
+  the shards and the summary are byte-identical on a re-run — the compressed bytes included — so a
+  corpus can be regenerated and diffed and a mismatch means a real change. Three things make that a
+  property of the record rather than of the run: the gzip member a shard is written as carries no
+  embedded name and a zero timestamp instead of the clock, the row's own keys are written in the
+  order this module declares rather than in the order a dictionary happened to be filled, and every
+  quantity a row carries is an integer or a string, so no float formatting can drift. Changing the
+  worker count moves the shard boundaries and nothing else: the rows are the same rows, in the same
+  relative order, whatever the worker count.
 * **The summary is the corpus's manifest.** It is rewritten every time a shard lands, so a batch
   that was killed still says what it wrote, and a second run of the same request resumes it: a
   shard the summary records as complete and whose file is still there is neither driven again nor
@@ -168,6 +177,51 @@ FAILURE_RECORD = "failure"
 #: The row types a batch emits, in the order a summary counts them.
 ROW_TYPES = (SCENARIO_RECORD, FAILURE_RECORD)
 
+#: How a row becomes bytes: UTF-8, the compact separators `,` and `:`, and non-ASCII escaped. Each
+#: is declared rather than left to an encoder default or the host's locale, because a row's bytes are
+#: part of what a corpus promises; escaping non-ASCII also keeps a failure row's message — which can
+#: come from a tool that speaks another language — the same bytes whatever it says. The summary
+#: beside a corpus is the same encoding and escaping, indented and with the space an indented
+#: document is read with, so it is declared too rather than left to `indent`'s defaults.
+ROW_ENCODING = "utf-8"
+ROW_SEPARATORS = (",", ":")
+ROW_ESCAPE_NON_ASCII = True
+SUMMARY_SEPARATORS = (",", ": ")
+
+#: The gzip metadata a shard is written as: no embedded name, and a zero modification time. A gzip
+#: member's header carries both, and `gzip.open` — what this repository's other corpus writers use —
+#: stamps the clock and the file's name into it, so two runs of one request differ in their
+#: compressed bytes while every row agrees. Pinned here, so a shard's bytes are a function of its
+#: rows.
+SHARD_GZIP_NAME = ""
+SHARD_GZIP_MTIME = 0
+
+#: The key order each kind of document is written in. A corpus is diffed line by line, and the order
+#: is declared rather than inherited from the order a dictionary happened to be filled in, so the
+#: same record is the same bytes however it was built. A key none of these names is refused where a
+#: row is written, because a field a record gained without its order being extended is a change to
+#: the corpus format rather than a detail of the code that built one row.
+ROW_KEY_ORDER: dict[str, tuple[str, ...]] = {
+    SCENARIO_RECORD: ("schema", "record_type", "game_build", "recipe", "combat_initial_state", "state_hash"),
+    FAILURE_RECORD: ("schema", "record_type", "game_build", "recipe", "stage", "error"),
+}
+RECIPE_KEY_ORDER = (
+    "character", "ascension", "seed", "raw_seed", "act_variant", "ancient_options", "ancient_choice",
+    "nested_choices", "node", "encounter",
+)
+ANCIENT_CHOICE_KEY_ORDER = ("option_index", "relic_model_id")
+NESTED_CHOICE_KEY_ORDER = ("kind", "selected_index", "selected_option_ids")
+NODE_KEY_ORDER = ("col", "row", "point_type")
+ERROR_KEY_ORDER = ("kind", "message")
+SUMMARY_KEY_ORDER = (
+    "schema", "request", "game_build", "workers", "compression", "elements", "shards",
+    "rows", "succeeded", "failed", "total", "worker_replacements", "complete",
+)
+SHARD_KEY_ORDER = (
+    "index", "file", "elements", "rows", "succeeded", "failed", "total", "worker_replacements", "complete",
+)
+REQUEST_KEY_ORDER = ("characters", "ascensions", "seeds")
+
 #: The versioned tag of the summary a batch writes beside its shards, and the name that summary is
 #: written under. A shard's own name is :func:`_shard_name`, because its padding depends on the
 #: batch's worker count; together they are the convention the repository's corpus readers already
@@ -184,13 +238,17 @@ ERROR_RUN = "run"
 COMBAT_ACTION = "combat_action"
 
 #: The stages a generation can stop at, named where the run stopped rather than where the
-#: generation intended to go next. One of these becomes a failure row's `stage`.
+#: generation intended to go next. One of these becomes a failure row's `stage`. The record's own
+#: stage is the exception that proves the naming: a drive that reached its fight can still fail
+#: while the fight is being *recorded* — a quantity the record cannot carry — and that is where the
+#: generation stopped.
 STAGE_RUN_START = "run_start"
 STAGE_ANCIENT_ROOM = "ancient_room"
 STAGE_ANCIENT_CHOICE = "ancient_choice"
 STAGE_LEAVE_ANCIENT = "leave_ancient"
 STAGE_ROW_ONE_NODE = "row_one_node"
 STAGE_FIRST_COMBAT = "first_combat"
+STAGE_RECORD = "record"
 
 #: The nested actions that select a reward rather than choice options, so they carry no
 #: `option_ids`; every other nested action must name the option ids it selected.
@@ -225,6 +283,21 @@ class ScenarioGenerationError(RuntimeError):
     def __init__(self, stage: str, message: str) -> None:
         super().__init__(f"{stage}: {message}")
         self.stage, self.message = stage, message
+
+
+class RowFormatError(RuntimeError):
+    """A document does not match the record format this module declares.
+
+    A bug rather than an input error or a run failure: a row or a summary carries a key no declared
+    order names, so writing it would put a field into a corpus in a position no reader was told
+    about. It is raised where the bytes are made, which is the last moment the format is still the
+    generator's to keep.
+
+    It stops the batch rather than becoming a row, and that is the difference between it and a
+    quantity the record cannot hold: no capture can make a row carry an undeclared key — only this
+    module can — while a capture can report a quantity that is not an integer or a string, which is
+    data and so is that element's failure row (:func:`_refuse_floats`) rather than the batch's.
+    """
 
 
 class RunWorker(RunStepWorker, Protocol):
@@ -379,13 +452,92 @@ def summarize_rows(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
 
 
 def encode_row(row: dict[str, Any]) -> str:
-    """One row as a corpus stores it: JSON on one line, with the record's own key order.
+    """One row as a corpus stores it: JSON on one line, in the declared key order.
 
-    ``sort_keys`` is deliberately off — a record is built in a declared key order, and that order
-    is what makes a corpus diffable — and the separators are pinned rather than left to the
-    encoder's defaults, so the same row is the same bytes in every shard and every run.
+    The bytes are the record's own: the row's structure is written in the order
+    :data:`ROW_KEY_ORDER` and its siblings declare rather than in the order the dictionary happens
+    to hold — so a row built by another call site, or by another version of one, is still the same
+    line — and the encoding and separators are pinned rather than left to an encoder default.
+
+    The two values the *worker* owns, the combat observation and the game build, are written as the
+    capture reported them: their shape is the published canonical-state schema's, which is not a
+    serialisation order, and their order is as fixed as their values are, because the byte guarantee
+    is scoped to one game build.
     """
-    return json.dumps(row, separators=(",", ":")) + "\n"
+    return json.dumps(
+        _row_in_declared_order(row), ensure_ascii=ROW_ESCAPE_NON_ASCII, separators=ROW_SEPARATORS
+    ) + "\n"
+
+
+def _in_declared_order(record: dict[str, Any], order: Sequence[str], path: str) -> dict[str, Any]:
+    """One document in its declared key order, refusing a key the declaration does not name.
+
+    This is the one place the record's key order is applied: everything below it says which
+    declaration governs which of the record's own documents, so a row's bytes follow from the
+    declarations and from nothing about how the row was assembled.
+    """
+    undeclared = [key for key in record if key not in order]
+    if undeclared:
+        raise RowFormatError(f"{path} carries keys {sorted(undeclared)}, which {order} does not declare")
+    return {key: record[key] for key in order if key in record}
+
+
+def _row_in_declared_order(row: dict[str, Any]) -> dict[str, Any]:
+    """One row's own keys, in the order the record format declares them, and nothing else.
+
+    The row's *structure* is ordered here and its *values* are not touched, so what a capture
+    reported is what a reader gets and only the record's own keys are this module's to place.
+    """
+    order = ROW_KEY_ORDER.get(row.get("record_type", ""))
+    if order is None:
+        raise RowFormatError(f"a row of type {row.get('record_type')!r} is not one this format declares")
+    declared = _in_declared_order(row, order, "$")
+    declared["recipe"] = _recipe_in_declared_order(row["recipe"])
+    if "error" in row:
+        declared["error"] = _in_declared_order(row["error"], ERROR_KEY_ORDER, "$.error")
+    return declared
+
+
+def _recipe_in_declared_order(recipe: dict[str, Any]) -> dict[str, Any]:
+    """One row's recipe in declared order, with the nested records it carries in theirs."""
+    declared = _in_declared_order(recipe, RECIPE_KEY_ORDER, "$.recipe")
+    if "ancient_options" in recipe:
+        declared["ancient_options"] = [
+            _in_declared_order(option, ANCIENT_CHOICE_KEY_ORDER, f"$.recipe.ancient_options[{index}]")
+            for index, option in enumerate(recipe["ancient_options"])
+        ]
+    if "ancient_choice" in recipe:
+        declared["ancient_choice"] = _in_declared_order(
+            recipe["ancient_choice"], ANCIENT_CHOICE_KEY_ORDER, "$.recipe.ancient_choice"
+        )
+    if "nested_choices" in recipe:
+        declared["nested_choices"] = [
+            _in_declared_order(nested, NESTED_CHOICE_KEY_ORDER, f"$.recipe.nested_choices[{index}]")
+            for index, nested in enumerate(recipe["nested_choices"])
+        ]
+    if "node" in recipe:
+        declared["node"] = _in_declared_order(recipe["node"], NODE_KEY_ORDER, "$.recipe.node")
+    return declared
+
+
+def _refuse_floats(value: Any, path: str = "$") -> None:
+    """Refuse a record that carries a floating-point quantity, naming where it is.
+
+    Every quantity a record carries is an integer or a string, so that a corpus cannot drift with a
+    float's formatting: `1.0` and `1` are one number and two byte strings, and which of them a build
+    prints is not something a diff can tell from a real change. The published schema cannot catch
+    one — `1.0` *is* an integer to JSON Schema's `integer` type — so the record refuses it itself,
+    and a capture that reports a fractional quantity is an element that could not be recorded rather
+    than a corpus written twice differently.
+    """
+    if isinstance(value, float):
+        raise ScenarioGenerationError(STAGE_RECORD, f"{path} is {value!r}, a floating-point quantity")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _refuse_floats(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _refuse_floats(child, f"{path}[{index}]")
 
 
 def _counts(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
@@ -706,7 +858,7 @@ def _envelope(recipe: _Recipe, record_type: str) -> dict[str, Any]:
         "schema": ROW_SCHEMA,
         "record_type": record_type,
         "game_build": copy.deepcopy(recipe.build),
-        "recipe": _declared_recipe(recipe.element),
+        "recipe": _element_recipe(recipe.element),
     }
 
 
@@ -730,6 +882,9 @@ def _row(recipe: _Recipe, walk: _DrivenRun) -> dict[str, Any]:
     })
     row["combat_initial_state"] = copy.deepcopy(walk.observation)
     row["state_hash"] = walk.state_hash
+    # A row is refused here rather than where it is written, because this is the last moment a
+    # quantity the record cannot carry is still this element's failure instead of a dead batch.
+    _refuse_floats(row)
     return row
 
 
@@ -765,7 +920,7 @@ def _staged_failure(recipe: _Recipe, error: BaseException) -> tuple[str, str]:
     return getattr(error, "stage", None) or recipe.stage, getattr(error, "message", None) or str(error)
 
 
-def _declared_recipe(element: _Element) -> dict[str, Any]:
+def _element_recipe(element: _Element) -> dict[str, Any]:
     """The recipe fields one declaration resolves before any run is driven.
 
     The caller's own seed form is kept as a diagnostic exactly when the canonical form differs
@@ -941,7 +1096,7 @@ def read_corpus(path: str | Path) -> Iterator[dict[str, Any]]:
     given = Path(path)
     shards = sorted(given.glob("*.jsonl.gz")) if given.is_dir() else [given]
     for shard in shards:
-        with gzip.open(shard, "rt", encoding="utf-8") as handle:
+        with gzip.open(shard, "rt", encoding=ROW_ENCODING) as handle:
             for line in handle:
                 if line.strip():
                     yield json.loads(line)
@@ -1086,14 +1241,14 @@ class _Corpus:
         replacements = 0
         worker: CorpusWorker | None = None
         try:
-            with gzip.open(temporary, "wt", encoding="utf-8", compresslevel=self.compression) as handle:
+            with _shard_writer(temporary, self.compression) as write_shard:
                 if shard.elements:
                     worker, retried = _start_worker(factory, shard.index)
                     self.observe(worker)
                     replacements += int(retried)
                     for element_index in shard.elements:
                         for row in _rows_for_element(self.elements[element_index], worker):
-                            handle.write(encode_row(row))
+                            write_shard(encode_row(row))
                             _add(counts, row["record_type"])
                         if not worker.alive():
                             _close(worker)
@@ -1164,22 +1319,67 @@ class _Corpus:
     def write_summary(self) -> dict[str, Any]:
         """Write the corpus's summary and return it, which is what a caller reports."""
         with self._lock:
-            summary = self.summary()
-            _write_summary(self.root, summary)
-            return summary
+            return _write_summary(self.root, self.summary())
 
 
-def _write_summary(root: Path, summary: dict[str, Any]) -> None:
+def _write_summary(root: Path, summary: dict[str, Any]) -> dict[str, Any]:
     """Put the summary where a reader finds it, and never half of one.
 
     The bytes go to a sibling temporary and are moved into place in one step, so a reader — and a
     resume, after a batch was killed mid-write — sees either the previous summary or this one. The
-    temporary is not a shard name, so a reader collecting ``*.jsonl.gz`` never sees it.
+    temporary is not a shard name, so a reader collecting ``*.jsonl.gz`` never sees it. The document
+    written is returned, in the declared key order it was written in, which is what a caller reports.
     """
+    document = _summary_in_declared_order(summary)
     path = root / SUMMARY_FILE
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(document, ensure_ascii=ROW_ESCAPE_NON_ASCII, separators=SUMMARY_SEPARATORS, indent=2) + "\n",
+        encoding=ROW_ENCODING,
+    )
     os.replace(temporary, path)
+    return document
+
+
+def _summary_in_declared_order(summary: dict[str, Any]) -> dict[str, Any]:
+    """A summary in its declared key order, its request and its shards in theirs.
+
+    The summary is a corpus document like a row, so it is written the same way: by declaration
+    rather than by the order the manifest happened to be assembled in, so that regenerating a corpus
+    and diffing it compares the corpus rather than the code that wrote it.
+    """
+    declared = _in_declared_order(summary, SUMMARY_KEY_ORDER, "$")
+    declared["request"] = _in_declared_order(summary["request"], REQUEST_KEY_ORDER, "$.request")
+    declared["rows"] = _in_declared_order(summary["rows"], ROW_TYPES, "$.rows")
+    declared["shards"] = [
+        _in_declared_order(shard, SHARD_KEY_ORDER, f"$.shards[{index}]")
+        for index, shard in enumerate(summary["shards"])
+    ]
+    return declared
+
+
+@contextlib.contextmanager
+def _shard_writer(path: Path, compression: int) -> Iterator[Callable[[str], None]]:
+    """Open one shard for writing, with the gzip member's metadata pinned.
+
+    A gzip member's header carries the file's modification time and, optionally, an embedded name.
+    `gzip.open` — what this repository's other corpus writers use — stamps the clock and the file's
+    name into both, so two runs of one request differ in their compressed bytes while every row
+    agrees, and a diff of a regenerated corpus reports the clock. The member is written with neither,
+    which is what makes a shard's bytes a function of its rows and of nothing else.
+    """
+    with open(path, "wb") as raw, gzip.GzipFile(
+        filename=SHARD_GZIP_NAME,
+        mode="wb",
+        compresslevel=compression,
+        fileobj=raw,
+        mtime=SHARD_GZIP_MTIME,
+    ) as member:
+
+        def write(line: str) -> None:
+            member.write(line.encode(ROW_ENCODING))
+
+        yield write
 
 
 def _start_worker(factory: Callable[[int], CorpusWorker], shard: int) -> tuple[CorpusWorker, bool]:
