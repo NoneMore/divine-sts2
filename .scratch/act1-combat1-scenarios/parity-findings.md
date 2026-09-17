@@ -101,6 +101,27 @@ player's `WEAK_POWER`, amount 1); both differ from the hashes recorded before th
 bridge's schema version moved with the shape, which is expected of a DTO-covering hash rather than a
 state-covering one.
 
+**Observed since: the bridge's run block, map coordinate, inventory and build are on the bridge too.**
+By the same `python/bridge_combat_observation_acceptance.py` on the same drive and the same game
+assembly. The observation carries `game_build` — version
+`0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314`, assembly `A1F9E653…`, pck `42520EB8…`, byte for
+byte the build the recorded captures carry, and identical in the worker's `hello` reply. At the
+Ancient the run reports `map_coord {col: 3, row: 0}`, `act_index` 0, `act_variant` **`UNDERDOCKS`**,
+`act_floor` 1 and `total_floor` 1; at the row-1 fight it reports `map_coord {col: 1, row: 1}` and
+both floors 2, so the Ancient room is observed advancing the counter the per-encounter generator is
+seeded with — the gap this feature was scoped around, now a measurement rather than a reading. The
+seed is the requested `A1B2C3D4E5` and `gold` is 99 at both stages. `rng_counters` carries all twelve
+of the run's own counters with the game's names — `UpFront` 404 throughout, `Niche` and `Shuffle`
+moving 0 → 1 and 0 → 9 with the fight — which is the counter set a field-by-field comparison lines up
+against a record's. The relics are `BURNING_BLOOD` then `BOOMING_CONCH` — the starting relic and the
+one the first Ancient choice grants — each an object carrying its model id, its native state
+(`{"HasTriggered": false}` on the first) and a counter only where the game shows one; the belt is
+`[null, null, null]`: three slots, none filled, which is exactly the slot index a list of occupied
+slots would have destroyed. Reading the same state twice returns the same run block and the same
+inventory. The act variant is worth noting on its own: the shipped roll for this seed is the
+**non-default** variant, so a v1 scenario sample built on this seed is one where the simulator's
+hard-coded default would have played the wrong act-1 rooms.
+
 Two of this ticket's fields are not observable as measurements at runtime, and the acceptance says
 so rather than implying otherwise: **the hand's cost agreeing with the repository's other
 projections of the same card** needs two projections of one hand card, which only the field-by-field
@@ -117,10 +138,36 @@ Three of those were worse than absent because they look present: the act index i
 
 The richest existing realization of the contract is the trace exporter's per-combat projection, which already carries almost all of it — the encounter id, the ordered draw pile, per-card identity, upgrades, enchantment, costs, intents and powers. The bridge should converge on that rather than become a third shape. The two encoders' state hashes are not comparable by construction (one is versioned and kernel-hashed, the other hashes its own DTO), so parity has to be compared field by field.
 
-**Repaired since, in the bridge's combat block.** The encounter id, the granular turn phase, energy, max energy and stars inside the combat block, a `side` on every creature, the player's own creature row, the full ordered intent list with each intent's type, damage and repeat count, and powers as model id and amount — the combat block is now worded the way the trace exporter and the simulator word it, and `combat.enemies` is gone. **The fight's five ordered piles followed, with the hand list and the three pile counts replaced by `combat.piles`** — one row per pile in the order every projection reports them, carrying the game's own word for the pile's type and its ordered `cards` — **and every card is now the simulator's own card row**: `instance_id`, `net_id`, `model_id`, `card_type`, `target_type`, `energy_cost`, `costs_x`, `upgrades`, `enchantment` when the card carries one, and `native_state`. The two fields that looked present while reading the wrong thing are repaired with them: the hand's cost reads `CardEnergyCost.GetResolved()` — the accessor the simulator's and the trace exporter's projections read — and the upgrade count reads `CardModel.CurrentUpgradeLevel` instead of being declared and never assigned. Card `instance_id` is the bridge's own (`dynamic-<ordinal>-<model id>`, minted by a registry that recalls an id for a card it has already seen and starts over with a new fight), while `net_id` is the game's and is reported literally, which is the split the parity contract's identity rule asks for. Both are recorded as observed under *Runtime evidence* below. Still absent, and still keeping the field-by-field comparison from running: the run block's RNG counters, act floor, act index base and map coordinate, the game build, and relics and potions as objects.
+**Repaired since, in the bridge's combat block.** The encounter id, the granular turn phase, energy, max energy and stars inside the combat block, a `side` on every creature, the player's own creature row, the full ordered intent list with each intent's type, damage and repeat count, and powers as model id and amount — the combat block is now worded the way the trace exporter and the simulator word it, and `combat.enemies` is gone. **The fight's five ordered piles followed, with the hand list and the three pile counts replaced by `combat.piles`** — one row per pile in the order every projection reports them, carrying the game's own word for the pile's type and its ordered `cards` — **and every card is now the simulator's own card row**: `instance_id`, `net_id`, `model_id`, `card_type`, `target_type`, `energy_cost`, `costs_x`, `upgrades`, `enchantment` when the card carries one, and `native_state`. The two fields that looked present while reading the wrong thing are repaired with them: the hand's cost reads `CardEnergyCost.GetResolved()` — the accessor the simulator's and the trace exporter's projections read — and the upgrade count reads `CardModel.CurrentUpgradeLevel` instead of being declared and never assigned. Card `instance_id` is the bridge's own (`dynamic-<ordinal>-<model id>`, minted by a registry that recalls an id for a card it has already seen and starts over with a new fight), while `net_id` is the game's and is reported literally, which is the split the parity contract's identity rule asks for.
+
+**Repaired since, in the bridge's run block and inventory — so nothing of the contract is now missing.**
+The flat `seed`/`ascension`/`act`/`floor`/`gold`/`relics`/`potions` members are gone and a fight
+carries `game_build`, `run`, `map_coord` and `inventory` instead, each worded as the simulator's own
+block is worded. The act index is the run's zero-based `CurrentActIndex` rather than `+ 1`, with the
+Act variant beside it; both the act floor and the run's total floor are reported; the coordinate the
+run stands on is reported, the row-0 Ancient included; the RNG counters are the run's own named
+counters; relics are objects carrying their counter and native state rather than bare model ids; and
+potions are one entry per slot with an empty slot kept as `null`, so no slot index is destroyed. All
+of it is recorded as observed under *Runtime evidence* above, including the Ancient's own row-0
+coordinate and the first fight's two floors.
+
+Two pieces of the bridge's new shape are the bridge's own and need a translation rather than a
+comparison, and the projection layer is where that belongs. **The coordinate**: the bridge reports it as
+`map_coord` (`{col, row}`), the simulator reports the same value as `map.current` in its map capture and
+as `map_col`/`map_row` in its scoring features, and a record carries the node it drove to as
+`recipe.node`. **The potion's native state**: the bridge reports `native_state` on every occupied slot
+and it is always empty, because the shipped potion has no saved scalar state; the record's potion row and
+the published schema have only `slot` and `model_id`, so a comparison reads the two members the record
+has. Everything else in the new blocks is word for word the simulator's, which is what lets the
+comparison be a normalisation rather than a guess.
 
 ## Still open
 
-- **No field-by-field parity comparison has been run yet.** The evidence above establishes that the oracle starts, can be driven, and now carries the combat block's contract fields and the fight's ordered piles and card rows; it does not compare a single field against a generated record. The bridge's run block and inventory are still missing, which is why extending that seam belongs to this feature rather than to a prerequisite someone else owns.
+- **No field-by-field parity comparison has been run yet.** The evidence above establishes that the
+  oracle starts, can be driven, and now carries every field the contract names — the combat block,
+  the fight's ordered piles and card rows, and the run block, coordinate, inventory and build. It
+  still does not compare a single field against a generated record, which is ticket 15's projection
+  layer and comparison; the bridge seam it needs is now complete.
+
 - **The `TotalFloor` divergence remains a static conclusion.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator.
 - **The Act-variant roll is no longer static, but has not been compared against the shipped game.** Ticket 02's `python/act_variant_acceptance.py` runs the shipped install and confirms, for 8 seeds, that the simulator's variant matches an independent port of the shipped roll (4 `Overgrowth`, 4 `Underdocks`), that the map and the run's own counters do not move, and that the variant is reported on the run observation. What is still unmeasured is the other side of the claim: that a shipped run on a non-default seed plays the same act-1 rooms, which needs the field-by-field parity run on a non-default seed (ticket 15).

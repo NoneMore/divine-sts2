@@ -23,7 +23,12 @@ from typing import Any, Dict, List, Optional
 # Ensure sts2_native_sim is in python path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import (
+    FullAppBridgeClient,
+    FullAppClientConfig,
+    bridge_potion_count,
+    bridge_run,
+)
 from sts2_native_sim.paths import find_game_root
 
 
@@ -137,7 +142,7 @@ def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]
 
     # 5. Combat Rewards: Claim card, gold, relic rewards; skip potion if belt full
     if "choose_reward" in action_types:
-        potion_count = len(obs.get("potions", []))
+        potion_count = bridge_potion_count(obs)
         valid_rewards = []
         for a in legal_actions:
             aid = a.get("action_id", "")
@@ -181,7 +186,7 @@ def select_policy_action(obs: Dict[str, Any], legal_actions: List[Dict[str, Any]
 
     if "shop_buy" in action_types:
         buys = [a for a in legal_actions if a.get("action_id", "").startswith("shop_buy:")]
-        if buys and obs.get("gold", 0) >= 150:
+        if buys and bridge_run(obs).get("gold", 0) >= 150:
             return buys[0]["action_id"]
         return "shop_leave"
 
@@ -279,10 +284,10 @@ def run_full_act_acceptance() -> int:
             current_obs = workers[0].observe()
             state_hashes.append(current_hashes[0])
 
-            floor = current_obs.get("floor", 0)
+            floor = bridge_run(current_obs).get("total_floor", 0)
             hp = current_obs.get("player_hp", 0)
             max_hp = current_obs.get("player_max_hp", 0)
-            gold = current_obs.get("gold", 0)
+            gold = bridge_run(current_obs).get("gold", 0)
 
             print(f"  Step {step_count:03d} [F{floor:02d} | HP {hp}/{max_hp} | G:{gold}] Phase={phase:12s} Action='{action}' -> Hash={current_hashes[0]} ({decision_latencies[-1]*1000:.1f}ms)", flush=True)
 
@@ -291,7 +296,7 @@ def run_full_act_acceptance() -> int:
                 print(f"  Act 1 Route completed successfully!", flush=True)
                 break
 
-        report["total_floors_traversed"] = current_obs.get("floor", 0)
+        report["total_floors_traversed"] = bridge_run(current_obs).get("total_floor", 0)
         report["total_decisions_executed"] = step_count
         report["phases_encountered"] = sorted(list(phases_seen))
         report["determinism_proof"]["verified_steps"] = step_count

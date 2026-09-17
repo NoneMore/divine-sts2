@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig, bridge_run
 from pure_neural_agent import pure_neural_agent
 
 cfg = FullAppClientConfig(worker_id=0)
@@ -17,7 +17,10 @@ obs = start_res.get("observation", {})
 print("=" * 80)
 for step in range(250):
     if obs.get("is_terminal", False):
-        print(f"Run Terminated at step {step}: Victory={obs.get('is_victory', False)}, Floor={obs.get('floor')}")
+        print(
+            f"Run Terminated at step {step}: Victory={obs.get('is_victory', False)}, "
+            f"Floor={bridge_run(obs).get('total_floor')}"
+        )
         break
 
     phase = obs.get("phase", "unknown")
@@ -28,7 +31,7 @@ for step in range(250):
 
     legal_ids = [a["action_id"] for a in legal]
     action = pure_neural_agent.select_action(obs, legal)
-    floor = obs.get("floor", 1)
+    floor = bridge_run(obs).get("total_floor", 1)
     hp = obs.get("player_hp", 0)
     print(f"Step {step:2d} | Phase: {phase:12s} | Floor: {floor:2d} | HP: {hp:2d} | Action: {action:30s} | Legal: {legal_ids[:3]}")
     step_res = client.step(action)

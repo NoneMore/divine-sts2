@@ -30,7 +30,12 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from full_act_bridge_acceptance import select_policy_action
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import (
+    FullAppBridgeClient,
+    FullAppClientConfig,
+    bridge_inventory,
+    bridge_run,
+)
 
 
 def generate_seed() -> str:
@@ -162,7 +167,7 @@ def run_trajectory_collection(
                         TrajectoryTransition(
                             step=step_idx,
                             phase=ph,
-                            floor=obs.get("floor", 0),
+                            floor=bridge_run(obs).get("total_floor", 0),
                             state_hash=h,
                             observation=obs,
                             legal_actions=legal,
@@ -194,7 +199,7 @@ def run_trajectory_collection(
 
             final_hp = obs.get("player_hp", 0)
             hp_loss = max(0, initial_hp - final_hp)
-            relic_count = len(obs.get("relics", []))
+            relic_count = len(bridge_inventory(obs).get("relics", []))
             deck_size = len(obs.get("deck_cards", []))
             boss_readiness = float(relic_count * 2.0 + (final_hp / max(1, obs.get("player_max_hp", 80))) * 5.0)
 

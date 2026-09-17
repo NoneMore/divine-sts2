@@ -8,6 +8,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.RestSite;
+using MegaCrit.Sts2.Core.Entities.Rngs;
 using MegaCrit.Sts2.Core.Events;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Map;
@@ -45,17 +46,24 @@ public static class FullAppStateTracker
             Phase = phase,
             IsTerminal = isTerminal,
             IsVictory = isVictory,
-            Seed = runState?.Rng.StringSeed ?? "",
+            GameBuild = GameBuild.Current,
             Character = player?.Character.Id.Entry ?? "",
-            Ascension = runState?.AscensionLevel ?? 0,
-            Act = (runState?.CurrentActIndex ?? 0) + 1,
-            Floor = runState?.TotalFloor ?? 0,
-            Gold = player?.Gold ?? 0,
             PlayerHp = player?.Creature.CurrentHp ?? 0,
             PlayerMaxHp = player?.Creature.MaxHp ?? 0,
             PlayerBlock = player?.Creature.Block ?? 0,
             PlayerEnergy = player?.PlayerCombatState?.Energy ?? 0,
         };
+
+        if (runState is not null)
+        {
+            obs.Run = RunObservation(runState, player);
+            // Where the run is — the coordinate the oracle checks it drove the shipped game to, the
+            // row-0 Ancient included, and absent only until the run has travelled once.
+            if (runState.CurrentMapCoord is { } coord)
+            {
+                obs.MapCoord = new CoordObservationDto { Col = coord.col, Row = coord.row };
+            }
+        }
 
         if (player is not null)
         {
@@ -70,19 +78,7 @@ public static class FullAppStateTracker
             }
             obs.DeckCards.Sort();
 
-            foreach (var relic in player.Relics)
-            {
-                obs.Relics.Add(relic.Id.Entry);
-            }
-
-            for (int slot = 0; slot < player.PotionSlots.Count; slot++)
-            {
-                var pot = player.PotionSlots[slot];
-                if (pot is not null)
-                {
-                    obs.Potions.Add(pot.Id.Entry);
-                }
-            }
+            obs.Inventory = InventoryObservation(player);
         }
 
         var legalActions = new List<LegalActionDto>();
@@ -454,6 +450,100 @@ public static class FullAppStateTracker
     }
 
     /// <summary>
+    /// The run block, worded exactly as the simulator words the same block on a combat observation,
+    /// so the two compare field by field. The act index is the run's own zero-based
+    /// <c>CurrentActIndex</c> — the base the map observation and the scoring features report — with
+    /// the Act variant beside it, so neither has to be re-derived by a comparison.
+    /// </summary>
+    private static RunObservationDto RunObservation(RunState runState, Player? player)
+    {
+        return new RunObservationDto
+        {
+            Seed = runState.Rng.StringSeed,
+            Ascension = runState.AscensionLevel,
+            Gold = player?.Gold ?? 0,
+            // The Act model in play, which the run seed rolls: two variants of one act index share
+            // its map topology and not its encounter, event or boss pools.
+            ActVariant = runState.Act.Id.Entry,
+            ActIndex = runState.CurrentActIndex,
+            ActFloor = runState.ActFloor,
+            // The map points the run has travelled, so it is the floor the Ancient room advances and
+            // the counter the per-encounter generator is seeded with.
+            TotalFloor = runState.TotalFloor,
+            RngCounters = RunRngCounters(runState),
+        };
+    }
+
+    /// <summary>
+    /// The run's named RNG counters, keyed by the game's own counter names — the same names the
+    /// simulator's worker and the trace exporter report, because both read the same set and key it
+    /// the same way. Ordered by name, as they order it, so two captures of one state read alike.
+    /// </summary>
+    private static SortedDictionary<string, int> RunRngCounters(RunState runState)
+    {
+        SortedDictionary<string, int> counters = new(StringComparer.Ordinal);
+        foreach (KeyValuePair<RunRngType, int> counter in runState.Rng.ToSerializable().Counters)
+        {
+            counters[counter.Key.ToString()] = counter.Value;
+        }
+        return counters;
+    }
+
+    /// <summary>
+    /// The run's relics and potions as objects, worded as the simulator's inventory block words them.
+    /// A relic is reported in the order the run holds it, with the counter it shows and its own saved
+    /// state; a potion is reported by the slot it sits in, and an empty slot keeps its place as a
+    /// null entry so no slot index is renumbered away.
+    /// </summary>
+    private static InventoryObservationDto InventoryObservation(Player player)
+    {
+        var inventory = new InventoryObservationDto();
+
+        foreach (RelicModel relic in player.Relics)
+        {
+            inventory.Relics.Add(RelicObservation(relic));
+        }
+
+        for (int slot = 0; slot < player.PotionSlots.Count; slot++)
+        {
+            PotionModel? potion = player.PotionSlots[slot];
+            inventory.Potions.Add(potion is null ? null : PotionObservation(slot, potion));
+        }
+
+        return inventory;
+    }
+
+    /// <summary>
+    /// One relic row. The counter is present only when the relic shows one, which is how the game
+    /// itself reports the two cases rather than a zero standing in for "none".
+    /// </summary>
+    private static RelicObservationDto RelicObservation(RelicModel relic)
+    {
+        return new RelicObservationDto
+        {
+            ModelId = relic.Id.Entry,
+            Counter = relic.ShowCounter ? relic.DisplayAmount : null,
+            NativeState = SavedNativeState(relic),
+        };
+    }
+
+    /// <summary>
+    /// One potion row. A potion reports an empty native state because the shipped potion's
+    /// serializable form carries its slot and its model and no scalar property of its own: the field
+    /// exists so an inventory row is the same shape whatever it holds, and reporting a value the game
+    /// does not have would be an invention.
+    /// </summary>
+    private static PotionObservationDto PotionObservation(int slot, PotionModel potion)
+    {
+        return new PotionObservationDto
+        {
+            Slot = slot,
+            ModelId = potion.Id.Entry,
+            NativeState = new SortedDictionary<string, object?>(StringComparer.Ordinal),
+        };
+    }
+
+    /// <summary>
     /// One creature row, worded exactly as the simulator words the same row in its own per-combat
     /// projection, so the two compare field by field. Every member read here is a public member of
     /// the game assembly this mod already references; nothing is reached by reflection, and nothing
@@ -579,8 +669,19 @@ public static class FullAppStateTracker
     /// </summary>
     private static SortedDictionary<string, object?> SavedNativeState(CardModel card)
     {
+        return SavedScalarState(card.ToSerializable().Props);
+    }
+
+    /// <summary>A relic's own saved state, read exactly as a card's is.</summary>
+    private static SortedDictionary<string, object?> SavedNativeState(RelicModel relic)
+    {
+        return SavedScalarState(relic.ToSerializable().Props);
+    }
+
+    /// <summary>One model's saved scalar property groups, ordered by property name.</summary>
+    private static SortedDictionary<string, object?> SavedScalarState(SavedProperties? props)
+    {
         SortedDictionary<string, object?> state = new(StringComparer.Ordinal);
-        SavedProperties? props = card.ToSerializable().Props;
         if (props is null)
         {
             return state;

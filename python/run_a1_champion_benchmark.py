@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
 from pure_neural_agent import pure_neural_agent
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig, bridge_run
 
 ALL_CHARACTERS = ["IRONCLAD", "SILENT", "DEFECT", "NECROBINDER", "REGENT"]
 DEFAULT_MAX_STEPS = 500
@@ -103,12 +103,14 @@ def run_single_a1_character_benchmark(
 
             phase = obs.get("phase", "unknown")
             result["phases_encountered"].add(phase)
-            floor = obs.get("floor", 1)
+            run = bridge_run(obs)
+            floor = run.get("total_floor", 1)
             result["max_floor_reached"] = max(result["max_floor_reached"], floor)
-            # Derive act from floor. Some full-app bridge observations have exposed
-            # a room/floor-like value in the act field during transitions.
-            derived_act = min(3, max(1, ((int(floor) - 1) // 16) + 1))
-            result["max_act_reached"] = max(result["max_act_reached"], derived_act)
+            # The act the run is in: the bridge reports the run's own zero-based act index rather
+            # than something to derive from a floor, and this benchmark clamps it to the three acts
+            # it scores.
+            act_number = min(3, max(1, int(run.get("act_index", 0)) + 1))
+            result["max_act_reached"] = max(result["max_act_reached"], act_number)
             hp_cur = obs.get("player_hp", 0)
             hp_max = obs.get("player_max_hp", 80)
             result["final_hp"] = f"{hp_cur}/{hp_max}"
@@ -169,11 +171,12 @@ def run_single_a1_character_benchmark(
                 result["error"] = f"Bridge returned no observation after {action_id!r}"
                 break
 
-            next_floor = int(next_obs.get("floor", floor))
+            next_run = bridge_run(next_obs)
+            next_floor = int(next_run.get("total_floor", floor))
             result["max_floor_reached"] = max(result["max_floor_reached"], next_floor)
             result["max_act_reached"] = max(
                 result["max_act_reached"],
-                min(3, max(1, ((next_floor - 1) // 16) + 1)),
+                min(3, max(1, int(next_run.get("act_index", 0)) + 1)),
             )
             result["final_hp"] = f"{next_obs.get('player_hp', 0)}/{next_obs.get('player_max_hp', 80)}"
 

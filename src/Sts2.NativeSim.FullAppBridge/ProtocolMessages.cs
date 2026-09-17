@@ -44,11 +44,12 @@ public sealed class LegalActionDto
 public sealed class ObservationDto
 {
     // The bridge's own observation version, not the simulator's: the two observations are
-    // different encodings of one state. 4 is the fight's five ordered piles of converged card rows
-    // replacing the hand list and the three pile counts. The run block and the inventory are still
-    // to converge, and each moves this number again when it does.
+    // different encodings of one state. 4 was the fight's five ordered piles of converged card rows
+    // replacing the hand list and the three pile counts. 5 carries the game build, the run block —
+    // act identity, both floors, the named RNG counters and the map coordinate — and the inventory
+    // of relic objects and potions by slot, replacing the flat run and inventory members.
     [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; set; } = 4;
+    public int SchemaVersion { get; set; } = 5;
 
     [JsonPropertyName("phase")]
     public string Phase { get; set; } = "";
@@ -59,23 +60,13 @@ public sealed class ObservationDto
     [JsonPropertyName("is_victory")]
     public bool IsVictory { get; set; }
 
-    [JsonPropertyName("seed")]
-    public string Seed { get; set; } = "";
+    // The shipped build this observation was taken on. A record carries the same three values, so a
+    // comparison attributes a mismatch to a build instead of to a state.
+    [JsonPropertyName("game_build")]
+    public GameBuildDto GameBuild { get; set; } = new();
 
     [JsonPropertyName("character")]
     public string Character { get; set; } = "";
-
-    [JsonPropertyName("ascension")]
-    public int Ascension { get; set; }
-
-    [JsonPropertyName("act")]
-    public int Act { get; set; }
-
-    [JsonPropertyName("floor")]
-    public int Floor { get; set; }
-
-    [JsonPropertyName("gold")]
-    public int Gold { get; set; }
 
     [JsonPropertyName("player_hp")]
     public int PlayerHp { get; set; }
@@ -98,11 +89,21 @@ public sealed class ObservationDto
     [JsonPropertyName("deck_cards")]
     public List<string> DeckCards { get; set; } = new();
 
-    [JsonPropertyName("relics")]
-    public List<string> Relics { get; set; } = new();
+    // Where the run is: its seed, Ascension and gold, the Act it is in and how far into it, the named
+    // RNG counters, and the run's total floor. Absent only when no run exists to describe.
+    [JsonPropertyName("run")]
+    public RunObservationDto? Run { get; set; }
 
-    [JsonPropertyName("potions")]
-    public List<string> Potions { get; set; } = new();
+    // The coordinate the run stands on, absent until it has travelled to one. The shipped game
+    // travels to its act's Ancient before the first decision the bridge reports, so this is the
+    // row-0 Ancient coordinate from the first observation on — the check that the oracle drove the
+    // game to the node a record names.
+    [JsonPropertyName("map_coord")]
+    public CoordObservationDto? MapCoord { get; set; }
+
+    // The run's inventory as objects: relics in the order the run holds them, potions by slot.
+    [JsonPropertyName("inventory")]
+    public InventoryObservationDto? Inventory { get; set; }
 
     [JsonPropertyName("combat")]
     public CombatObservationDto? Combat { get; set; }
@@ -112,6 +113,117 @@ public sealed class ObservationDto
 
     [JsonPropertyName("state_hash")]
     public string StateHash { get; set; } = "";
+}
+
+/// <summary>
+/// The build an observation was taken on, worded as the simulator's worker, the trace exporter and
+/// the published canonical-state schema all word it, because it is compared against them literally.
+/// </summary>
+public sealed class GameBuildDto
+{
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = "";
+
+    [JsonPropertyName("assembly_sha256")]
+    public string AssemblySha256 { get; set; } = "";
+
+    [JsonPropertyName("pck_sha256")]
+    public string PckSha256 { get; set; } = "";
+}
+
+/// <summary>
+/// Where the run is, as the simulator's own run block reports it. `act_index` is the run's own
+/// zero-based act index — the base every other projection in the repository reports — and
+/// `act_variant` is the Act model in play, so neither has to be re-derived from the seed.
+/// `total_floor` counts the map points the run has travelled, which is the floor the Ancient room
+/// advances and the counter the per-encounter generator is seeded with.
+/// </summary>
+public sealed class RunObservationDto
+{
+    [JsonPropertyName("seed")]
+    public string Seed { get; set; } = "";
+
+    [JsonPropertyName("ascension")]
+    public int Ascension { get; set; }
+
+    [JsonPropertyName("gold")]
+    public int Gold { get; set; }
+
+    [JsonPropertyName("act_variant")]
+    public string ActVariant { get; set; } = "";
+
+    [JsonPropertyName("act_index")]
+    public int ActIndex { get; set; }
+
+    [JsonPropertyName("act_floor")]
+    public int ActFloor { get; set; }
+
+    [JsonPropertyName("total_floor")]
+    public int TotalFloor { get; set; }
+
+    [JsonPropertyName("rng_counters")]
+    public SortedDictionary<string, int> RngCounters { get; set; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>One map coordinate, worded as the schema's own coord.</summary>
+public sealed class CoordObservationDto
+{
+    [JsonPropertyName("col")]
+    public int Col { get; set; }
+
+    [JsonPropertyName("row")]
+    public int Row { get; set; }
+}
+
+/// <summary>
+/// The run's inventory, worded as the simulator's own inventory block words it.
+/// </summary>
+public sealed class InventoryObservationDto
+{
+    [JsonPropertyName("relics")]
+    public List<RelicObservationDto> Relics { get; set; } = new();
+
+    // One entry per potion slot, in slot order. An empty slot is a null entry rather than a hole, so
+    // a slot index survives the serialisation — which is what makes a potion's slot usable as an
+    // identity and an empty belt readable as "three slots, none of them full".
+    [JsonPropertyName("potions")]
+    public List<PotionObservationDto?> Potions { get; set; } = new();
+}
+
+/// <summary>
+/// One relic of the run, in the order the run holds them. `counter` is present only for a relic that
+/// shows one, which is how the game itself reports the two cases; `native_state` is the relic's own
+/// saved properties, so a comparison can see a relic that has been charged or consumed.
+/// </summary>
+public sealed class RelicObservationDto
+{
+    [JsonPropertyName("model_id")]
+    public string ModelId { get; set; } = "";
+
+    [JsonPropertyName("counter")]
+    public int? Counter { get; set; }
+
+    [JsonPropertyName("native_state")]
+    public SortedDictionary<string, object?> NativeState { get; set; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// One potion of the run, by the slot it sits in. The native state is always empty, and it is
+/// reported rather than omitted because the ticket asks for the same row shape an inventory object
+/// has: the shipped potion's serializable form saves its slot and its model and no scalar property
+/// of its own, so there is nothing else to report. A comparison reads the slot and the model, and
+/// nothing on the record's side answers to this member.
+/// </summary>
+public sealed class PotionObservationDto
+{
+    [JsonPropertyName("slot")]
+    public int Slot { get; set; }
+
+    [JsonPropertyName("model_id")]
+    public string ModelId { get; set; } = "";
+
+    [JsonPropertyName("native_state")]
+    public SortedDictionary<string, object?> NativeState { get; set; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

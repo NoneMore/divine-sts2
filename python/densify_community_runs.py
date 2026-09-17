@@ -17,7 +17,12 @@ from typing import Dict, List, Any, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import (
+    FullAppBridgeClient,
+    FullAppClientConfig,
+    bridge_inventory,
+    bridge_run,
+)
 from sts2_native_sim.paths import find_game_root
 from full_act_bridge_acceptance import select_policy_action
 
@@ -130,7 +135,7 @@ def densify_worker_process(
                     "ascension": ascension,
                     "step": step,
                     "phase": obs.get("phase", "unknown"),
-                    "floor": obs.get("floor", 0),
+                    "floor": bridge_run(obs).get("total_floor", 0),
                     "state_hash": obs.get("state_hash", ""),
                     "observation": obs,
                     "legal_actions": legal_actions,
@@ -138,8 +143,8 @@ def densify_worker_process(
                     "targets": {
                         "v_win": None,
                         "v_hp_loss": float(obs.get("player_max_hp", 80) - obs.get("player_hp", 80)),
-                        "v_relic_ev": float(len(obs.get("relics", []))),
-                        "v_boss_readiness_heuristic": float(obs.get("floor", 0)) / 16.0 * 5.0
+                        "v_relic_ev": float(len(bridge_inventory(obs).get("relics", []))),
+                        "v_boss_readiness_heuristic": float(bridge_run(obs).get("total_floor", 0)) / 16.0 * 5.0
                     },
                     "label_provenance": {
                         "v_win": "full_application_native_terminal_outcome",

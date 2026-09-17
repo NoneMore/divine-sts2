@@ -27,6 +27,49 @@ def bridge_package_dir() -> Path:
     )
 
 
+def bridge_run(observation: dict[str, Any]) -> dict[str, Any]:
+    """The run block of a full-app bridge observation, or an empty block when it carries none.
+
+    The bridge reports where the run is as one block — its seed, Ascension and gold, the Act it is in
+    and how far into it, the run's total floor and its named RNG counters — the way the simulator's
+    own observation reports it, so a reader reaches every one of those through one name rather than a
+    flat field per quantity. A bridge older than that block, or an observation taken with no run to
+    describe, yields an empty block and so a caller's own default; the acceptance script is the reader
+    that fails loudly instead, because a wrong shape is what it exists to catch.
+
+    `run["act_index"]` is the run's own zero-based act index — one-based act numbers are the caller's
+    to derive, and `run["total_floor"]` is the map points travelled, which is the counter the Ancient
+    room advances.
+    """
+    return _bridge_block(observation, "run")
+
+
+def bridge_inventory(observation: dict[str, Any]) -> dict[str, Any]:
+    """The inventory block of a full-app bridge observation: relics in order, potions by slot.
+
+    A relic is an object with its model id, the counter it shows and its own saved state; a potion is
+    an entry per slot with `null` where the slot is empty, so a slot index is never renumbered away.
+    An observation that carries no inventory yields an empty block, as the run block does.
+    """
+    return _bridge_block(observation, "inventory")
+
+
+def bridge_potion_count(observation: dict[str, Any]) -> int:
+    """How many of the run's potion slots hold a potion.
+
+    The belt is one entry per slot with `null` where the slot is empty, so the potions a run holds are
+    the entries that are not null and not the entries there are: a three-slot belt reads as length 3
+    whether it is full or empty, which is the trap a slot-preserving list sets for a reader of `len`.
+    """
+    return sum(1 for potion in bridge_inventory(observation).get("potions", []) if potion)
+
+
+def _bridge_block(observation: dict[str, Any], member: str) -> dict[str, Any]:
+    """One object-valued block of a bridge observation, or an empty block when it is absent."""
+    block = observation.get(member)
+    return block if isinstance(block, dict) else {}
+
+
 @dataclass
 class FullAppClientConfig:
     game_root: str = field(default_factory=lambda: str(find_game_root()))

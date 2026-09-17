@@ -9,6 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from sts2_native_sim.full_app_client import bridge_run
+
 
 def normalize_token(value: Any) -> str:
     return str(value or "").upper().replace("+", "").replace(" ", "_").replace("'", "").strip("_")
@@ -208,8 +210,11 @@ class AgenticMacroPrior:
         return None
 
     def select_map(self, obs: Dict[str, Any], legal_actions: List[Dict[str, Any]]) -> Optional[str]:
-        floor = int(obs.get("floor", 1))
-        act = min(3, max(1, ((floor - 1) // 16) + 1))
+        run = bridge_run(obs)
+        floor = int(run.get("total_floor", 1))
+        # The act the run is in, which the bridge reports as the run's own zero-based act index:
+        # nothing here has to re-derive it from a floor.
+        act = min(3, max(1, int(run.get("act_index", 0)) + 1))
         key = f"map:act{act}"
         act_stats = (self.route_prior.get("acts") or {}).get(str(act), {})
         target_shares = act_stats.get("node_visit_share") or {}
@@ -239,14 +244,15 @@ class AgenticMacroPrior:
                 # alignment; 742 A10 wins correct their route-frequency bias.
                 score += 0.5 * math.log((target_share + 0.01) / (behavior_share + 0.01))
             scored.append((score, action["action_id"]))
-        state_key = str(obs.get("state_hash") or f"{obs.get('seed')}:{floor}:{hp_pct}:{[a[1] for a in scored]}")
+        state_key = str(obs.get("state_hash") or f"{run.get('seed')}:{floor}:{hp_pct}:{[a[1] for a in scored]}")
         return stable_softmax_choice(scored, state_key)
 
     def select_rest(self, obs: Dict[str, Any], legal_actions: List[Dict[str, Any]]) -> Optional[str]:
         if not self.rest_examples:
             return None
+        run = bridge_run(obs)
         hp_pct = float(obs.get("player_hp", 0)) / max(1.0, float(obs.get("player_max_hp", 1)))
-        floor_norm = float(obs.get("floor", 1)) / 50.0
+        floor_norm = float(run.get("total_floor", 1)) / 50.0
         neighbors = sorted(
             self.rest_examples,
             key=lambda item: abs(item[0] - hp_pct) + 0.35 * abs(item[1] - floor_norm),
@@ -259,7 +265,7 @@ class AgenticMacroPrior:
         for action in legal_actions:
             token = normalize_token((action.get("metadata") or {}).get("option_key"))
             scored.append((math.log(votes.get(token, 0.0) + 1e-6), action["action_id"]))
-        state_key = str(obs.get("state_hash") or f"rest:{obs.get('seed')}:{obs.get('floor')}:{hp_pct}")
+        state_key = str(obs.get("state_hash") or f"rest:{run.get('seed')}:{run.get('total_floor')}:{hp_pct}")
         return stable_softmax_choice(scored, state_key)
 
     def select_event(self, obs: Dict[str, Any], legal_actions: List[Dict[str, Any]]) -> Optional[str]:
@@ -273,7 +279,7 @@ class AgenticMacroPrior:
         known = [item for item in scored if math.isfinite(item[0])]
         if not known:
             return None
-        state_key = str(obs.get("state_hash") or f"event:{obs.get('seed')}:{obs.get('floor')}:{[a[1] for a in known]}")
+        state_key = str(obs.get("state_hash") or f"event:{bridge_run(obs).get('seed')}:{bridge_run(obs).get('total_floor')}:{[a[1] for a in known]}")
         return stable_softmax_choice(known, state_key)
 
     def select_card_operation(self, operation: str, legal_actions: List[Dict[str, Any]]) -> Optional[str]:
@@ -311,8 +317,9 @@ class AgenticMacroPrior:
         enemies = (obs.get("combat") or {}).get("enemies") or []
         incoming = sum(float(enemy.get("damage", 0)) * max(1.0, float(enemy.get("repeats", 1))) for enemy in enemies)
         incoming /= max(1.0, float(obs.get("player_max_hp", 1)))
-        phase_kind = 2 if int(obs.get("floor", 1)) in (16, 33, 50) else 0
-        floor_norm = float(obs.get("floor", 1)) / 50.0
+        floor = int(bridge_run(obs).get("total_floor", 1))
+        phase_kind = 2 if floor in (16, 33, 50) else 0
+        floor_norm = floor / 50.0
         neighbors = sorted(
             self.potion_examples,
             key=lambda item: abs(item[0] - hp_pct) + abs(item[1] - incoming)
@@ -328,7 +335,7 @@ class AgenticMacroPrior:
             if used and potion_name:
                 potion_votes[potion_name] += weight
         use_probability = weighted_use / max(1e-9, weighted_total)
-        state_key = str(obs.get("state_hash") or f"potion:{obs.get('seed')}:{obs.get('floor')}:{hp_pct}:{incoming}")
+        state_key = str(obs.get("state_hash") or f"potion:{bridge_run(obs).get('seed')}:{floor}:{hp_pct}:{incoming}")
         draw = int.from_bytes(hashlib.sha256(state_key.encode("utf-8")).digest()[:8], "big") / float(2**64)
         if draw >= use_probability:
             return None

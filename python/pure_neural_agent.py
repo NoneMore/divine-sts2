@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT / "python"))
 
 from train_v10_combat_policy import V10CombatPolicyNet, normalize_id, ACTION_TYPE_MAP, CHAR_TO_IDX, ALL_CHARACTERS
 from agentic_macro_prior import AgenticMacroPrior
+from sts2_native_sim.full_app_client import bridge_potion_count, bridge_run
 
 
 class PureNeuralAgent:
@@ -111,7 +112,7 @@ class PureNeuralAgent:
             block_norm = float(obs.get("player_block", 0)) / 50.0
             energy_norm = float(obs.get("player_energy", 3)) / 5.0
             turn_norm = float(combat.get("turn", 1)) / 15.0
-            floor_norm = float(obs.get("floor", 1)) / 50.0
+            floor_norm = float(bridge_run(obs).get("total_floor", 1)) / 50.0
 
             context = [hp_pct, block_norm, energy_norm, turn_norm, floor_norm]
 
@@ -311,7 +312,7 @@ class PureNeuralAgent:
             relic_rewards = [a for a in rewards if "Relic" in a.get("action_id", "")]
             other_rewards = [a for a in rewards if not any(k in a.get("action_id", "") for k in ["Gold", "Card", "Relic"])]
             # A full belt makes potion reward actions deterministic no-ops.
-            if len(obs.get("potions", [])) >= 3:
+            if bridge_potion_count(obs) >= 3:
                 other_rewards = [a for a in other_rewards if "Potion" not in a.get("action_id", "")]
 
             if gold_rewards:

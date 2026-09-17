@@ -19,6 +19,8 @@ import torch.nn as nn
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+from sts2_native_sim.full_app_client import bridge_potion_count, bridge_run
+
 ALL_CHARACTERS = ["IRONCLAD", "SILENT", "DEFECT", "NECROBINDER", "REGENT"]
 CHAR_TO_IDX = {c: i for i, c in enumerate(ALL_CHARACTERS)}
 
@@ -153,7 +155,7 @@ class A1ChampionController:
 
         if "shop_buy" in action_types:
             buys = [a for a in legal_actions if a.get("action_id", "").startswith("shop_buy:")]
-            if buys and obs.get("gold", 0) >= 150:
+            if buys and bridge_run(obs).get("gold", 0) >= 150:
                 return buys[0]["action_id"]
             return "shop_leave"
 
@@ -216,8 +218,9 @@ class A1ChampionController:
 
         char = str(obs.get("character", "IRONCLAD")).upper()
         char_idx = CHAR_TO_IDX.get(char, 0)
-        asc = float(obs.get("ascension", 1))
-        floor = float(obs.get("floor", 1)) / 50.0
+        run = bridge_run(obs)
+        asc = float(run.get("ascension", 1))
+        floor = float(run.get("total_floor", 1)) / 50.0
 
         # Try Neural Champion Macro Prior
         if self.draft_model is not None and self.card_to_idx:
@@ -295,7 +298,7 @@ class A1ChampionController:
             return rests[0]["action_id"]
         if monsters:
             return monsters[0]["action_id"]
-        if shops and obs.get("gold", 0) >= 200:
+        if shops and bridge_run(obs).get("gold", 0) >= 200:
             return shops[0]["action_id"]
         return legal_actions[0]["action_id"]
 
@@ -306,7 +309,7 @@ class A1ChampionController:
                 return "choose_all_rewards"
 
         # 2. Otherwise claim individual rewards
-        potion_count = len(obs.get("potions", []))
+        potion_count = bridge_potion_count(obs)
         valid_rewards = []
         for a in legal_actions:
             aid = a.get("action_id", "")

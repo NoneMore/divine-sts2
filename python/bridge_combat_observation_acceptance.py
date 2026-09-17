@@ -10,16 +10,27 @@ stars inside the combat block, every creature with its side, its complete ordere
 its powers, the player's own creature row, and the fight's five ordered piles of cards with each
 card's identity, model, type, target, cost, cost-x flag, upgrades, enchantment and native state.
 
+Everything a fight does not carry is checked beside it, because the parity contract is wider than
+the fight: the build the observation was taken on; the run's own seed, Ascension, gold, zero-based
+act index, Act variant, act floor, total floor and named RNG counters; the coordinate the run
+stands on, which is the row-0 Ancient from the first observation on and the row-1 node at the fight;
+and the inventory — relics in order as objects with their counter and native state, and potions by
+slot with the empty slots kept, so a slot index survives.
+
 The turn phase is checked through ``sts2_native_sim.decision_vocabulary``, which is the one place
 that says which simulator decision kind a bridge phase word stands for, so a phase word the
 mapping does not know fails here rather than in the field-by-field parity run.
 
-Two things this run cannot observe by itself, and says so rather than implying otherwise: whether
-the bridge's hand cost agrees with the repository's other projections of the same card (there is no
-second projection of a hand card on the bridge, so that agreement is the field-by-field parity
-run's to check, and the accessor is pinned offline in ``tests/test_bridge_observation_shape.py``),
-and whether an upgrade count is real (a starting deck is unupgraded, so the field is observed
-present and typed here and its accessor is pinned offline).
+Three things this run cannot observe by itself, and it says so rather than implying otherwise.
+Whether the bridge's hand cost agrees with the repository's other projections of the same card:
+there is no second projection of a hand card on the bridge, so that agreement is the field-by-field
+parity run's to check, and the accessor is pinned offline in
+``tests/test_bridge_observation_shape.py``. Whether an upgrade count is real: a starting deck is
+unupgraded, so the field is observed present and typed here and its accessor is pinned offline. And
+the relic counter's *present* case: neither relic this drive holds shows one, so what is observed
+here is the absent case and the shape of the member, while the accessor that reads the two members
+a counter comes from is pinned offline against the trace exporter's and the simulator's own
+inventories.
 
 Requires the shipped game (the repository's ``*_acceptance.py`` convention). The sandbox is
 hard-linked beside the install, so it has to sit on the install's volume.
@@ -30,7 +41,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -46,6 +57,53 @@ REQUIRED_COMBAT_KEYS = ("encounter", "turn", "phase", "energy", "max_energy", "s
 #: Every creature row reports these. `next_move` is not among them: a creature with no move (the
 #: player) has none, and every projection drops the member rather than writing null.
 REQUIRED_CREATURE_KEYS = ("combat_id", "model_id", "side", "hp", "max_hp", "block", "alive", "powers")
+
+#: The build block, worded as the simulator's worker, the trace exporter and the published schema
+#: all word it.
+BUILD_KEYS = ("version", "assembly_sha256", "pck_sha256")
+
+#: The run block's members, which are the simulator's own combat-run projection. The act index is
+#: zero-based, the Act variant names the model in play, and the two floors are the act's and the
+#: run's.
+RUN_KEYS = (
+    "seed",
+    "ascension",
+    "gold",
+    "act_variant",
+    "act_index",
+    "act_floor",
+    "total_floor",
+    "rng_counters",
+)
+
+#: Every named RNG counter a run reports: the shipped `RunRngType` members, in the game's own
+#: spelling. The simulator's worker, the trace exporter and the bridge all key their counters by
+#: these names, so a counter set a comparison cannot line up is a failure here.
+RUN_RNG_COUNTERS = (
+    "CombatCardGeneration",
+    "CombatCardSelection",
+    "CombatEnergyCosts",
+    "CombatOrbs",
+    "CombatPotionGeneration",
+    "CombatTargets",
+    "MonsterAi",
+    "Niche",
+    "Shuffle",
+    "TreasureRoomRelics",
+    "UnknownMapPoint",
+    "UpFront",
+)
+
+#: The Act variants act 1 can be, named as the shipped game names them.
+ACT_VARIANTS = ("OVERGROWTH", "UNDERDOCKS")
+
+#: Every relic row reports a model id and its own saved state, and a counter only when the relic
+#: shows one.
+RELIC_KEYS = ("model_id", "native_state")
+OPTIONAL_RELIC_KEYS = ("counter",)
+#: Every occupied potion slot reports its slot, its model and its own (always empty) saved state.
+POTION_KEYS = ("slot", "model_id", "native_state")
+
 
 #: The five piles, in the order every projection reports them: each pile's name, and the game's own
 #: word for its type. The bridge states this order, the offline shape test states it independently
@@ -120,6 +178,110 @@ def _identity_drift(before: dict[str, dict[str, Any]], after: dict[str, dict[str
         if (earlier := before.get(instance_id)) is not None
         and tuple(earlier[key] for key in stable) != tuple(card[key] for key in stable)
     ]
+
+
+def _block(observation: dict[str, Any], member: str, record: dict[str, Any]) -> dict[str, Any]:
+    """One object-valued member of an observation, or a failure that names what was reported."""
+    value = observation.get(member)
+    _check(isinstance(value, dict), record, f"the observation reports no {member} block: {value!r}")
+    return cast(dict[str, Any], value)
+
+
+def _check_build(observation: dict[str, Any], hello: dict[str, Any], record: dict[str, Any]) -> None:
+    """The build the observation was taken on, which is what attributes a mismatch to a build.
+
+    The worker reports the same block to a client that only says hello, and both come from one
+    measurement of one process, so the two have to agree — a build that moved between them would mean
+    the observation is of a different install than the worker claims.
+    """
+    build = _block(observation, "game_build", record)
+    _check(set(build) == set(BUILD_KEYS), record, f"the build reports {sorted(build)}, not {sorted(BUILD_KEYS)}")
+    for key in BUILD_KEYS:
+        _check(isinstance(build[key], str) and bool(build[key]), record, f"the build reports {key}={build[key]!r}")
+    _check(hello.get("game_build") == build, record,
+           f"the worker's hello build {hello.get('game_build')!r} is not the observation's {build!r}")
+
+
+def _check_run(observation: dict[str, Any], record: dict[str, Any], *, act_floor: int, total_floor: int) -> None:
+    """The run block, checked against the shape and the values this drive can know.
+
+    The two floors are the ones this stage has travelled to: one map point at the Ancient, two at the
+    row-1 node, which is the counter the per-encounter generator is seeded with.
+    """
+    run = _block(observation, "run", record)
+    _check(set(run) == set(RUN_KEYS), record, f"the run block reports {sorted(run)}, not {sorted(RUN_KEYS)}")
+
+    _check(run["seed"] == SEED, record, f"the run reports seed {run['seed']!r}, not the requested {SEED!r}")
+    _check(run["ascension"] == ASCENSION, record, f"the run reports Ascension {run['ascension']!r}")
+    _check(isinstance(run["gold"], int) and run["gold"] >= 0, record, f"the run reports gold {run['gold']!r}")
+    _check(run["act_variant"] in ACT_VARIANTS, record, f"the run reports Act variant {run['act_variant']!r}")
+    # The act index is the run's own zero-based one, not the one-based number this seam used to
+    # report; the drive stays in act 1 throughout.
+    _check(run["act_index"] == 0, record, f"the act index is {run['act_index']}, not the run's own zero-based 0")
+    _check(run["act_floor"] == act_floor, record,
+           f"the act floor is {run['act_floor']}, not the {act_floor} map points travelled in this act")
+    _check(run["total_floor"] == total_floor, record,
+           f"the run's total floor is {run['total_floor']}, not the {total_floor} map points it travelled")
+
+    counters = run["rng_counters"]
+    _check(isinstance(counters, dict), record, f"the run reports rng_counters {counters!r}")
+    _check(set(counters) == set(RUN_RNG_COUNTERS), record,
+           f"the run reports counters {sorted(counters)}, not the run's own {sorted(RUN_RNG_COUNTERS)}")
+    for name, value in counters.items():
+        _check(isinstance(value, int) and value >= 0, record, f"counter {name} is {value!r}, not a count")
+
+
+def _check_map_coord(observation: dict[str, Any], expected_row: int, record: dict[str, Any], where: str) -> dict[str, Any]:
+    """The coordinate the run stands on: the row-0 Ancient, then the row-1 node it travelled to."""
+    coord = _block(observation, "map_coord", record)
+    _check(set(coord) == {"col", "row"}, record, f"{where}: the coordinate reports {sorted(coord)}")
+    _check(coord["row"] == expected_row, record, f"{where}: the run stands on row {coord['row']}, not {expected_row}")
+    _check(isinstance(coord["col"], int) and coord["col"] >= 0, record, f"{where}: the column is {coord['col']!r}")
+    return dict(coord)
+
+
+def _check_inventory(observation: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    """The relics as ordered objects and the potions by slot, empty slots included."""
+    inventory = _block(observation, "inventory", record)
+    _check(set(inventory) == {"relics", "potions"}, record, f"the inventory reports {sorted(inventory)}")
+
+    relics = inventory["relics"]
+    _check(isinstance(relics, list), record, f"the inventory reports relics as {relics!r}")
+    # A fully unlocked Ironclad holds its starting relic, and the first Ancient choice grants one.
+    _check(len(relics) >= 2, record, f"the run holds {len(relics)} relics after the Ancient and the row-1 node")
+    for index, relic in enumerate(relics):
+        _check(isinstance(relic, dict), record, f"relic {index} is {relic!r}, not an object")
+        reported = set(relic)
+        _check(set(RELIC_KEYS) <= reported <= set(RELIC_KEYS) | set(OPTIONAL_RELIC_KEYS), record,
+               f"relic {index} reports the members {sorted(reported)}")
+        _check(isinstance(relic["model_id"], str) and bool(relic["model_id"]), record,
+               f"relic {index} reports model id {relic['model_id']!r}")
+        _check(isinstance(relic["native_state"], dict), record,
+               f"relic {index} reports native state {relic['native_state']!r}")
+        if "counter" in relic:
+            _check(isinstance(relic["counter"], int), record, f"relic {index} reports counter {relic['counter']!r}")
+
+    potions = inventory["potions"]
+    _check(isinstance(potions, list), record, f"the inventory reports potions as {potions!r}")
+    # One entry per slot, and an Ascension-0 Ironclad's belt has three of them.
+    _check(len(potions) >= 3, record, f"the belt reports {len(potions)} slots, not at least the three it starts with")
+    for slot, potion in enumerate(potions):
+        if potion is None:
+            continue
+        _check(isinstance(potion, dict), record, f"potion slot {slot} is {potion!r}, not an object or null")
+        _check(set(potion) == set(POTION_KEYS), record, f"potion slot {slot} reports the members {sorted(potion)}")
+        # The slot index is part of the state: a list that skipped an empty slot would report a
+        # potion under a slot it is not in.
+        _check(potion["slot"] == slot, record, f"the potion at position {slot} reports slot {potion['slot']!r}")
+        _check(isinstance(potion["model_id"], str) and bool(potion["model_id"]), record,
+               f"potion slot {slot} reports model id {potion['model_id']!r}")
+        _check(isinstance(potion["native_state"], dict), record,
+               f"potion slot {slot} reports native state {potion['native_state']!r}")
+
+    return {
+        "relics": [relic["model_id"] for relic in relics],
+        "potion_slots": [None if potion is None else potion["model_id"] for potion in potions],
+    }
 
 
 def _drive_to_first_fight(client: FullAppBridgeClient, observation: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -280,21 +442,51 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Worker ready on port {client.bound_port}; starting a run on {SEED}...", flush=True)
 
         started = client.start_run(seed=SEED, character=CHARACTER, ascension=ASCENSION)
-        observation, phases = _drive_to_first_fight(client, started["observation"])
+        opening = started["observation"]
+        record: dict[str, Any] = {}
+        _check_build(opening, client.hello(), record)
+        # The run travels to its act's Ancient before the first decision the bridge reports, so the
+        # row-0 Ancient coordinate and the first floor of the act are on the very first observation.
+        _check_run(opening, record, act_floor=1, total_floor=1)
+        ancient_coord = _check_map_coord(opening, 0, record, "at the Ancient")
+        record["run_at_the_ancient"] = opening["run"]
 
-        record = _check_combat_block(observation, complete_piles=True)
+        observation, phases = _drive_to_first_fight(client, opening)
+
+        record.update(_check_combat_block(observation, complete_piles=True))
         record["phases_seen_on_the_way"] = phases
         record["state_hash_at_the_first_fight"] = observation["state_hash"]
         record["draw_pile_at_the_first_fight"] = _draw_pile_order(observation)
 
+        # Where the run is and what it carries, at the fight: the build is the same one the worker
+        # said hello with, the run block is unchanged by travelling except for the floor the row-1
+        # node advanced, the coordinate is that node, and the inventory is the relics and the belt.
+        _check_build(observation, client.hello(), record)
+        _check_run(observation, record, act_floor=2, total_floor=2)
+        fight_coord = _check_map_coord(observation, 1, record, "at the first fight")
+        _check(fight_coord != ancient_coord, record,
+               f"the fight reports the Ancient's own coordinate {fight_coord!r}, so no node was travelled to")
+        record["game_build"] = observation["game_build"]
+        record["run_at_the_first_fight"] = observation["run"]
+        record["ancient_coord"] = ancient_coord
+        record["fight_coord"] = fight_coord
+        record["inventory_at_the_first_fight"] = _check_inventory(observation, record)
+
         # The same state, read twice: a draw pile's order is what a policy learns from, and an
         # identity minted per observation would make two reads of one state look like two states.
+        # The run's own counters and its inventory are the same claim for the run block: nothing
+        # happened between the two reads, so nothing about them may move.
         again = client.observe()
         _check(again is not None, record, "the bridge reports no observation on a second read")
         _check(_draw_pile_order(again) == _draw_pile_order(observation), record,
                "the draw pile's order changed between two reads of one state")
         _check(_cards_by_identity(again) == _cards_by_identity(observation), record,
                "the bridge's card identities changed between two reads of one state")
+        _check(again.get("run") == observation.get("run"), record,
+               f"the run block changed between two reads of one state: {observation.get('run')} -> {again.get('run')}")
+        again_inventory = _check_inventory(again, record)
+        _check(again_inventory == record["inventory_at_the_first_fight"], record,
+               "the inventory changed between two reads of one state")
 
         # A weak fight opens with no powers on either side, so the power row is observed by playing
         # the fight on: the first fight's enemies grant one with a debuff. Every observation on the

@@ -119,7 +119,12 @@ public static class FullAppBridgeServer
                 return new Dictionary<string, object?>
                 {
                     ["status"] = "ready",
-                    ["version"] = "0.1.0+59260271157f76a2896f0eab5bc6ea1245d8b314",
+                    // The shipped build this worker is, measured rather than declared — the same one
+                    // block the worker's observations carry, so a client that only says hello learns
+                    // the build the run it starts will be on. It replaces a flat `version` that had
+                    // been hardcoded to one build, and it is the shape the simulator's own hello
+                    // reports, rather than one build written twice.
+                    ["game_build"] = GameBuild.Current,
                     ["pid"] = Environment.ProcessId,
                     ["bound_port"] = BoundPort,
                     ["unlock_policy"] = UnlockPolicy,

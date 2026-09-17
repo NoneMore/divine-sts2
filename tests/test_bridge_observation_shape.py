@@ -1,4 +1,4 @@
-"""Offline checks that the bridge's combat block is the repository's combat projection, not a third one.
+"""Offline checks that the bridge's observation is the repository's projection, not a third one.
 
 The full-app bridge compiles against the shipped game and is only exercised end to end by an
 acceptance script, so what the repository can check offline is the shape: the bridge's own DTO
@@ -9,6 +9,11 @@ three, which is what stops the bridge drifting into a vocabulary of its own betw
 The ordered piles and the per-card fields are the same kind of check taken further: a fight is five
 ordered piles of cards, and a card is the shape the simulator's own pile projection gives one, so a
 comparison of a draw pile's order and of one card's identity has something to read.
+
+The run, inventory and build blocks are that check for everything a fight does not carry: the act
+identity the bridge used to report one-based and without its variant, the two floors, the map
+coordinate the run stands on — the row-0 Ancient included — the run's own named RNG counters, the
+relics as objects and the potions by slot, and the build the observation was taken on.
 """
 from __future__ import annotations
 
@@ -68,6 +73,35 @@ CARD_ROW_SIGNATURE = "private static CardObservationDto CardObservation(PlayerCo
 PILE_ROW_SIGNATURE = (
     "private static PileObservationDto PileObservation(PlayerCombatState fight, string name, CardPile pile)"
 )
+RUN_ROW_SIGNATURE = "private static RunObservationDto RunObservation(RunState runState, Player? player)"
+RNG_COUNTER_SIGNATURE = "private static SortedDictionary<string, int> RunRngCounters(RunState runState)"
+INVENTORY_ROW_SIGNATURE = "private static InventoryObservationDto InventoryObservation(Player player)"
+RELIC_ROW_SIGNATURE = "private static RelicObservationDto RelicObservation(RelicModel relic)"
+
+#: The run block's members: the recorded combat capture's own run keys, which are the simulator's
+#: combat-run projection. `act_index` is the run's zero-based `CurrentActIndex`, the base every other
+#: projection in the repository reports, and `total_floor` is the counter the Ancient room advances
+#: and the per-encounter generator is seeded with.
+RUN_KEYS = frozenset(
+    {"seed", "ascension", "gold", "act_variant", "act_index", "act_floor", "total_floor", "rng_counters"}
+)
+
+#: One relic row: the model id, the counter a relic that shows one carries, and the relic's own
+#: saved state.
+RELIC_KEYS = frozenset({"model_id", "counter", "native_state"})
+
+#: One potion row: the slot it sits in, its model, and its own native state — which the shipped
+#: potion's serializable form never fills, because it saves the slot and nothing else.
+POTION_KEYS = frozenset({"slot", "model_id", "native_state"})
+
+#: The build an observation was taken on, worded as the simulator, the trace exporter and the
+#: published schema all word it.
+BUILD_KEYS = frozenset({"version", "assembly_sha256", "pck_sha256"})
+
+#: The flat members the run and inventory blocks replace. They were the bridge's older seams and
+#: two of them read the wrong thing — `act` was one-based where the rest of the system is zero-based,
+#: and `relics`/`potions` were bare model ids that dropped a potion slot's index.
+REPLACED_FLAT_KEYS = frozenset({"seed", "ascension", "act", "floor", "gold", "relics", "potions"})
 
 
 def dto_properties() -> dict[str, list[str]]:
@@ -145,6 +179,47 @@ def bridge_method_body(signature: str) -> str:
     body = re.search(rf"{re.escape(signature)}\s*\n\s*\{{(.*?)\n    \}}", source, re.DOTALL)
     assert body, f"this test no longer reads {signature}"
     return body.group(1)
+
+
+def recorded_run() -> dict[str, object]:
+    """The recorded fight's run block, which is the shape a bridged fight's run block has to have."""
+    block = CAPTURES[COMBAT_CAPTURE]["run"]
+    assert isinstance(block, dict), "the fixture records no run block for a fight"
+    return block
+
+
+def recorded_inventory() -> dict[str, object]:
+    """The recorded fight's inventory, which is the shape a bridged fight's inventory has to have."""
+    block = CAPTURES[COMBAT_CAPTURE]["inventory"]
+    assert isinstance(block, dict), "the fixture records no inventory for a fight"
+    return block
+
+
+def recorded_relics() -> list[dict[str, object]]:
+    """Every recorded relic row, which is the shape a bridged relic has to have."""
+    rows = recorded_inventory()["relics"]
+    assert isinstance(rows, list), "the fixture records no relic row for a fight"
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def simulator_inventory_row_keys(collection: str) -> set[str]:
+    """The members of one row of the simulator's own inventory projection, read from its source."""
+    source = ENVIRONMENT.read_text(encoding="utf-8")
+    if collection == "relics":
+        row = re.search(r"relics = .*?Select\(x => new \{ (.*?) \}\)", source, re.DOTALL)
+    else:
+        row = re.search(r"potions = .*?Select\(\(x, i\) => x is null \? null : new \{ (.*?) \}\)", source, re.DOTALL)
+    assert row, f"this test no longer reads the simulator's {collection} row"
+    return set(re.findall(r"(\w+) = ", row.group(1)))
+
+
+def simulator_combat_run_keys() -> set[str]:
+    """The members of the simulator's combat-run block, read from its own projection."""
+    source = ENVIRONMENT.read_text(encoding="utf-8")
+    start = source.index("Dictionary<string, object?> combatObservation = new()")
+    block = re.search(r"run = new \{(.*?)\},", source[start:], re.DOTALL)
+    assert block, "this test no longer reads the simulator's combat run block"
+    return set(re.findall(r"(\w+) = ", block.group(1)))
 
 
 def test_the_bridge_dtos_this_test_reads_are_the_ones_the_bridge_declares() -> None:
@@ -312,3 +387,142 @@ def test_the_bridge_writes_the_same_null_shape_as_the_other_projections() -> Non
 
     for path in (BRIDGE_DIR / "FullAppStateTracker.cs", BRIDGE_DIR / "FullAppBridgeServer.cs"):
         assert "BridgeJson.Options" in path.read_text(encoding="utf-8"), f"{path.name} does not use the shared options"
+
+
+def test_the_bridge_run_block_is_word_for_word_the_recorded_run_block() -> None:
+    assert set(dto_properties()["RunObservationDto"]) == set(recorded_run()) == RUN_KEYS
+
+
+def test_the_bridge_run_block_carries_the_fields_the_simulator_carries() -> None:
+    simulator = simulator_combat_run_keys()
+    assert RUN_KEYS <= simulator, "this test no longer reads the simulator's combat run block"
+    # The bridge may carry less of the simulator's run block and nothing else, so a field it reports
+    # cannot be a word the simulator does not use for the same quantity.
+    assert set(dto_properties()["RunObservationDto"]) <= simulator
+
+
+def test_the_bridge_reports_the_act_index_in_the_base_the_rest_of_the_system_uses() -> None:
+    """The act index was reported one-based here and zero-based everywhere else.
+
+    One-based was worse than absent: a comparison that trusted the number reported parity while
+    comparing the wrong one. The base is now the run's own `CurrentActIndex`, and the Act variant is
+    reported beside it rather than left to be re-derived from the seed.
+    """
+    run = bridge_method_body(RUN_ROW_SIGNATURE)
+    assert "ActIndex = runState.CurrentActIndex" in run, "the act index is not the run's own zero-based index"
+    assert not re.search(r"CurrentActIndex\s*\)?\s*\+\s*1", run), "the act index is reported one-based again"
+    assert "Act.Id.Entry" in run, "the Act variant is not reported beside the act index"
+
+
+def test_the_bridge_reports_both_the_act_floor_and_the_runs_total_floor() -> None:
+    run = bridge_method_body(RUN_ROW_SIGNATURE)
+    assert "ActFloor = runState.ActFloor" in run
+    assert "TotalFloor = runState.TotalFloor" in run
+
+
+def test_the_bridge_rng_counters_are_the_runs_own_named_counters() -> None:
+    """The counters a comparison checks are the run's, named as the game names them.
+
+    The simulator and the trace exporter both read `RunRngSet.ToSerializable().Counters` and key it
+    by the enum member's own name; a bridge that invented a name, or keyed by an ordinal, would report
+    a counter set no comparison could line up.
+    """
+    counters = bridge_method_body(RNG_COUNTER_SIGNATURE)
+    assert "Rng.ToSerializable().Counters" in counters, "the counters are not the run's own RNG counters"
+    assert "Key.ToString()" in counters, "the counters are not keyed by the game's own counter names"
+    assert "SortedDictionary<string, int>" in counters, "the counters are not ordered the way the other projections order them"
+
+
+def test_the_bridge_reports_the_map_coordinate_the_run_stands_on() -> None:
+    """The coordinate, which includes the row-0 Ancient once the run has travelled there.
+
+    A run travels to its act's Ancient before the first decision the bridge reports, so the coordinate
+    is the row-0 node from the first observation on — which is what makes it usable as the check that
+    the oracle drove the shipped game to the node a record names.
+    """
+    source = (BRIDGE_DIR / "FullAppStateTracker.cs").read_text(encoding="utf-8")
+    assert "CurrentMapCoord" in source, "the bridge does not read the coordinate the run has travelled to"
+    assert set(dto_properties()["CoordObservationDto"]) == {"col", "row"}
+    assert "map_coord" in dto_properties()["ObservationDto"]
+
+
+def test_the_bridge_reports_the_game_build_the_way_the_other_projections_do() -> None:
+    captured = CAPTURES[COMBAT_CAPTURE]["game_build"]
+    assert isinstance(captured, dict)
+    assert set(dto_properties()["GameBuildDto"]) == set(captured) == BUILD_KEYS
+    assert "game_build" in dto_properties()["ObservationDto"]
+
+    build = BRIDGE_DIR / "GameBuild.cs"
+    assert build.is_file(), "the bridge does not fingerprint the build it is running"
+    source = build.read_text(encoding="utf-8")
+    assert "ProductVersion" in source, "the build reports no version"
+    assert "SHA256" in source, "the build reports no assembly or data hash"
+    assert "SlayTheSpire2.pck" in source, "the build does not hash the data pack beside the assembly"
+
+
+def test_the_bridge_relic_row_is_the_simulators_relic_row() -> None:
+    recorded = {key for relic in recorded_relics() for key in relic}
+    assert set(dto_properties()["InventoryObservationDto"]) == set(recorded_inventory()) == {"relics", "potions"}
+    # The fixture's one relic shows no counter, and a null member is dropped, so `counter` is the one
+    # member of the row a recorded relic does not have to exhibit.
+    assert recorded == RELIC_KEYS - {"counter"}, "this test no longer reads the recorded relic rows"
+    assert set(dto_properties()["RelicObservationDto"]) == simulator_inventory_row_keys("relics") == RELIC_KEYS
+
+
+def test_the_bridge_potion_row_is_the_simulators_row_plus_the_state_it_carries() -> None:
+    simulator = simulator_inventory_row_keys("potions")
+    assert simulator == {"slot", "model_id"}, "this test no longer reads the simulator's potion row"
+    assert set(dto_properties()["PotionObservationDto"]) == simulator | {"native_state"} == POTION_KEYS
+
+
+def test_the_bridge_keeps_an_empty_potion_slot_as_a_null_entry() -> None:
+    """A slot index is part of the state, so a list that skipped an empty slot would renumber the rest.
+
+    The row is positional: one entry per slot, in slot order, `null` where the slot is empty — which is
+    how the simulator's own inventory reports an empty belt, and what the published schema asks for.
+    """
+    inventory = bridge_method_body(INVENTORY_ROW_SIGNATURE)
+    assert re.search(r"Potions\.Add\(potion is null \? null : ", inventory), (
+        "the potion list drops empty slots instead of keeping them"
+    )
+    assert "for (int slot = 0; slot < player.PotionSlots.Count; slot++)" in inventory
+
+
+def test_the_bridge_no_longer_carries_its_older_flat_run_and_inventory_seam() -> None:
+    observation = set(dto_properties()["ObservationDto"])
+    still_flat = REPLACED_FLAT_KEYS & observation
+    assert not still_flat, f"the bridge still reports {sorted(still_flat)} flat beside the blocks that replace them"
+    assert {"game_build", "run", "inventory", "map_coord"} <= observation
+
+
+def test_the_bridge_snapshot_actually_fills_the_blocks_it_declares() -> None:
+    """A declared member is not a reported one: the snapshot has to assign it.
+
+    The blocks above are checked against their rows here, and the rows against the simulator and the
+    fixture; what this pins is that the one method that builds a snapshot reaches them at all. Without
+    it a block could be dropped from the snapshot and every other test would stay green, which is the
+    failure the runtime acceptance exists to catch — and an offline test should catch it first.
+    """
+    source = (BRIDGE_DIR / "FullAppStateTracker.cs").read_text(encoding="utf-8")
+    assert "obs.Run = RunObservation(runState, player);" in source
+    assert "obs.Inventory = InventoryObservation(player);" in source
+    assert "obs.MapCoord = new CoordObservationDto { Col = coord.col, Row = coord.row };" in source
+    assert "GameBuild = GameBuild.Current," in source
+
+
+def test_the_bridge_relic_row_reads_the_counter_the_way_the_other_projections_read_it() -> None:
+    """A relic's counter is the one it shows, and every projection reads the same two members.
+
+    This run's relics show no counter, so the acceptance observes the *absent* case rather than a
+    value; the accessor is what is pinned here, against the simulator's and the trace exporter's own
+    inventories of the same relic.
+    """
+    assert "relic.ShowCounter ? relic.DisplayAmount : null" in bridge_method_body(RELIC_ROW_SIGNATURE)
+
+    trace = (paths.REPOSITORY_ROOT / "src" / "Sts2.NativeSim.TraceExporter" / "TraceExporterMod.cs").read_text(
+        encoding="utf-8"
+    )
+    assert "x.ShowCounter ? x.DisplayAmount : (int?)null" in trace, "this test no longer reads the trace exporter"
+    assert 'ReflectionTools.Get(x!, "ShowCounter")' in ENVIRONMENT.read_text(encoding="utf-8")
+
+

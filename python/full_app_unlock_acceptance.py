@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig
+from sts2_native_sim.full_app_client import FullAppBridgeClient, FullAppClientConfig, bridge_run
 
 
 def main() -> int:
@@ -24,7 +24,7 @@ def main() -> int:
         observation: dict[str, Any] = started.get("observation") or {}
         if observation.get("character") != "DEFECT":
             raise AssertionError(f"requested character was not applied: {observation!r}")
-        if observation.get("ascension") != 10:
+        if bridge_run(observation).get("ascension") != 10:
             raise AssertionError(f"requested Ascension was not applied: {observation!r}")
 
         history = client.history()
@@ -34,7 +34,7 @@ def main() -> int:
         print(json.dumps({
             "unlock_policy": started["unlock_policy"],
             "character": observation["character"],
-            "ascension": observation["ascension"],
+            "ascension": bridge_run(observation)["ascension"],
             "phase": observation.get("phase"),
         }, sort_keys=True))
         return 0
