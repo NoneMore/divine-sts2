@@ -12,7 +12,7 @@
 - [x] The current map coordinate is reported, including the row-0 Ancient coordinate once the run has travelled to it.
 - [x] The named RNG counters are reported, with the same names the simulator uses.
 - [x] Relics are reported in order as objects carrying model id, counter and native state, not as bare model ids.
-- [x] Potions are reported by slot with model id and native state, and empty slots are retained so the slot index survives.
+- [x] Potions are reported by slot with model id, and empty slots are retained so the slot index survives. *(The ticket's "and native state" is deliberately not implemented — see Comments: the shipped potion saves no scalar state, and the parity contract's own inventory row for a potion has no home for it.)*
 - [x] A bridged shipped run reports these fields end to end, not only in static reading.
 
 ## Comments
@@ -25,10 +25,11 @@
   simulator's own — `run`'s eight members are word for word the combat-run block
   `PersistentNativeCombatEnvironment` emits (`seed`, `ascension`, `gold`, `act_variant`, `act_index`,
   `act_floor`, `total_floor`, `rng_counters`), the relic row is its `relics` row
-  (`model_id`, `counter`, `native_state`), and the potion row is its `potions` row plus the
-  `native_state` a potion carries — so the ticket-15 projection layer has a shape to normalise to
-  rather than a third vocabulary to translate. The bridge's `schema_version` moved 4 → 5 with the
-  shape, as ticket 12's comment said it would, and the bridge's DTO-covering state hash moved with it.
+  (`model_id`, `counter`, `native_state`), and the potion row is its `potions` row exactly
+  (`slot`, `model_id`) — so the ticket-15 projection layer has a shape to normalise to rather than a
+  third vocabulary to translate. The bridge's `schema_version` moved 4 → 5 with the shape and 5 → 6
+  when the potion row lost its empty native state (below), as ticket 12's comment said it would, and
+  the bridge's DTO-covering state hash moved with it.
 - **Two of the repairs are of values that looked present while reading the wrong thing.** `act` was
   `CurrentActIndex + 1` while the rest of the system is zero-based, so a comparison that trusted it
   compared the wrong number; `relics` and `potions` were bare model ids, and skipping an empty potion
@@ -58,15 +59,19 @@
   once as a block and once as a flat `version`, which is the shape the simulator's own `hello`
   reports. Measuring it costs one read of the 1.77 GB data pack, 4.0 s measured on this host, paid
   once per worker process on the first handshake or observation.
-- **A potion's native state is reported and is always empty, and that is a deliberate superset.** The
-  shipped `SerializablePotion` saves its model and its slot index and nothing else, so an occupied slot
-  carries `native_state: {}` — the field exists because the ticket asks for it and because the trace
-  exporter's own reset projection reports the same empty state for the same reason. It is worth being
-  explicit about the seam it creates: the feature spec's parity contract lists a potion as "model id"
-  only, and the published schema's potion row allows `slot` and `model_id` under
-  `additionalProperties: false`, so ticket 15's projection compares the two members the record has and
-  ignores this one rather than expecting a counterpart. It is the only member of the new blocks that
-  the record side has no home for.
+- **The potion row is the record's row exactly, and the ticket's "native state" is deliberately not
+  implemented.** A first cut followed the ticket literally and carried `native_state: {}` on every
+  occupied slot. It was dropped on the owner's decision, for three reasons that compound. The shipped
+  `SerializablePotion` saves its model and its slot index and nothing else, so the member was a
+  constant empty object — no information, and exactly the "looks present, says nothing" class of
+  field this ticket exists to remove. The parity contract lists a potion as "model id" by slot and no
+  more, and the published schema's potion row allows `slot` and `model_id` under
+  `additionalProperties: false`, so the record side has no counterpart for it and the comparison would
+  have needed an exception for this one member — where the whole point of the run and inventory blocks
+  is that a comparison needs none. And with it gone the bridge's potion row equals the simulator's
+  *exactly* rather than being a superset, which is the convergence ticket 12 set the standard for. The
+  trace exporter's reset snapshot does write an empty `native_state` for a potion, but that snapshot is
+  a reset spec rather than a compared, schema-validated projection, so it does not carry the argument.
 - **Observed with the shipped game** (assembly
   `A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52`), by the extended
   `python/bridge_combat_observation_acceptance.py`: one headless worker, seed `A1B2C3D4E5`,
@@ -82,11 +87,14 @@
   first), and the belt is `[null, null, null]`: three slots, none filled, which is exactly the slot
   index an empty list would have destroyed. The build block is identical in `hello` and in the
   observation. Reading the same state twice returns the same run block and the same inventory, so
-  neither is reassembled differently on a rebuild. Bridge state hash
+  neither is reassembled differently on a rebuild. At schema version 5 the bridge state hash is
   `1F49ECE13760D40EB3E82538289AE46A0146792329816F1A66C2CB72FB7651B4` at the fight and
   `828CFA312C33DD227DF37E2848D2730E5DD5A7C799590EF2B9BFAA2EB9DDE0F1` once a power is reported
   (the player's `WEAK_POWER`); both differ from ticket 12's hashes because the schema version moved
-  with the shape.
+  with the shape. At the final schema version, 6 — the one without the potion's empty native state —
+  the same drive reports `8C6638C1768F703CE36E9BCF4DB6400EDCF28F0E9A899E29D2CA2B7991A5401F` at the
+  fight and `37F1CB880C8EE96CAEDD2D0529CA3649363779FDA52B1A8C534BB48B9D63717E` on the turn the power
+  is reported, with every other observed value identical to the run above.
 - **Nine Python readers were migrated, and one of the migrations is a real behaviour repair.** The
   belt's shape change alone would have silently inverted every "is the belt full" decision: a
   three-slot list is length 3 whether it holds three potions or none, so
@@ -174,10 +182,19 @@ What the review changed:
 - **The block readers were tidied.** `bridge_run` and `bridge_inventory` share one private
   `_bridge_block`, and the readers that walked `bridge_run(obs)` twice inside one expression hold one
   local. `derived_act` in the benchmark is `act_number`, which is what it now is.
-- **What the review raised and this change deliberately did not do.** The potion's `native_state` stays
-  (above). `map_coord` keeps its bridge-local name (above). The accessors keep returning an empty block
-  for a missing one, because their callers are demo policies whose defaults are their own and the
-  acceptance is the reader that fails loudly — that difference in failure contract is now stated in
-  both docstrings rather than left to be inferred.
+- **What the review raised and this change deliberately did not do.** The accessors keep returning an
+  empty block for a missing one, because their callers are demo policies whose defaults are their own
+  and the acceptance is the reader that fails loudly — that difference in failure contract is now
+  stated in both docstrings rather than left to be inferred. `map_coord` keeps its bridge-local name
+  (above).
+
+**2026-09-16 — the potion row lost its empty native state, on the owner's decision.** The review
+recorded the tension above; the owner's call was to drop the member rather than leave ticket 15 a
+member to ignore, and the reasoning is in the potion bullet above. What changed with it:
+`PotionObservationDto` is `slot` and `model_id` and nothing else, the tracker builds the row inline
+because there is no longer anything to build, the offline shape test asserts the row is *equal* to the
+simulator's rather than a superset of it, the acceptance checks the two members and no more, and the
+bridge's `schema_version` moved 5 → 6 — so the observation hashes moved a second time and the
+acceptance was re-run against the shipped game to record them.
 
 

@@ -90,9 +90,9 @@ RUN_KEYS = frozenset(
 #: saved state.
 RELIC_KEYS = frozenset({"model_id", "counter", "native_state"})
 
-#: One potion row: the slot it sits in, its model, and its own native state — which the shipped
-#: potion's serializable form never fills, because it saves the slot and nothing else.
-POTION_KEYS = frozenset({"slot", "model_id", "native_state"})
+#: One potion row: the slot it sits in and its model, which is the whole of what the shipped potion
+#: saves — it has no scalar state of its own, so there is no `native_state` member to carry.
+POTION_KEYS = frozenset({"slot", "model_id"})
 
 #: The build an observation was taken on, worded as the simulator, the trace exporter and the
 #: published schema all word it.
@@ -469,10 +469,15 @@ def test_the_bridge_relic_row_is_the_simulators_relic_row() -> None:
     assert set(dto_properties()["RelicObservationDto"]) == simulator_inventory_row_keys("relics") == RELIC_KEYS
 
 
-def test_the_bridge_potion_row_is_the_simulators_row_plus_the_state_it_carries() -> None:
+def test_the_bridge_potion_row_is_the_simulators_potion_row() -> None:
+    """A potion row is the record's row exactly, so no comparison needs an exception for it.
+
+    The slot and the model are all the shipped potion saves, and they are all the record's inventory
+    carries, so this row is one of the few the bridge does not have to be a superset of.
+    """
     simulator = simulator_inventory_row_keys("potions")
     assert simulator == {"slot", "model_id"}, "this test no longer reads the simulator's potion row"
-    assert set(dto_properties()["PotionObservationDto"]) == simulator | {"native_state"} == POTION_KEYS
+    assert set(dto_properties()["PotionObservationDto"]) == simulator == POTION_KEYS
 
 
 def test_the_bridge_keeps_an_empty_potion_slot_as_a_null_entry() -> None:
@@ -482,7 +487,7 @@ def test_the_bridge_keeps_an_empty_potion_slot_as_a_null_entry() -> None:
     how the simulator's own inventory reports an empty belt, and what the published schema asks for.
     """
     inventory = bridge_method_body(INVENTORY_ROW_SIGNATURE)
-    assert re.search(r"Potions\.Add\(potion is null \? null : ", inventory), (
+    assert re.search(r"Potions\.Add\(potion is null \? null : new PotionObservationDto \{ Slot = slot, ModelId = potion\.Id\.Entry \}\)", inventory), (
         "the potion list drops empty slots instead of keeping them"
     )
     assert "for (int slot = 0; slot < player.PotionSlots.Count; slot++)" in inventory

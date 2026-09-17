@@ -507,7 +507,9 @@ public static class FullAppStateTracker
         for (int slot = 0; slot < player.PotionSlots.Count; slot++)
         {
             PotionModel? potion = player.PotionSlots[slot];
-            inventory.Potions.Add(potion is null ? null : PotionObservation(slot, potion));
+            // An occupied slot carries its position and its model and nothing else, which is the whole
+            // of what the shipped potion saves; the empty slot beside it keeps its place as a null.
+            inventory.Potions.Add(potion is null ? null : new PotionObservationDto { Slot = slot, ModelId = potion.Id.Entry });
         }
 
         return inventory;
@@ -524,22 +526,6 @@ public static class FullAppStateTracker
             ModelId = relic.Id.Entry,
             Counter = relic.ShowCounter ? relic.DisplayAmount : null,
             NativeState = SavedNativeState(relic),
-        };
-    }
-
-    /// <summary>
-    /// One potion row. A potion reports an empty native state because the shipped potion's
-    /// serializable form carries its slot and its model and no scalar property of its own: the field
-    /// exists so an inventory row is the same shape whatever it holds, and reporting a value the game
-    /// does not have would be an invention.
-    /// </summary>
-    private static PotionObservationDto PotionObservation(int slot, PotionModel potion)
-    {
-        return new PotionObservationDto
-        {
-            Slot = slot,
-            ModelId = potion.Id.Entry,
-            NativeState = new SortedDictionary<string, object?>(StringComparer.Ordinal),
         };
     }
 

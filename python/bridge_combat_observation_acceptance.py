@@ -15,7 +15,7 @@ the fight: the build the observation was taken on; the run's own seed, Ascension
 act index, Act variant, act floor, total floor and named RNG counters; the coordinate the run
 stands on, which is the row-0 Ancient from the first observation on and the row-1 node at the fight;
 and the inventory — relics in order as objects with their counter and native state, and potions by
-slot with the empty slots kept, so a slot index survives.
+slot, the empty slots kept so a slot index survives.
 
 The turn phase is checked through ``sts2_native_sim.decision_vocabulary``, which is the one place
 that says which simulator decision kind a bridge phase word stands for, so a phase word the
@@ -101,8 +101,9 @@ ACT_VARIANTS = ("OVERGROWTH", "UNDERDOCKS")
 #: shows one.
 RELIC_KEYS = ("model_id", "native_state")
 OPTIONAL_RELIC_KEYS = ("counter",)
-#: Every occupied potion slot reports its slot, its model and its own (always empty) saved state.
-POTION_KEYS = ("slot", "model_id", "native_state")
+#: Every occupied potion slot reports its slot and its model, which is all the shipped potion saves
+#: and all the record's own inventory row carries.
+POTION_KEYS = ("slot", "model_id")
 
 
 #: The five piles, in the order every projection reports them: each pile's name, and the game's own
@@ -275,8 +276,6 @@ def _check_inventory(observation: dict[str, Any], record: dict[str, Any]) -> dic
         _check(potion["slot"] == slot, record, f"the potion at position {slot} reports slot {potion['slot']!r}")
         _check(isinstance(potion["model_id"], str) and bool(potion["model_id"]), record,
                f"potion slot {slot} reports model id {potion['model_id']!r}")
-        _check(isinstance(potion["native_state"], dict), record,
-               f"potion slot {slot} reports native state {potion['native_state']!r}")
 
     return {
         "relics": [relic["model_id"] for relic in relics],

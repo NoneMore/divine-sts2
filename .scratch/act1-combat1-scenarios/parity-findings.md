@@ -118,15 +118,21 @@ one the first Ancient choice grants — each an object carrying its model id, it
 (`{"HasTriggered": false}` on the first) and a counter only where the game shows one; the belt is
 `[null, null, null]`: three slots, none filled, which is exactly the slot index a list of occupied
 slots would have destroyed. Reading the same state twice returns the same run block and the same
-inventory. The act variant is worth noting on its own: the shipped roll for this seed is the
+inventory, and the potion rows carry their slot and their model and no more, which is the record's own
+row. The act variant is worth noting on its own: the shipped roll for this seed is the
 **non-default** variant, so a v1 scenario sample built on this seed is one where the simulator's
-hard-coded default would have played the wrong act-1 rooms.
+hard-coded default would have played the wrong act-1 rooms. Bridge state hash
+`8C6638C1768F703CE36E9BCF4DB6400EDCF28F0E9A899E29D2CA2B7991A5401F` at the fight and
+`37F1CB880C8EE96CAEDD2D0529CA3649363779FDA52B1A8C534BB48B9D63717E` on the turn a power is reported
+(bridge schema version 6, the one whose potion row is the record's row).
 
 Two of this ticket's fields are not observable as measurements at runtime, and the acceptance says
 so rather than implying otherwise: **the hand's cost agreeing with the repository's other
 projections of the same card** needs two projections of one hand card, which only the field-by-field
 parity run will have (ticket 15), and **a real upgrade count** needs an upgraded card, which a
-starting deck does not contain. Both accessors are pinned offline by
+starting deck does not contain. A third is the relic counter's *present* case: neither relic this
+drive holds shows one, so what is measured here is the absent case and the shape of the member. All
+three accessors are pinned offline by
 `tests/test_bridge_observation_shape.py` against the simulator's own card projection, and the
 acceptance observes the fields present, typed and non-zero where the game charges energy.
 
@@ -155,11 +161,11 @@ Two pieces of the bridge's new shape are the bridge's own and need a translation
 comparison, and the projection layer is where that belongs. **The coordinate**: the bridge reports it as
 `map_coord` (`{col, row}`), the simulator reports the same value as `map.current` in its map capture and
 as `map_col`/`map_row` in its scoring features, and a record carries the node it drove to as
-`recipe.node`. **The potion's native state**: the bridge reports `native_state` on every occupied slot
-and it is always empty, because the shipped potion has no saved scalar state; the record's potion row and
-the published schema have only `slot` and `model_id`, so a comparison reads the two members the record
-has. Everything else in the new blocks is word for word the simulator's, which is what lets the
-comparison be a normalisation rather than a guess.
+`recipe.node`. **Nothing else**: the relic row is the simulator's row key for key, and the potion row is
+the simulator's row exactly — the one member that had no counterpart on the record side, a potion's
+always-empty native state, was dropped rather than left for the comparison to ignore. Everything else in
+the new blocks is word for word the simulator's, which is what lets the comparison be a normalisation
+rather than a guess.
 
 ## Still open
 

@@ -45,11 +45,13 @@ public sealed class ObservationDto
 {
     // The bridge's own observation version, not the simulator's: the two observations are
     // different encodings of one state. 4 was the fight's five ordered piles of converged card rows
-    // replacing the hand list and the three pile counts. 5 carries the game build, the run block —
+    // replacing the hand list and the three pile counts. 5 carried the game build, the run block —
     // act identity, both floors, the named RNG counters and the map coordinate — and the inventory
-    // of relic objects and potions by slot, replacing the flat run and inventory members.
+    // of relic objects and potions by slot, replacing the flat run and inventory members. 6 is a
+    // potion row that is the record's row exactly, without the empty native state no comparison has
+    // a counterpart for.
     [JsonPropertyName("schema_version")]
-    public int SchemaVersion { get; set; } = 5;
+    public int SchemaVersion { get; set; } = 6;
 
     [JsonPropertyName("phase")]
     public string Phase { get; set; } = "";
@@ -208,11 +210,10 @@ public sealed class RelicObservationDto
 }
 
 /// <summary>
-/// One potion of the run, by the slot it sits in. The native state is always empty, and it is
-/// reported rather than omitted because the ticket asks for the same row shape an inventory object
-/// has: the shipped potion's serializable form saves its slot and its model and no scalar property
-/// of its own, so there is nothing else to report. A comparison reads the slot and the model, and
-/// nothing on the record's side answers to this member.
+/// One potion of the run, by the slot it sits in. It carries the slot and the model and nothing else,
+/// which is the whole of what the shipped potion's serializable form saves: a potion has no saved
+/// scalar state to report, and the parity contract's inventory row for a potion — and the published
+/// schema's — says the same, so a comparison reads this row without an exception.
 /// </summary>
 public sealed class PotionObservationDto
 {
@@ -221,9 +222,6 @@ public sealed class PotionObservationDto
 
     [JsonPropertyName("model_id")]
     public string ModelId { get; set; } = "";
-
-    [JsonPropertyName("native_state")]
-    public SortedDictionary<string, object?> NativeState { get; set; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>
