@@ -60,8 +60,7 @@ is still a leak (ADR-0004). The hardcoded game paths are gone from `Directory.Bu
 `tests/Sts2.NativeSim.TraceExporterSmoke/Sts2.NativeSim.TraceExporterSmoke.csproj`: `GameDataDir`
 derives from `STS2_GAME_ROOT` alone, and a project that references the shipped assemblies declares
 `RequiresGameData` and fails with `STS2_GAME_ROOT is not set` rather than a missing-reference error.
-`pwsh scripts/test-public-tree.ps1` exits 0 on this tree
-(`.scratch/dev-environment-hardening/issues/03-public-tree-gate-and-hardcoded-defaults.md`).
+`pwsh scripts/test-public-tree.ps1` exits 0 on this tree.
 
 ### B2 — A documented command cannot import
 

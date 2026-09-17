@@ -23,7 +23,7 @@
   > "Every scenario this project generates … must be exactly what a fully unlocked Slay the Spire 2 client produces for the same run seed, so that any generated scenario can be replayed by hand in the shipped game; … **acceptance must compare against the shipped game**"，
   并且明确否决了"仅凭模拟器自洽（simulator-only self-consistency）"作为验收。
 - 词汇边界（`CONTEXT.md`）：**shipped game** `:15-17`、**full-app sandbox** `:11-13`、**generated scenario** `:51-53`、**combat initial state** `:43-45`、**Act variant** `:47-49`、**card-select prompt** `:35-37` 与 **option pick** `:39-41`（后者"a bridged run reports no stage of its own for it yet"——这条区分正是后面"未验证"的直接来源）。
-- 支撑前提：ADR-0001（`docs/adr/0001-…md:3`，完全解锁；`:9-11` "Act variants are rolled from the run seed … discovery state is pinned off"）、ADR-0002（`docs/adr/0002-…md:3`，net9.0 以便加载桥接 mod）、ADR-0005（`docs/adr/0005-…md:3`，宿主适配只放在共享入口）。
+- 支撑前提：ADR-0001（`docs/adr/0001-…md:3`，完全解锁；`:9-11` "Act variants are rolled from the run seed … discovery state is pinned off"）、ADR-0002（`docs/adr/0002-…md:3`，net9.0 以便加载桥接 mod）。
 
 ### 2.2 被比较的契约
 
@@ -196,7 +196,7 @@
 **需求与词汇**
 - `docs/adr/0003-generated-scenarios-are-reproducible-in-the-shipped-game.md:3`
 - `docs/adr/0001-fully-unlocked-runs-are-the-simulator-baseline.md:3,9-11`
-- `docs/adr/0002-target-net-9-for-game-host-compatibility.md:3`；`docs/adr/0004-public-tree-gate-scope.md:3`；`docs/adr/0005-sandbox-adaptation-is-conditional.md:3`
+- `docs/adr/0002-target-net-9-for-game-host-compatibility.md:3`；`docs/adr/0004-public-tree-gate-scope.md:3`
 - `CONTEXT.md:11-13,15-17,35-41,43-49,51-53`
 - `.scratch/act1-combat1-scenarios/spec.md:50-75,119-121,123-136,138-159`
 - `docs/architecture-review.md:609-657`（尤其 `:630`）

@@ -17,5 +17,5 @@ Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/
 
 ### Dev environment
 
-How this repository adapts itself to a sandboxed Windows host — the command set that works, the
-repository defects and their status, and what the host refuses: `docs/agents/dev-environment.md`.
+The commands that work on this repository's Windows host, and the one requirement a build has — MSBuild
+needs named pipes, so builds and tests run only with the file sandbox off: `docs/agents/dev-environment.md`.

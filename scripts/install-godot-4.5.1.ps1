@@ -2,14 +2,13 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 $toolRoot = Get-DivineToolsRoot
 $archive = Join-Path $toolRoot 'Godot_v4.5.1-stable_mono_win64.zip'
-$partialArchive = "$archive.part"
 $destination = Join-Path $toolRoot 'godot-4.5.1-mono'
 $staging = "$destination.staging"
 $download = 'https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_mono_win64.zip'
 
 New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
 if (-not (Test-Path -LiteralPath $archive)) {
-    Save-DivineDownload -Uri $download -OutFile $archive -Resume
+    Invoke-WebRequest -UseBasicParsing -Uri $download -OutFile $archive
 }
 
 $godot = Get-ChildItem -LiteralPath $destination -Recurse -File -Filter 'Godot_v4.5.1-stable_mono_win64.exe' -ErrorAction SilentlyContinue |

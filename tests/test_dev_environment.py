@@ -10,50 +10,6 @@ import pytest
 from sts2_native_sim import paths
 
 
-def test_a_writable_directory_is_accepted_and_left_clean(tmp_path: Path) -> None:
-    target = tmp_path / "writable"
-
-    assert paths.is_directory_writable(target) is True
-    assert list(target.iterdir()) == []
-
-
-def test_a_refused_directory_is_reported_as_not_writable(tmp_path: Path) -> None:
-    blocker = tmp_path / "not-a-directory"
-    blocker.write_text("x", encoding="utf-8")
-
-    assert paths.is_directory_writable(blocker / "child") is False
-
-
-def test_a_writable_user_directory_is_not_redirected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
-
-    assert paths.native_worker_user_directory_overrides(root=tmp_path / "redirect") == {}
-
-
-def test_a_refused_user_directory_is_redirected_into_the_repository(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    blocker = tmp_path / "profile-file"
-    blocker.write_text("x", encoding="utf-8")
-    monkeypatch.setenv("APPDATA", str(blocker / "Roaming"))
-    root = tmp_path / "redirect"
-
-    overrides = paths.native_worker_user_directory_overrides(root=root)
-
-    assert set(overrides) == {"APPDATA", "LOCALAPPDATA", "TEMP", "TMP"}
-    assert Path(overrides["APPDATA"]) == root / "appdata"
-    assert Path(overrides["LOCALAPPDATA"]) == root / "localappdata"
-    assert Path(overrides["TEMP"]) == Path(overrides["TMP"]) == root / "temp"
-    for value in set(overrides.values()):
-        assert Path(value).is_dir()
-
-
-def test_no_user_directory_is_redirected_without_appdata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("APPDATA", raising=False)
-
-    assert paths.native_worker_user_directory_overrides(root=tmp_path / "redirect") == {}
-
-
 def test_game_root_failure_names_the_variable_and_the_searched_locations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

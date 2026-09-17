@@ -929,7 +929,7 @@ def corpus_roots() -> Iterator[Callable[[], Path]]:
     created: list[Path] = []
 
     def make() -> Path:
-        root = _corpus_area() / uuid.uuid4().hex
+        root = Path(tempfile.gettempdir()) / uuid.uuid4().hex
         root.mkdir(parents=True)
         created.append(root)
         return root
@@ -945,29 +945,6 @@ def corpus_roots() -> Iterator[Callable[[], Path]]:
 def corpus_root(corpus_roots: Callable[[], Path]) -> Path:
     """One writable artifact root a corpus can be written into, removed again afterwards."""
     return corpus_roots()
-
-
-def _corpus_area() -> Path:
-    """Where a corpus test may write: the host's temporary area where it allows a writable
-    directory, and the gitignored `artifacts/` tree inside the repository where it does not.
-
-    pytest cannot make this directory for the test: `tmp_path` is created with mode 0o700, and this
-    checkout's file sandbox refuses a write inside such a directory even to the process that created
-    it, which is why 22 tests in this suite error on this host. So the adaptation asks the host the
-    question itself — ADR-0005's rule for an adaptation, and the reason this probe is the fixture
-    rather than a note to the next reader — and falls back to the repository tree, which the file
-    policy does allow, only where the probe is refused.
-    """
-    area = Path(tempfile.gettempdir())
-    probe = area / f"sts2-scenario-corpus-probe-{uuid.uuid4().hex}"
-    try:
-        probe.mkdir()
-        (probe / "probe").write_text("", encoding="utf-8")
-    except OSError:
-        return Path(__file__).resolve().parents[1] / "artifacts" / "pytest-scenario-corpus"
-    finally:
-        shutil.rmtree(probe, ignore_errors=True)
-    return area
 
 
 def _four_element_request() -> ScenarioRequest:

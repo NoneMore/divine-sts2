@@ -135,10 +135,8 @@ Standards and spec were reviewed in parallel against this working tree. What the
   replaced, and a `NativeWorker` that could not be constructed propagated out of the shard task. A
   worker that cannot start is now given one second attempt, counted as a replacement, and a second
   failure is the only thing that stops the batch.
-- **The corpus fixture assumed the sandbox.** It wrote into the repository tree on every host without
-  probing, which ADR-0005 asks an adaptation not to do. It now probes for a writable directory in the
-  host's temporary area and falls back to the gitignored `artifacts/` tree only where the probe is
-  refused; `docs/agents/dev-environment.md` records that, in its own section on the pytest temp root.
+- **The corpus fixture wrote into the repository tree.** Every corpus now goes to the host's temporary
+  area instead.
 - **Smaller ones.** The counting helpers were `_count`/`_tally`/`_empty_counts`/`_counts_of`, and
   `_counts_of` was handed a counts mapping under a parameter named `rows`; they are `_counts`,
   `_tally`, `_empty_counts` and `_recorded_counts`. `_Corpus` took seven positional arguments
