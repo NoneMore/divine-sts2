@@ -24,6 +24,14 @@ _SEM_FAILCRITICALERRORS = 0x0001
 _SEM_NOGPFAULTERRORBOX = 0x0002
 _SEM_NOOPENFILEERRORBOX = 0x8000
 
+#: What a reset request can declare itself to be, as the environment's `reset_mode` names it. This is
+#: the `run` half: a run reset stands the run on its map and builds no combat at all. The other half,
+#: `combat` — the fight the request itself describes — is the environment's own default, so a request
+#: that declares nothing means it and no caller has to write it. The name lives here because the
+#: client is where every caller's request is written, and the scenario generator declares the same
+#: mode on the run-start request it builds.
+RESET_MODE_RUN = "run"
+
 
 def _spawn_without_windows_error_dialogs(command: list[str], **options: Any) -> subprocess.Popen[str]:
     """Spawn one child that inherits suppressed Windows fault/open-file dialogs."""
@@ -224,7 +232,12 @@ class NativeWorker:
         result = self.request("reset", state); self._record_reset("reset", state, state, result)
         return result
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
-        result = self.request("run_reset", state); self._record_reset("run_reset", state, state, result)
+        # A run reset declares itself on the request: the run stands on its map and no combat is
+        # built, and the environment reads the mode off the request — which is also what a stored
+        # branch replays from, where no method name is left to say which reset it was. A caller's
+        # own declaration is kept, so a contradiction is refused rather than quietly overridden.
+        params = {"reset_mode": RESET_MODE_RUN, **state}
+        result = self.request("run_reset", params); self._record_reset("run_reset", params, params, result)
         return result
     def map_reset(self, state: dict[str, Any]) -> dict[str, Any]:
         result = self.request("map_reset", state); self._record_reset("map_reset", state, state, result)

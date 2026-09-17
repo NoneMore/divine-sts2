@@ -27,6 +27,14 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private readonly Dictionary<string, Branch> _branches = new(StringComparer.Ordinal);
     private readonly LinkedList<string> _branchOrder = new();
     private readonly Dictionary<object, string> _cardInstanceIds = new(ReferenceEqualityComparer.Instance);
+    // The reset deck's own cards, by the identity the record names them with. A combat-mode reset
+    // maps those onto the combat cards it clones (`_cardInstanceIds`); a run-mode reset has no
+    // combat to map onto yet, so this is what lets the fight the run later enters name the cards it
+    // draws from the same deck — see `RebindEnteredCombat`. It is deliberately a map of its own
+    // rather than more entries in `_cardInstanceIds`: that map also names the options of a card
+    // choice, and a deck card offered in one has always been named `generated-…` there rather than
+    // by its deck identity, which is a value every recorded nested choice carries.
+    private readonly Dictionary<object, string> _deckInstanceIds = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<uint, object> _combatCreaturesById = new();
     private string _lastSnapshotDebug = "";
     private int _dynamicCardOrdinal;
@@ -162,11 +170,44 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
 
     public EnvironmentResult Reset(ResetRequest request)
     {
+        ResetState(Declaring(request, ResetModes.Combat));
+        return Capture(new { kind = "reset", replayed_actions = 0 });
+    }
+
+    /// <summary>
+    /// The request with the reset it is for written onto it — `mode` being the reset the caller
+    /// asked for by name. A request that declares nothing is stood up as that reset, because asking
+    /// for it by name is what declaring it means; a request that declares the *other* mode is a
+    /// contradiction and is refused rather than resolved; and an unknown mode is refused too. The
+    /// resolved mode is what the request stores from here on, which is what lets a stored branch
+    /// replay it: a branch rebuilds from that request, where no method name is left to say which
+    /// reset it was.
+    /// </summary>
+    private static ResetRequest Declaring(ResetRequest request, string mode)
+    {
+        string? declared = request.ResetMode;
+        if (declared is not (null or ResetModes.Combat or ResetModes.Run))
+            throw new ProtocolException("invalid_reset", $"Unknown reset_mode '{declared}'; the modes are '{ResetModes.Combat}' and '{ResetModes.Run}'.");
+        if (declared is not null && !StringComparer.Ordinal.Equals(declared, mode))
+            throw new ProtocolException("invalid_reset", $"A '{mode}' reset was asked for with reset_mode '{declared}'.");
+        return request with { ResetMode = mode };
+    }
+
+    /// <summary>
+    /// Stand up the state the request asks for, without capturing it: a combat, or a run standing on
+    /// its map. Split out of <see cref="Reset"/> so a run reset can rebuild the run in its own mode
+    /// and capture once — the capture of a run reset is the map's, and the combat it used to build
+    /// first cost one monster-composition draw and one deck shuffle that the first real fight then
+    /// read past.
+    /// </summary>
+    private void ResetState(ResetRequest request)
+    {
         ThrowIfPoisoned();
         QuiesceOutstandingTransition();
         _branches.Clear();
         _branchOrder.Clear();
         _cardInstanceIds.Clear();
+        _deckInstanceIds.Clear();
         _combatCreaturesById.Clear();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         _runMode = false; _runStage = "map"; _runWon = false; _roomRewardsSet = null; _resolvedRoomRewards.Clear(); _pendingRoomRewardIndex = null; _rewardSets.Clear(); _customRewardMode = false; _customRewardsLinked = false; _customRewardKinds = []; _treasureRoom = null; _treasureSynchronizer = null; _treasureOpened = false; _treasureResolved = false; _merchantRoom = null; _merchantInventory = null; _merchantEntryIdentities.Clear(); _mapMode = false; _rewardMode = false; _rewardKind = "card"; _rewardModelId = null; _cardReward = null; _restMode = false; _eventMode = false; _eventId = null; _event = null; Validate(request); _reset = request; _history.Clear(); _currentBranchHandle = null; _lastActionId = null; Construct(request);
@@ -181,12 +222,14 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
         }
         catch { }
-        return Capture(new { kind = "reset", replayed_actions = 0 });
     }
     public EnvironmentResult RunReset(ResetRequest request)
     {
-        ThrowIfPoisoned();
-        Reset(request); _runMode = true; _runStage = "map"; InitializeRunMap();
+        // The caller declares the reset it wants; this is the method that stands up a run, so a
+        // request that declares nothing is stood up as one and a request that declares the combat
+        // reset is refused rather than quietly reinterpreted.
+        ResetState(Declaring(request, ResetModes.Run));
+        _runMode = true; _runStage = "map"; InitializeRunMap();
         return Capture(new { kind = "run_reset", replayed_actions = 0 });
     }
     public EnvironmentResult MapReset(ResetRequest request)
@@ -329,7 +372,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             _lastSnapshotDebug = "snapshot_was_null";
         }
 
-        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null; Construct(branch.Reset); _runMode = branch.RunMode; _runStage = "map"; _rewardSets.Clear();
+        _reset = branch.Reset; _history.Clear(); _cardInstanceIds.Clear(); _deckInstanceIds.Clear(); _combatCreaturesById.Clear(); _dynamicCardOrdinal = 0; _currentBranchHandle = null; _lastActionId = null; Construct(branch.Reset); _runMode = branch.RunMode; _runStage = "map"; _rewardSets.Clear();
         _mapMode = !_runMode && branch.MapMode; _rewardMode = !_runMode && branch.RewardMode; _rewardKind = branch.RewardKind; _rewardModelId = branch.RewardModelId; _restMode = !_runMode && branch.RestMode; _eventMode = !_runMode && branch.EventMode; _eventId = branch.EventId;
         _customRewardMode = branch.CustomRewardMode; _customRewardsLinked = branch.CustomRewardsLinked; _customRewardKinds = branch.CustomRewardKinds;
         if (_runMode) InitializeRunMap();
@@ -368,6 +411,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             ?? throw new MissingMemberException("MegaCrit.Sts2.Core.Unlocks.UnlockState", "all");
         _player = playerType.GetMethods(BindingFlags.Public | BindingFlags.Static).Single(x => x.Name == "CreateForNewRun" && x.GetParameters().Length == 3).Invoke(null, [character, unlock, (ulong)1])!;
         _cardInstanceIds.Clear();
+        _deckInstanceIds.Clear();
         _choiceOrdinal = 0; _dynamicCardOrdinal = 0; _pendingChoice = null; _continuationTask = null;
         object deck = ReflectionTools.Get(_player, "Deck")!;
         if (!r.UseCharacterStartingLoadout) ReflectionTools.Invoke(deck, "Clear", true);
@@ -434,6 +478,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             string prefix = r.UseCharacterStartingLoadout ? "starter" : "native-added";
             deckVersions.Add($"{prefix}-{loadoutOrdinal++}-{Entry(nativeCard)}", nativeCard);
         }
+        foreach ((string instanceId, object deckCard) in deckVersions) _deckInstanceIds[deckCard] = instanceId;
 
         if (!r.UseCharacterStartingLoadout)
         {
@@ -450,6 +495,28 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             object result = ReflectionTools.Invoke(_player, "AddPotionInternal", Mutable("AllPotions", potion.ModelId), potion.Slot, true)!;
             if (!(bool)ReflectionTools.Get(result, "success")!) throw new ProtocolException("invalid_reset", $"Could not place potion {potion.ModelId} in slot {potion.Slot}.");
+        }
+
+        // A run reset stands the run on its map and builds no combat. The fight a run will really
+        // play does not exist yet: the shipped `CombatRoom` builds it when the run travels into a
+        // monster room (`RunManager.EnterMapPointInternal` -> `CombatRoom.StartCombat`), which is
+        // where that encounter's monsters are generated and the deck is shuffled. Building a combat
+        // here would spend one monster-composition draw (`GenerateMonstersWithSlots`) and one
+        // shuffle of the starting deck (`PopulateCombatState`) on a fight the run never plays, and
+        // the first real fight would read both streams one draw ahead of the shipped game's.
+        //
+        // The combat-only members of the request — `encounter`, `enemies`, `initial_hand`,
+        // `initial_draw_pile`, `turn`, `energy`, `stars` and `invoke_combat_entry_hooks` — describe
+        // that fight, so a run reset does not read them. None of them was observable in a run
+        // observation before either: the combat they described was never played.
+        if (r.ResetMode == ResetModes.Run)
+        {
+            _combat = null; _pcs = null; _manager = nativeCombatManager;
+            // The singleton is the shipped one the run's own room entry drives, and it holds no
+            // combat: `CombatManager.SetUpCombat` refuses to set one up while it does.
+            ReflectionTools.Set(_manager, "_state", null);
+            ApplyRngCounters(r);
+            return;
         }
 
         object encounterModel = r.Encounter.Equals("first", StringComparison.OrdinalIgnoreCase) ? ReflectionTools.Enumerate(ReflectionTools.GetStatic(db, "AllEncounters")).First(x => x is not null)! : Find(ReflectionTools.GetStatic(db, "AllEncounters")!, r.Encounter);
@@ -943,6 +1010,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private void RebindEnteredCombat(object room)
     {
         Dictionary<object, string> deckIds = new(ReferenceEqualityComparer.Instance);
+        // The deck's own identities first: a run-mode reset built no combat, so its reset deck is
+        // all the identity this first fight can be named from. A combat-mode reset contributes its
+        // own clones' deck versions too, which covers a card added to the deck mid-run.
+        foreach ((object deckCard, string id) in _deckInstanceIds) deckIds.TryAdd(deckCard, id);
         foreach ((object card, string id) in _cardInstanceIds)
         {
             object? deckVersion = ReflectionTools.Get(card, "DeckVersion");

@@ -2,7 +2,7 @@
 
 **Question:** for a given run seed, what must the simulator reproduce for a generated "act 1 first combat" scenario to be reachable — and identical — in the shipped game?
 
-**Answer (short):** the map and the encounter *choice* are already correct and provably immune to the missing Ancient room; three other things are not. `TotalFloor` was off by one and is repaired by entering the Ancient room — measured, the floors now agree at the first fight. The act-1 variant (`Overgrowth` vs `Underdocks`) is rolled in the shipped game and was hard-coded in the simulator, which is repaired by deriving it from the seed; what a field-by-field run adds is that the *shipped* side is the constrained one, because a fresh profile forces the non-default variant. And the first fight is still not the same fight on the two sides: the run-mode reset builds a throwaway combat the shipped game never builds, so the record's first fight is one `Niche` draw and one deck shuffle further along its streams than the game's — the enemy HP and the whole draw order differ with it.
+**Answer (short):** the map and the encounter *choice* are already correct and provably immune to the missing Ancient room; three other things are not. `TotalFloor` was off by one and is repaired by entering the Ancient room — measured, the floors now agree at the first fight. The act-1 variant (`Overgrowth` vs `Underdocks`) is rolled in the shipped game and was hard-coded in the simulator, which is repaired by deriving it from the seed; what a field-by-field run adds is that the *shipped* side is the constrained one, because a fresh profile forces the non-default variant. And the first fight was not the same fight on the two sides until ticket 16: the run-mode reset built a throwaway combat the shipped game never builds, so the record's first fight was one `Niche` draw and one deck shuffle further along its streams than the game's, and the enemy HP and the whole draw order differed with it. That reset is now repaired and measured — a run-mode reset spends neither draw, and the fourteen-scenario parity run matches the shipped game field for field.
 
 **Sources:** static reading of the shipped decompiled build (`sts2.dll` v0.107.1), plus the runtime observations under *Runtime evidence* and *The oracle's own projection is thin*, which say which of them were measured rather than read. The field-by-field parity run belongs to the runtime observations: it drove real shipped-game processes and compared 51 contract fields per scenario. Game citations are relative to the decompiled root `MegaCrit/sts2/`; repo citations are relative to the repo root. Every claim above the *Runtime evidence* heading is a static conclusion unless it says otherwise.
 
@@ -261,10 +261,11 @@ one draw ahead from that moment on. Read from the environment:
 `PopulateCombatState(…, Shuffle)` unconditionally (`:455-466`) whatever the request is for, a scenario
 run's reset included.
 
-That is a defect in the environment's reset path, not in the bridge, and it is filed as ticket 16
-rather than repaired here: the fix is a Core change, and every table recorded from a run reset moves
-with it — the generator's `_OBSERVED`/`_OBSERVED_CHOICES` state hashes and `act_variant_acceptance`'s
-counter baseline among them.
+That is a defect in the environment's reset path, not in the bridge, and it was filed as ticket 16
+rather than repaired in that run: the fix is a Core change, and every table recorded from a run
+reset moves with it — the generator's `_OBSERVED`/`_OBSERVED_CHOICES` state hashes and
+`act_variant_acceptance`'s counter baseline among them. **Ticket 16 has since landed**, and the
+entry below records the repair, the re-measured counters and the parity run that now passes.
 
 **The Act-variant bound is a measurement now too, and it is why the compared sample is one variant.**
 The shipped game forces act 1's non-default variant until a profile has met it
@@ -294,6 +295,52 @@ side's `state_hash`. No hash is compared at any point — the report states `sta
 and it also names the four declared fields **no sample exercised** (the potion slot and the
 enchantment members: a turn-1 fight holds no potion and enchants no card), so a field that is declared
 and never read cannot be mistaken for one that was.
+
+**Observed since: the reset defect is repaired, and the field-by-field run passes (ticket 16).** The
+repair is the one this document localised: a reset request now declares what it is for
+(`reset_mode`), and a *run* reset builds no combat at all — the run stands on its act map and the
+fight it will really play is built by the shipped `CombatRoom` when the run travels into a monster
+room, which is where that encounter's monsters are generated and the deck is shuffled. So the two
+draws the old reset spent on a fight nobody played are not spent, and the first real fight reads
+both streams where the shipped game does.
+
+*The stage-by-stage counters, re-measured on the repaired build with the generator's own run-start
+request* (`ANC1ENT10`, IRONCLAD, Ascension 0, one native worker): the reset, the Ancient entered,
+the Ancient's first choice taken (a `card_choice`) and the Ancient left all report **no `Niche` and
+no `Shuffle` draw at all** — the only counter that has moved is `UpFront` 411, which is the run's
+own map — and at the row-1 fight the run reports `Niche` 1 and `Shuffle` 9. Counted from zero, that
+is one monster-composition draw and one shuffle of the deck the run actually plays, which is what
+the shipped run's whole first fight costs; the same drive measured before the repair (above) read 1
+and 9 at the reset itself and 2 with 18 at the fight for this choice, the reset's nine draws added
+to the fight's own nine.
+
+*The parity run, re-run on the same sample and the same game assembly*, now reports **14 of 14
+samples matched field for field** and **2 of 2 Act-variant probes measured the bound**, with
+`state_hashes_compared: 0` and the same 50 declared field paths, the same three exclusions and the
+same nested-choice coverage statement (`card_choice` measured, `option_choice` and
+`custom_reward_choice` named as not covered) as the failing run above. The fight itself is what
+matches now: the enemy's generated HP, the hand and the ordered draw pile, the counters and every
+other contract field agree, where before every sample differed at
+`$.run.rng_counters.Niche` with the HP and the piles behind it. The set of declared fields no
+sample *exercised* fell from the whole contract to the same four members ticket 15 named — the
+potion slot and model and the two enchantment members, none of which a turn-1 fight holds — because
+a comparison that stops at the first mismatch cannot report which fields it reached.
+
+*What moved with it, and was re-recorded.* `python/scenario_record_acceptance.py`'s `_OBSERVED` and
+`_OBSERVED_CHOICES` (24 state hashes; the recipes — offer, choice, nested kinds, node, encounter —
+did not move, and neither did the replay check that drives each row from its own fields).
+`python/act_variant_acceptance.py`'s `_BASELINE_COUNTERS`, whose `Niche` 1 / `Shuffle` 9 became
+`0` / `0`, with every recorded map digest and every `UpFront` count unchanged — which is also the
+measurement that the act roll and the map generation still consume nothing they should not.
+`tests/fixtures/canonical-observations.json`, re-recorded by
+`python/observation_schema_acceptance.py --record`: the run-mode captures at the run's start and at
+the Ancient lost exactly those 1 `Niche` and 9 `Shuffle` draws, the run-mode captures at the fight
+and beyond lost the same 1 and 9 beside the state those streams generate (the fight's own enemy HP
+and pile order), and the five `standalone_*` captures — every one of them a *combat*-mode reset —
+are byte-identical, which is the shape of "a combat-mode reset is unchanged" as a measurement
+rather than a claim. One thing that did **not** move: a run-mode fight's cards keep the deck
+identities the record names them with (`starter-0-STRIKE_IRONCLAD` and so on) rather than being
+minted fresh, so a corpus row's card identity is unchanged by the repair.
 
 ## The oracle's own projection is thin
 
@@ -328,14 +375,13 @@ rather than a guess.
 
 ## Still open
 
-- **The field-by-field parity comparison has been run, and the feature does not pass it.** The
-  fourteen-scenario sample above reached its fights and compared 51 contract fields with no hash
-  compared, and every sample differed at `$.run.rng_counters.Niche` — one extra draw on the record's
-  side — with the enemy HP and the ordered piles moving behind it. The cause is measured and localised
-  to the run-mode reset building a throwaway combat (ticket 16); until that is repaired, a generated
-  scenario's first fight is not the shipped game's first fight, and the gate stays red. The bundle and
-  relic *option* picks remain undrivable, so eight of the sample's choices open a card select and the
-  rest open nothing; complete Ancient-choice coverage still waits on that seam.
+- **The field-by-field parity comparison passes now that the reset defect is repaired.** The same
+  fourteen-scenario sample, re-run on the same build after ticket 16, matched the shipped game field
+  for field in all fourteen, with both Act-variant probes measuring the bound and no hash compared;
+  the state that had been one `Niche` draw and one deck shuffle ahead — the enemy HP and the ordered
+  piles — is the shipped state. What remains open is coverage rather than parity: the bundle and
+  relic *option* picks are still undrivable, so eight of the sample's choices open a card select and
+  the rest open nothing, and complete Ancient-choice coverage waits on that seam.
 
 - **The `TotalFloor` divergence is measured now, and it is closed by entering the room.** At the first
   fight of every sample the run's act floor and total floor matched the shipped game's — both 2 — and

@@ -118,6 +118,11 @@ _SAMPLE = (
 # nested choice, `card_choice` and `custom_reward_choice` among them — so a change in either
 # is visible rather than silent. Each entry is the row for the *first* offered choice; the
 # other choices have a row of their own, and `_assert_enumeration` covers those.
+#
+# Re-recorded when a run reset stopped building a combat (ticket 16): the reset no longer spends a
+# monster-composition draw and a deck shuffle on a fight the run never plays, so every first fight
+# here is a different fight — its `Niche`/`Shuffle` counters, its enemies' generated HP and its
+# ordered piles all moved, and the recipe that reaches it did not.
 _OBSERVED_BUILD = "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52"
 _OBSERVED: dict[str, dict[str, Any]] = {
     "IRONCLAD@A0/SCENAR10A01": {
@@ -126,7 +131,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "chosen": {"option_index": 0, "relic_model_id": "ARCANE_SCROLL"},
         "nested_kinds": [], "node": {"col": 1, "row": 1, "point_type": "Monster"},
         "encounter": "NIBBITS_WEAK",
-        "state_hash": "8CB1BA64112F0F3C3FCC23CFAA2B3A8A763EB1906B5BA727A8E898BCB0EC467C",
+        "state_hash": "A08FCE50328A4244D6DD74F88AAC88A9BBB4AC25A90CE39DE581F8BE05EB6B7D",
     },
     "IRONCLAD@A0/ANCIENT01": {
         "canonical_seed": "ANC1ENT01", "raw_seed": "ANCIENT01", "act_variant": "OVERGROWTH",
@@ -134,7 +139,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "chosen": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
         "nested_kinds": [], "node": {"col": 0, "row": 1, "point_type": "Monster"},
         "encounter": "SLIMES_WEAK",
-        "state_hash": "92807FCE02322DEB374757D3089819469491647BD61436CEBB6338D7D02935B4",
+        "state_hash": "1FA5212AACFABFF56CF20D91C71DE93EF4AC8B7036BDDD37F456744842176826",
     },
     "IRONCLAD@A0/GYMSCENAR10": {
         "canonical_seed": "GYMSCENAR10", "raw_seed": None, "act_variant": "UNDERDOCKS",
@@ -142,7 +147,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "chosen": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
         "nested_kinds": [], "node": {"col": 0, "row": 1, "point_type": "Monster"},
         "encounter": "SEAPUNK_WEAK",
-        "state_hash": "53ACDAB2886CC07E57CB14AC5D26FB2CF1876AB6E51AA94B4A0805150D8933C3",
+        "state_hash": "4F916F8370680BA20E0832BB94B2B737C9618064C7348A1E6B88BB127068B5DD",
     },
     "IRONCLAD@A2/ANCIENT03": {
         "canonical_seed": "ANC1ENT03", "raw_seed": "ANCIENT03", "act_variant": "UNDERDOCKS",
@@ -150,7 +155,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "chosen": {"option_index": 0, "relic_model_id": "NEW_LEAF"},
         "nested_kinds": ["card_choice"], "node": {"col": 1, "row": 1, "point_type": "Monster"},
         "encounter": "SEAPUNK_WEAK",
-        "state_hash": "D2193DDC0B599467E3906395BD51673E03C61F8FB9D9F6DEF17092C3A47C90E1",
+        "state_hash": "B8394C18F2D2B884EB9365F772D2E5577CFED6BBA49ED6590DB2A146A5AD2EC7",
     },
     "DEFECT@A0/TRACERBULLET": {
         "canonical_seed": "TRACERBULLET", "raw_seed": None, "act_variant": "OVERGROWTH",
@@ -158,7 +163,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "chosen": {"option_index": 0, "relic_model_id": "PRECISE_SCISSORS"},
         "nested_kinds": ["card_choice"], "node": {"col": 0, "row": 1, "point_type": "Monster"},
         "encounter": "SLIMES_WEAK",
-        "state_hash": "DAAB57C1BEE778896E9598164EF7FAB3A1BE7BF992527E66BA956FBE4BDDA69E",
+        "state_hash": "2D408DAE81DD0FBEDD28622C5EEE5E981568C680C680C6B94508C488AA300C40",
     },
     "DEFECT@A0/ANCIENT06": {
         "canonical_seed": "ANC1ENT06", "raw_seed": "ANCIENT06", "act_variant": "UNDERDOCKS",
@@ -167,7 +172,7 @@ _OBSERVED: dict[str, dict[str, Any]] = {
         "nested_kinds": ["custom_reward_choice", "custom_reward_choice"],
         "node": {"col": 2, "row": 1, "point_type": "Monster"},
         "encounter": "CORPSE_SLUGS_WEAK",
-        "state_hash": "923DDDF8E11C99D3CED8B2CCA159A3950ECA52A9EDEBBB08DCECE251378F5416",
+        "state_hash": "4CA763F3444230EFC74A9306A99AFBBFE095F3387EB1F731802051FE46EAA231",
     },
 }
 
@@ -182,19 +187,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "ARCANE_SCROLL"},
             "nested_kinds": [],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "8CB1BA64112F0F3C3FCC23CFAA2B3A8A763EB1906B5BA727A8E898BCB0EC467C",
+            "state_hash": "A08FCE50328A4244D6DD74F88AAC88A9BBB4AC25A90CE39DE581F8BE05EB6B7D",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "LAVA_ROCK"},
             "nested_kinds": [],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "B131A6AE2F6F20E1AE07DAB003262B14EF242A327E6479CEFF18460F1546CA65",
+            "state_hash": "4F9D1939668A90AF89A7D0BD43BAEC190CC96E7F59CB0AFC7CE458C62EF5D5F9",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
             "nested_kinds": [],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "3F6B437EE520C61A02F4490D7AF07BA829B389162AB01B291220F53859150514",
+            "state_hash": "0B4A55F445EB0B5A9783840BA4C81ECB63F7FBB6879E0306BE3D4181E4E69B6F",
         },
     ],
     "IRONCLAD@A0/ANCIENT01": [
@@ -202,19 +207,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "92807FCE02322DEB374757D3089819469491647BD61436CEBB6338D7D02935B4",
+            "state_hash": "1FA5212AACFABFF56CF20D91C71DE93EF4AC8B7036BDDD37F456744842176826",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "GOLDEN_PEARL"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "24C84A8D6149F61B3404ED9A7BD2751482E55642D08CDEEEF95F2C9B08CF63AF",
+            "state_hash": "F21D2641E2532252847389EF3C6547A4D52FB8F738BDB063B7D1285A94130C69",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "PRECARIOUS_SHEARS"},
             "nested_kinds": ["card_choice"],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "39728C896A5AA22C2ACBA91D5F3C350F2AA82C3F1F08AE06B5A5C3A003BCF452",
+            "state_hash": "CE2C6BE3B88F3033D51F92747A80C03E087E73E6FED59258098FA6FEFD6F1CC1",
         },
     ],
     "IRONCLAD@A0/GYMSCENAR10": [
@@ -222,19 +227,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "BOOMING_CONCH"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "53ACDAB2886CC07E57CB14AC5D26FB2CF1876AB6E51AA94B4A0805150D8933C3",
+            "state_hash": "4F916F8370680BA20E0832BB94B2B737C9618064C7348A1E6B88BB127068B5DD",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "SCROLL_BOXES"},
             "nested_kinds": ["option_choice"],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "C0A5E68ECE7056DEF167A4351172AAFFE07884F18BFC3D4CAC3708C41C4BA3A6",
+            "state_hash": "44604C240EF0EDDA9EE3F3602F89CD421A487171E2EDC5EE70E3F0DEB10026FC",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "76FDECEFE556B89D3A853C8B7F201D854E4D720A30198C5D7B9783EA5ADCA46C",
+            "state_hash": "A9322155FC7CCBCAA2DC7BC2644E8BDA4EC328FD333DE0FBA5EA8625C80BC62E",
         },
     ],
     "IRONCLAD@A2/ANCIENT03": [
@@ -242,19 +247,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "NEW_LEAF"},
             "nested_kinds": ["card_choice"],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "D2193DDC0B599467E3906395BD51673E03C61F8FB9D9F6DEF17092C3A47C90E1",
+            "state_hash": "B8394C18F2D2B884EB9365F772D2E5577CFED6BBA49ED6590DB2A146A5AD2EC7",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "NEOWS_TORMENT"},
             "nested_kinds": [],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "539C0AFC8B87CE0B593C67023C8A0F4D033B357C531639342EBFB10E36DC28E2",
+            "state_hash": "1792E6E7AE32AA35D091BBA57BE5AFFB2EF8E23372CC63289399FC92DCFF7563",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "NEOWS_BONES"},
             "nested_kinds": ["custom_reward_choice", "card_choice", "custom_reward_choice"],
             "node": {"col": 1, "row": 1, "point_type": "Monster"},
-            "state_hash": "3198B7540CDE7FD461694231F3A0490E3C0BAD3EA0C1F90223A8B7300940D5FC",
+            "state_hash": "8CD8916A7686366F330EA682D794D7CDB8FC575A94AA90ACCAF27FE91C275FAF",
         },
     ],
     "DEFECT@A0/TRACERBULLET": [
@@ -262,19 +267,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "PRECISE_SCISSORS"},
             "nested_kinds": ["card_choice"],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "DAAB57C1BEE778896E9598164EF7FAB3A1BE7BF992527E66BA956FBE4BDDA69E",
+            "state_hash": "2D408DAE81DD0FBEDD28622C5EEE5E981568C680C680C6B94508C488AA300C40",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "BOOMING_CONCH"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "370BD043FB3BE1CA3F989CBFE2A31175D05C887C5F6CAE8E14044B12C29D0FF0",
+            "state_hash": "A5E9F6308BDB7AF1C018CE3C21C98B5E543763A10B0823EBECDE797C18D1359D",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "SILKEN_TRESS"},
             "nested_kinds": [],
             "node": {"col": 0, "row": 1, "point_type": "Monster"},
-            "state_hash": "71A681A9F718461170F90B4EC7E938B3910463155FA381A749FFFE5A1CB33958",
+            "state_hash": "AC79D657AFE23C9FF0BD9633A1FE2253122CCEE37D646DB28ADEBE638CEB078F",
         },
     ],
     "DEFECT@A0/ANCIENT06": [
@@ -282,19 +287,19 @@ _OBSERVED_CHOICES: dict[str, list[dict[str, Any]]] = {
             "ancient_choice": {"option_index": 0, "relic_model_id": "LOST_COFFER"},
             "nested_kinds": ["custom_reward_choice", "custom_reward_choice"],
             "node": {"col": 2, "row": 1, "point_type": "Monster"},
-            "state_hash": "923DDDF8E11C99D3CED8B2CCA159A3950ECA52A9EDEBBB08DCECE251378F5416",
+            "state_hash": "4CA763F3444230EFC74A9306A99AFBBFE095F3387EB1F731802051FE46EAA231",
         },
         {
             "ancient_choice": {"option_index": 1, "relic_model_id": "NEOWS_TALISMAN"},
             "nested_kinds": [],
             "node": {"col": 2, "row": 1, "point_type": "Monster"},
-            "state_hash": "50D432CF8CB4CE50291AE8D0D26962C0BF7612BA4ECA1DA1FA479356E6C7E263",
+            "state_hash": "311D196E842F87F4A97F1EF8D05748CEF30E35A61C8FDCB0F96ACF1375336475",
         },
         {
             "ancient_choice": {"option_index": 2, "relic_model_id": "LEAFY_POULTICE"},
             "nested_kinds": [],
             "node": {"col": 2, "row": 1, "point_type": "Monster"},
-            "state_hash": "09A0BB5AC6E1780BE003A97FA1A44C01F039D30B5040B35D93A913DC790B5F47",
+            "state_hash": "1F63EB1FA76F1F4A2598823566CB69908CAE8F77C5076235D2F563A13A13A245",
         },
     ],
 }

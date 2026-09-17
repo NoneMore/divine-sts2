@@ -19,6 +19,13 @@ public sealed record EnemySpec(
     [property: JsonPropertyName("next_move_id")] string? NextMoveId = null,
     [property: JsonPropertyName("move_history")] IReadOnlyList<string>? MoveHistory = null,
     [property: JsonPropertyName("block")] int? Block = null);
+/// <summary>
+/// The two states a reset can stand up, named by <see cref="ResetRequest.ResetMode"/>. A reset that
+/// builds the caller's combat is the shape every reset but a run reset asks for, and is what a
+/// request that declares no mode means; a run reset stands the run on its map and builds nothing,
+/// because the fight a run will really play does not exist until it enters a monster room.
+/// </summary>
+public static class ResetModes { public const string Combat = "combat"; public const string Run = "run"; }
 public sealed record ResetRequest(
     [property: JsonPropertyName("game_build")] GameBuildSpec GameBuild,
     [property: JsonPropertyName("seed")] string Seed,
@@ -41,7 +48,18 @@ public sealed record ResetRequest(
     [property: JsonPropertyName("initial_draw_pile")] IReadOnlyList<string>? InitialDrawPile = null,
     [property: JsonPropertyName("invoke_combat_entry_hooks")] bool InvokeCombatEntryHooks = false,
     [property: JsonPropertyName("capture_orbs")] bool CaptureOrbs = true,
-    [property: JsonPropertyName("use_character_starting_loadout")] bool UseCharacterStartingLoadout = false);
+    [property: JsonPropertyName("use_character_starting_loadout")] bool UseCharacterStartingLoadout = false,
+    // Which of the two states this request is for, as `ResetModes` names them, or null to leave it
+    // to the reset being asked for. It is a field of the request rather than an inference from the
+    // other members — an empty deck, say, or a starting loadout — because a branch restores by
+    // rebuilding this same request, where no method name is left to say which reset it was, and
+    // because "which members happen to be set" is not something a caller declares. A request that
+    // declares the mode is honoured: the environment refuses one that contradicts the reset being
+    // asked for, and refuses an unknown mode. A run-mode request's combat-only members —
+    // `encounter`, `enemies`, `initial_hand`, `initial_draw_pile`, `turn`, `energy`, `stars` and
+    // `invoke_combat_entry_hooks` — describe a fight the run has not entered, and a run reset builds
+    // no combat to read them.
+    [property: JsonPropertyName("reset_mode")] string? ResetMode = null);
 public sealed record StepRequest([property: JsonPropertyName("action_id")] string ActionId);
 public sealed record EventResetRequest(
     [property: JsonPropertyName("state")] ResetRequest State,

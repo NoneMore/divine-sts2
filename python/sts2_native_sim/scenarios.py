@@ -166,7 +166,7 @@ from .ancient import (
     drive_choice,
     map_actions,
 )
-from .client import NativeSimError, NativeWorker
+from .client import RESET_MODE_RUN, NativeSimError, NativeWorker
 
 #: The versioned row tag, and the discriminators a row carries: one for an element that produced
 #: a fight, one for an element that could not.
@@ -776,6 +776,12 @@ def _reset_state(element: _Element) -> dict[str, Any]:
     caller-supplied deck, relic set or potion list would produce a situation the shipped game
     cannot reach. The fields the starting-loadout path ignores are still sent, because the
     environment's reset request declares them.
+
+    ``reset_mode`` is ``run`` because this is a run reset: the run stands on its map and no combat
+    is built, so the fight the generation goes on to record is the fight the run really plays. The
+    environment stands up the reset a caller asks for by name when the request declares nothing, and
+    refuses a request that declares the other mode, so this is the generator stating which of the two
+    it is asking for — and it is what the branch a record is replayed from carries.
     """
     return {
         "game_build": {},
@@ -789,6 +795,7 @@ def _reset_state(element: _Element) -> dict[str, Any]:
         "deck": [],
         "gold": 99,
         "use_character_starting_loadout": True,
+        "reset_mode": RESET_MODE_RUN,
     }
 
 

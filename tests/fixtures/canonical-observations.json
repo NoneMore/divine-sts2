@@ -78,8 +78,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 10,
-        "Niche": 21,
-        "Shuffle": 232,
+        "Niche": 20,
+        "Shuffle": 223,
         "TreasureRoomRelics": 1,
         "UnknownMapPoint": 1,
         "UpFront": 413
@@ -107,8 +107,8 @@
           "alive": true,
           "block": 0,
           "combat_id": 1,
-          "hp": 14,
-          "max_hp": 14,
+          "hp": 12,
+          "max_hp": 12,
           "model_id": "LEAF_SLIME_S",
           "next_move": {
             "id": "TACKLE_MOVE",
@@ -128,8 +128,8 @@
           "alive": true,
           "block": 0,
           "combat_id": 2,
-          "hp": 28,
-          "max_hp": 28,
+          "hp": 27,
+          "max_hp": 27,
           "model_id": "TWIG_SLIME_M",
           "next_move": {
             "id": "STICKY_SHOT_MOVE",
@@ -147,8 +147,8 @@
           "alive": true,
           "block": 0,
           "combat_id": 3,
-          "hp": 8,
-          "max_hp": 8,
+          "hp": 10,
+          "max_hp": 10,
           "model_id": "TWIG_SLIME_S",
           "next_move": {
             "id": "TACKLE_MOVE",
@@ -180,7 +180,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-3",
+              "instance_id": "anger-7",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 0,
@@ -191,7 +191,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-1",
+              "instance_id": "anger-3",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 1,
@@ -202,7 +202,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-9",
+              "instance_id": "anger-8",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 2,
@@ -213,7 +213,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-0",
+              "instance_id": "anger-1",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 3,
@@ -224,7 +224,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-7",
+              "instance_id": "anger-6",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 4,
@@ -241,7 +241,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-5",
+              "instance_id": "anger-2",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 5,
@@ -252,7 +252,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-2",
+              "instance_id": "anger-4",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 6,
@@ -263,7 +263,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-4",
+              "instance_id": "anger-5",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 7,
@@ -274,7 +274,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-8",
+              "instance_id": "anger-0",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 8,
@@ -285,7 +285,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 0,
-              "instance_id": "anger-6",
+              "instance_id": "anger-9",
               "model_id": "ANGER",
               "native_state": {},
               "net_id": 9,
@@ -319,118 +319,10 @@
       "kind": "combat_action",
       "legal_actions": [
         {
-          "action_id": "play:anger-3:target:1",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 0,
-            "instance_id": "anger-3",
-            "target_id": 1
-          }
-        },
-        {
-          "action_id": "play:anger-3:target:2",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 0,
-            "instance_id": "anger-3",
-            "target_id": 2
-          }
-        },
-        {
-          "action_id": "play:anger-3:target:3",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 0,
-            "instance_id": "anger-3",
-            "target_id": 3
-          }
-        },
-        {
-          "action_id": "play:anger-1:target:1",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 1,
-            "instance_id": "anger-1",
-            "target_id": 1
-          }
-        },
-        {
-          "action_id": "play:anger-1:target:2",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 1,
-            "instance_id": "anger-1",
-            "target_id": 2
-          }
-        },
-        {
-          "action_id": "play:anger-1:target:3",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 1,
-            "instance_id": "anger-1",
-            "target_id": 3
-          }
-        },
-        {
-          "action_id": "play:anger-9:target:1",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 2,
-            "instance_id": "anger-9",
-            "target_id": 1
-          }
-        },
-        {
-          "action_id": "play:anger-9:target:2",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 2,
-            "instance_id": "anger-9",
-            "target_id": 2
-          }
-        },
-        {
-          "action_id": "play:anger-9:target:3",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 2,
-            "instance_id": "anger-9",
-            "target_id": 3
-          }
-        },
-        {
-          "action_id": "play:anger-0:target:1",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 3,
-            "instance_id": "anger-0",
-            "target_id": 1
-          }
-        },
-        {
-          "action_id": "play:anger-0:target:2",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 3,
-            "instance_id": "anger-0",
-            "target_id": 2
-          }
-        },
-        {
-          "action_id": "play:anger-0:target:3",
-          "kind": "play_card",
-          "parameters": {
-            "card_id": 3,
-            "instance_id": "anger-0",
-            "target_id": 3
-          }
-        },
-        {
           "action_id": "play:anger-7:target:1",
           "kind": "play_card",
           "parameters": {
-            "card_id": 4,
+            "card_id": 0,
             "instance_id": "anger-7",
             "target_id": 1
           }
@@ -439,7 +331,7 @@
           "action_id": "play:anger-7:target:2",
           "kind": "play_card",
           "parameters": {
-            "card_id": 4,
+            "card_id": 0,
             "instance_id": "anger-7",
             "target_id": 2
           }
@@ -448,8 +340,116 @@
           "action_id": "play:anger-7:target:3",
           "kind": "play_card",
           "parameters": {
-            "card_id": 4,
+            "card_id": 0,
             "instance_id": "anger-7",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-3:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-3",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-3:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-3",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-3:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 1,
+            "instance_id": "anger-3",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-8:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-8",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-8:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-8",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-8:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 2,
+            "instance_id": "anger-8",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-1",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-1",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-1:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 3,
+            "instance_id": "anger-1",
+            "target_id": 3
+          }
+        },
+        {
+          "action_id": "play:anger-6:target:1",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-6",
+            "target_id": 1
+          }
+        },
+        {
+          "action_id": "play:anger-6:target:2",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-6",
+            "target_id": 2
+          }
+        },
+        {
+          "action_id": "play:anger-6:target:3",
+          "kind": "play_card",
+          "parameters": {
+            "card_id": 4,
+            "instance_id": "anger-6",
             "target_id": 3
           }
         },
@@ -494,8 +494,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 1,
-        "Niche": 4,
-        "Shuffle": 18,
+        "Niche": 3,
+        "Shuffle": 9,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -524,8 +524,8 @@
           "alive": true,
           "block": 0,
           "combat_id": 2,
-          "hp": 27,
-          "max_hp": 27,
+          "hp": 22,
+          "max_hp": 28,
           "model_id": "TWIG_SLIME_M",
           "next_move": {
             "id": "STICKY_SHOT_MOVE",
@@ -586,7 +586,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 1,
-              "instance_id": "strike-1",
+              "instance_id": "strike-4",
               "model_id": "STRIKE_IRONCLAD",
               "native_state": {},
               "net_id": 0,
@@ -597,7 +597,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 1,
-              "instance_id": "strike-2",
+              "instance_id": "strike-1",
               "model_id": "STRIKE_IRONCLAD",
               "native_state": {},
               "net_id": 1,
@@ -608,7 +608,7 @@
               "card_type": "Attack",
               "costs_x": false,
               "energy_cost": 1,
-              "instance_id": "strike-4",
+              "instance_id": "strike-2",
               "model_id": "STRIKE_IRONCLAD",
               "native_state": {},
               "net_id": 2,
@@ -618,9 +618,9 @@
             {
               "card_type": "Attack",
               "costs_x": false,
-              "energy_cost": 1,
-              "instance_id": "strike-3",
-              "model_id": "STRIKE_IRONCLAD",
+              "energy_cost": 2,
+              "instance_id": "dynamic-0-FIEND_FIRE",
+              "model_id": "FIEND_FIRE",
               "native_state": {},
               "net_id": 3,
               "target_type": "AnyEnemy",
@@ -629,9 +629,9 @@
             {
               "card_type": "Attack",
               "costs_x": false,
-              "energy_cost": 3,
-              "instance_id": "dynamic-0-BLUDGEON",
-              "model_id": "BLUDGEON",
+              "energy_cost": 1,
+              "instance_id": "strike-3",
+              "model_id": "STRIKE_IRONCLAD",
               "native_state": {},
               "net_id": 4,
               "target_type": "AnyEnemy",
@@ -702,8 +702,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 1,
-        "Niche": 5,
-        "Shuffle": 8,
+        "Niche": 4,
+        "Shuffle": 4,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 411
@@ -848,8 +848,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 0,
-        "Niche": 1,
-        "Shuffle": 9,
+        "Niche": 0,
+        "Shuffle": 0,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -945,8 +945,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 0,
-        "Niche": 1,
-        "Shuffle": 9,
+        "Niche": 0,
+        "Shuffle": 0,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -1851,8 +1851,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 0,
-        "Niche": 1,
-        "Shuffle": 9,
+        "Niche": 0,
+        "Shuffle": 0,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -2731,8 +2731,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 0,
-        "Niche": 1,
-        "Shuffle": 9,
+        "Niche": 0,
+        "Shuffle": 0,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -2780,7 +2780,7 @@
     "run": {
       "act_variant": "OVERGROWTH",
       "ascension": 0,
-      "current_hp": 9956,
+      "current_hp": 9952,
       "deck": [
         {
           "model_id": "ANGER",
@@ -2832,8 +2832,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 9,
-        "Niche": 15,
-        "Shuffle": 104,
+        "Niche": 14,
+        "Shuffle": 95,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -2930,8 +2930,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 9,
-        "Niche": 15,
-        "Shuffle": 104,
+        "Niche": 14,
+        "Shuffle": 95,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -3076,8 +3076,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 2,
-        "Niche": 4,
-        "Shuffle": 18,
+        "Niche": 3,
+        "Shuffle": 9,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -3306,8 +3306,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 2,
-        "Niche": 5,
-        "Shuffle": 27,
+        "Niche": 4,
+        "Shuffle": 18,
         "TreasureRoomRelics": 0,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -3512,8 +3512,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 9,
-        "Niche": 15,
-        "Shuffle": 104,
+        "Niche": 14,
+        "Shuffle": 95,
         "TreasureRoomRelics": 1,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -3607,8 +3607,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 9,
-        "Niche": 15,
-        "Shuffle": 104,
+        "Niche": 14,
+        "Shuffle": 95,
         "TreasureRoomRelics": 1,
         "UnknownMapPoint": 0,
         "UpFront": 413
@@ -3710,8 +3710,8 @@
         "CombatPotionGeneration": 0,
         "CombatTargets": 0,
         "MonsterAi": 9,
-        "Niche": 15,
-        "Shuffle": 104,
+        "Niche": 14,
+        "Shuffle": 95,
         "TreasureRoomRelics": 1,
         "UnknownMapPoint": 0,
         "UpFront": 413

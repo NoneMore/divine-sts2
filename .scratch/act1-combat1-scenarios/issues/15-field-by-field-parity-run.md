@@ -112,3 +112,10 @@
   reset defect with its stage-by-stage counters, and the Act-variant bound as a measurement; its "Still
   open" list no longer says no field-by-field comparison has run, and its `TotalFloor` entry is closed by
   measurement rather than left as a static conclusion.
+
+**2026-09-17 — the gate is green now.** The defect this run localised was repaired by ticket 16, which
+  made a run-mode reset stop building a combat, and the same sample was re-run on the repaired build:
+  **14 of 14 samples matched field for field and 2 of 2 probes measured the bound**, so the feature this
+  ticket gates is accepted. What the re-run measured, and what moved with the repair, is recorded in
+  `parity-findings.md` and in ticket 16's own comment; the sample, the declared contract, the three
+  exclusions and the nested-choice bound are all unchanged from the run above.

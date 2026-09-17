@@ -369,6 +369,23 @@ def test_the_recorded_character_is_the_model_id_the_run_was_started_as() -> None
     assert worker.reset_request is not None and worker.reset_request["character"] == "IRONCLAD"
 
 
+def test_a_run_start_request_declares_the_run_reset_it_is() -> None:
+    """The generator asks for a run reset on the request, not by which members it happens to set.
+
+    A run reset builds no combat — the run stands on its map and the fight it will really play is
+    built when it enters a monster room — and the environment reads that off the request, because a
+    stored branch replays from the same request, where no method name is left to say which reset it
+    was. The generator states which of the two resets it is asking for rather than leaving it to be
+    inferred from the members it fills in. The value is written out rather than taken from the
+    client's constant because it is the wire word the environment's own `ResetModes.Run` reads, so a
+    rename on either side is a change to both.
+    """
+    worker = FakeRunWorker()
+    generate_rows(_request(), worker)
+
+    assert worker.reset_request is not None and worker.reset_request["reset_mode"] == "run"
+
+
 def test_the_recorded_seed_is_canonical_and_the_raw_seed_is_kept_only_when_it_differed() -> None:
     canonical = _row()
     assert canonical["recipe"]["seed"] == SEED

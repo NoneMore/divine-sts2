@@ -10,7 +10,10 @@ pass.
 It also re-checks the recorded pre-change map and RNG counters for the same
 seeds. Those are properties of the run seed alone, so they must not move now that
 the act roll picks a different variant for some of them; a shift means the roll
-started consuming a stream the map, the encounter pools or a combat reads.
+started consuming a stream the map, the encounter pools or a combat reads. Since
+ticket 16 a run reset builds no combat, so the counters it reports are the run's
+own: `Niche` and `Shuffle` stand at zero until the run enters the Ancient room,
+which draws neither.
 
 Requires the shipped game and a Godot-hosted worker (the repository's
 ``*_acceptance.py`` convention). Run with ``--snapshot`` on an unmodified build to
@@ -60,9 +63,15 @@ _BASELINE_BUILD = "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7
 # built from the act's own encounter and event lists, which differ in size between
 # variants, so its draw count legitimately follows the act in play — exactly as the
 # shipped game's does.
+#
+# `Niche` and `Shuffle` are zero because a run reset builds no combat (ticket 16):
+# the run stands on the map, and the fight it will really play is constructed when
+# it enters a monster room. They read 1 and 9 while the reset built a fight the run
+# never plays — one monster-composition draw and the shuffle of the ten-card
+# starting deck — which put the first real fight one draw ahead on both streams.
 _BASELINE_COUNTERS = {
     "CombatCardGeneration": 0, "CombatCardSelection": 0, "CombatEnergyCosts": 0, "CombatOrbs": 0,
-    "CombatPotionGeneration": 0, "CombatTargets": 0, "MonsterAi": 0, "Niche": 1, "Shuffle": 9,
+    "CombatPotionGeneration": 0, "CombatTargets": 0, "MonsterAi": 0, "Niche": 0, "Shuffle": 0,
     "TreasureRoomRelics": 0, "UnknownMapPoint": 0,
 }
 _BASELINE = {

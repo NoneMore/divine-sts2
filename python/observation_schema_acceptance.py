@@ -10,7 +10,11 @@ captures against the schema.
 
 With `--record` it writes the captures it validated to `tests/fixtures/canonical-observations.json`,
 which is what `tests/test_observation_schema.py` validates offline, so re-record that file in
-the same change that changes the observation shape.
+the same change that changes the observation shape. Re-record it when a run-mode capture's
+*values* move too — the run-mode captures here were re-recorded when a run reset stopped building
+a combat (ticket 16), which moved the run's `Niche`/`Shuffle` counters and, further into the run,
+the state those streams generate — so that the fixture keeps describing what the environment
+actually emits rather than what it emitted before.
 
 Needs the shipped game and the Godot-hosted native worker: run it the way the other
 `*_acceptance.py` scripts run (`pwsh scripts/build-persistent-server.ps1 -Configuration Debug`
