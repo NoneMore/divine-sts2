@@ -61,22 +61,35 @@ SIMULATOR_DECISION_KINDS: Final[frozenset[str]] = frozenset(
 
 #: Bridge observation phase word → the simulator decision kinds reported while the bridge is there.
 BRIDGE_PHASE_TO_DECISION_KINDS: Final[Mapping[str, frozenset[str]]] = {
-    # A fight, including the native prompts a fight can open (a card select from a card effect, a
-    # bundle pick). The simulator reports the prompt's own kind while the bridge still says
-    # `combat`; the bridge has no branch for one of those prompts yet (ticket 14).
-    "combat": frozenset({"combat_action", "card_choice", "option_choice"}),
+    # A fight, and the option pick a fight's own effect can open — a bundle or a relic choice — which
+    # has no branch of its own, so the bridge still says `combat` while the game waits at one. A card
+    # select is no longer among them: the game asks the card selector the run installed before it
+    # would open a screen, so a card select a fight's effect opens reaches the caller as that prompt's
+    # own stage. A selector a relic pushes for its *own* automatic card play is not that selector and
+    # is not a decision either encoder reports.
+    "combat": frozenset({"combat_action", "option_choice"}),
     "map": frozenset({"map_choice", "map_terminal"}),
     # The card reward draft. The simulator expresses a card reward selection as `reward_choice`
-    # (recorded as `standalone_card_reward`); a draft that opens a native card prompt keeps that
-    # prompt's own kind.
-    "card_reward": frozenset({"reward_choice", "card_choice"}),
+    # (recorded as `standalone_card_reward`); a card select a draft opens is that same own stage.
+    "card_reward": frozenset({"reward_choice"}),
     # A room's rewards screen, which may open a nested reward set.
     "rewards": frozenset({"room_reward_choice", "reward_choice", "custom_reward_choice", "custom_reward_complete"}),
     "rest_site": frozenset({"rest_choice", "rest_complete"}),
-    # The smith screen and the two deck card select prompts all ask for a card from a set, which
-    # the simulator words `card_choice`; a prompt that asks for options is `option_choice`.
+    # The smith screen and the two deck card select prompts all ask for a card from a set, which the
+    # simulator words `card_choice`; a prompt that asks for options is `option_choice`. The card
+    # selects among them arrive at `simple_card_select` on a bridged run rather than here, because the
+    # game asks its card selector first and that seam reports the prompt as its own stage.
     "deck_upgrade": frozenset({"card_choice", "option_choice"}),
     "deck_card_select": frozenset({"card_choice"}),
+    # The flat card-set prompt itself: the cards the game offers for a removal, an upgrade, a
+    # transform, a discard or a choose-a-card effect, whichever of an Ancient choice, a relic, an
+    # event or a card opened it. Every card-selection command in the game consults the selector the
+    # run installed before it would push a screen, so that one seam reports each of them and the
+    # simulator words the selection `card_choice`.
+    # Observed on the shipped game by `python/bridge_card_select_acceptance.py`, which drives three
+    # Ancient choices to this prompt — a one-card removal, a two-card removal and a skippable card to
+    # add — and answers each by card identity; that observation is a bridge one, so it is recorded
+    # there and in the parity findings rather than as a fixture capture here.
     "simple_card_select": frozenset({"card_choice", "option_choice"}),
     "shop": frozenset({"shop_choice"}),
     "event": frozenset({"event_choice", "event_complete"}),

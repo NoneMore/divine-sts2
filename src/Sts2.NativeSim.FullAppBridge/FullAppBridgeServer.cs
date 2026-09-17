@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using MegaCrit.Sts2.Core.AutoSlay;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
 
 namespace Sts2.NativeSim.FullAppBridge;
@@ -17,6 +18,22 @@ public static class FullAppBridgeServer
     private static StreamReader? _reader;
     private static TaskCompletionSource<string>? _pendingActionTcs;
     private static TaskCompletionSource<bool>? _initialBoundaryTcs;
+
+    /// <summary>
+    /// Serialises the decision boundaries, so one decision is live at a time and the caller's action
+    /// always belongs to the decision it was shown.
+    ///
+    /// A room's loop and a prompt an effect inside it opened reach a boundary concurrently: the loop
+    /// re-reports the room about 50 ms after the choice that opened the prompt. Only one boundary can
+    /// hold the pending action at a time, and a second one that published over the first would take
+    /// the caller's answer away from the decision it saw — which for a prompt means the game stays
+    /// blocked on it. Waiting here gives the first arrival the caller, and the second publishes its
+    /// own observation once that answer has been consumed. Which of the two arrives first is a matter
+    /// of timing; what this preserves is that whoever published is who gets answered, so a caller
+    /// never sends a card action to a room. See <see cref="WaitForCoordinatorActionAsync"/>.
+    /// </summary>
+    private static readonly SemaphoreSlim BoundaryGate = new(1, 1);
+
     private static readonly object SyncLock = new();
 
     public static int BoundPort { get; private set; }
@@ -29,6 +46,24 @@ public static class FullAppBridgeServer
     public static string RequestedCharacter { get; private set; } = "IRONCLAD";
     public static int RequestedAscension { get; private set; } = 0;
     public static bool IsRunStarted { get; private set; }
+
+    /// <summary>
+    /// Whether a client is driving this worker. A prompt the game opens with nobody to answer it
+    /// belongs to the shipped autoplay rather than to this seam, so the bridge defers it. The flag is
+    /// the connection this server is holding rather than a socket's own stale `Connected` bit: the
+    /// read loop clears it when the client goes away, so a client that dropped mid-run is not
+    /// mistaken for one that is still there.
+    /// </summary>
+    public static bool HasClient
+    {
+        get
+        {
+            lock (SyncLock)
+            {
+                return _client is not null;
+            }
+        }
+    }
 
     public static void Start(int preferredPort, string portFilePath)
     {
@@ -79,34 +114,53 @@ public static class FullAppBridgeServer
 
     private static async Task HandleClientAsync(StreamReader reader, StreamWriter writer)
     {
-        while (true)
+        try
         {
-            string? line = await reader.ReadLineAsync();
-            if (line is null) break;
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            try
+            while (true)
             {
-                RpcRequest? request = JsonSerializer.Deserialize<RpcRequest>(line);
-                if (request is null) continue;
+                string? line = await reader.ReadLineAsync();
+                if (line is null) break;
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-                object? result = await DispatchRequestAsync(request.Method, request.Params);
-                var response = new RpcResponse
+                try
                 {
-                    Id = request.Id,
-                    Result = result,
-                };
-                string responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
-                await writer.WriteLineAsync(responseJson);
+                    RpcRequest? request = JsonSerializer.Deserialize<RpcRequest>(line);
+                    if (request is null) continue;
+
+                    object? result = await DispatchRequestAsync(request.Method, request.Params);
+                    var response = new RpcResponse
+                    {
+                        Id = request.Id,
+                        Result = result,
+                    };
+                    string responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
+                    await writer.WriteLineAsync(responseJson);
+                }
+                catch (Exception ex)
+                {
+                    var errorResponse = new RpcResponse
+                    {
+                        Id = 0,
+                        Error = ex.Message,
+                    };
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(errorResponse, BridgeJson.Options));
+                }
             }
-            catch (Exception ex)
+        }
+        finally
+        {
+            // A client that has gone away is not a client: the run is no longer being driven, so the
+            // flag the selector's fallback reads has to say so rather than keep a closed socket.
+            lock (SyncLock)
             {
-                var errorResponse = new RpcResponse
+                if (ReferenceEquals(_reader, reader))
                 {
-                    Id = 0,
-                    Error = ex.Message,
-                };
-                await writer.WriteLineAsync(JsonSerializer.Serialize(errorResponse, BridgeJson.Options));
+                    _client?.Dispose();
+                    _client = null;
+                    _stream = null;
+                    _writer = null;
+                    _reader = null;
+                }
             }
         }
     }
@@ -172,6 +226,16 @@ public static class FullAppBridgeServer
                 if (string.IsNullOrWhiteSpace(actionId))
                     throw new ArgumentException("step requires action_id");
 
+                // A card-select action is answered by the game's own flow rather than by a loop here,
+                // so an action the prompt it is looking at does not offer would leave the game
+                // blocked while the caller waits for a boundary that never comes. Rejecting it now,
+                // against the actions this bridge is actually reporting, tells the caller instead.
+                if (IsCardSelectAction(actionId) && !CurrentLegalActions.Any(action => action.ActionId == actionId))
+                {
+                    throw new ArgumentException(
+                        $"'{actionId}' is not one of the legal actions the bridge reports for {CurrentObservation?.Phase}.");
+                }
+
                 ActionHistory.Add(actionId);
 
                 _initialBoundaryTcs = new TaskCompletionSource<bool>();
@@ -223,28 +287,147 @@ public static class FullAppBridgeServer
         bool isVictory,
         object? contextObject = null)
     {
-        AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}");
-        var (obs, actions) = FullAppStateTracker.CreateStateSnapshot(phase, isTerminal, isVictory, contextObject);
-        CurrentObservation = obs;
-        CurrentLegalActions = actions;
-
-        if (StateHashHistory.Count == 0 && obs is not null)
+        // The game can be waiting on two boundaries at once: the room's own loop re-reports the room
+        // while the prompt an effect inside it opened is still open. Only one of them can be the
+        // decision a caller answers, and a second boundary that published over the first would take
+        // the caller's action away from the prompt the game is actually blocked on — so a boundary
+        // waits its turn to publish, in the order the game asked for one.
+        await BoundaryGate.WaitAsync();
+        try
         {
-            StateHashHistory.Add(obs.StateHash);
+            AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}");
+            var (obs, actions) = FullAppStateTracker.CreateStateSnapshot(phase, isTerminal, isVictory, contextObject);
+            CurrentObservation = obs;
+            CurrentLegalActions = actions;
+
+            if (StateHashHistory.Count == 0 && obs is not null)
+            {
+                StateHashHistory.Add(obs.StateHash);
+            }
+
+            // Notify that a decision boundary has been reached
+            _initialBoundaryTcs?.TrySetResult(true);
+
+            if (isTerminal)
+            {
+                // Run has finished; keep server alive for final observation/history inspections
+                return "terminal_halt";
+            }
+
+            _pendingActionTcs = new TaskCompletionSource<string>();
+            string chosenAction = await _pendingActionTcs.Task;
+            AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}:{chosenAction}");
+            return chosenAction;
+        }
+        finally
+        {
+            BoundaryGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Whether an action answers a flat card-set prompt, which no loop here can answer for the caller.
+    /// </summary>
+    private static bool IsCardSelectAction(string actionId)
+    {
+        return actionId.StartsWith("choose_card_select:", StringComparison.Ordinal)
+            || actionId == CardSelectPrompt.FinishActionId;
+    }
+
+    /// <summary>
+    /// One flat card-set prompt the game opened, reported as a decision and answered by the caller.
+    ///
+    /// The offered cards are reported in the order the game offered them, each action naming the card
+    /// it selects, so a caller selects by identity. The prompt is reported once per card it can still
+    /// take: a caller that has chosen the game's minimum may finish there — which is how a prompt the
+    /// game allows to be skipped is skipped — and one that has not chosen it is asked again until it
+    /// has, so the set the game is handed is always a legal one.
+    /// </summary>
+    public static async Task<IEnumerable<CardModel>> CoordinateCardChoiceAsync(
+        IEnumerable<CardModel> options,
+        int minSelect,
+        int maxSelect)
+    {
+        List<CardModel> offered = options.ToList();
+        List<CardModel> selected = [];
+
+        while (true)
+        {
+            List<CardModel> remaining = offered.Where(card => !selected.Contains(card)).ToList();
+            if (remaining.Count == 0)
+            {
+                // The offer ran out: what was chosen is legal exactly when it meets the minimum, and
+                // a short set is a caller error rather than something to hand the game quietly.
+                if (selected.Count < minSelect)
+                {
+                    throw new InvalidOperationException(
+                        $"A card prompt offered {offered.Count} card(s) and needs {minSelect} of them, "
+                        + $"so the {selected.Count} chosen cannot satisfy it.");
+                }
+
+                return selected;
+            }
+
+            string actionId = await WaitForCoordinatorActionAsync(
+                "simple_card_select",
+                isTerminal: false,
+                isVictory: false,
+                new CardSelectPrompt(remaining, minSelect, maxSelect, selected.Select(card => card.Id.Entry).ToList()));
+
+            if (actionId == CardSelectPrompt.FinishActionId)
+            {
+                if (selected.Count < minSelect)
+                {
+                    throw new InvalidOperationException(
+                        $"A card prompt needs {minSelect} card(s) before it can be left, and {selected.Count} were chosen.");
+                }
+
+                return selected;
+            }
+
+            selected.Add(ResolveOfferedCard(actionId, remaining));
+            if (selected.Count >= maxSelect)
+            {
+                return selected;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The card one offered action selects, resolved by the identity the action names.
+    ///
+    /// The action carries the position and the model id, and the model id is what decides: a deck
+    /// holds copies of one card, so a position alone is ambiguous between them while a model id names
+    /// the card a caller asked for. An action naming a card the prompt does not offer is a caller
+    /// error rather than a reason to select something else, so it fails loudly — and `step` rejects
+    /// such an action against the prompt's own legal actions before it can reach here, so the caller
+    /// that made the mistake is told rather than left waiting for a boundary that never comes.
+    /// </summary>
+    private static CardModel ResolveOfferedCard(string actionId, IReadOnlyList<CardModel> remaining)
+    {
+        string[] parts = actionId.Split(':');
+        if (parts.Length < 3 || parts[0] != "choose_card_select")
+        {
+            throw new InvalidOperationException(
+                $"A card prompt offers {string.Join(", ", remaining.Select(card => card.Id.Entry))}, "
+                + $"so it cannot be answered with {actionId}.");
         }
 
-        // Notify that a decision boundary has been reached
-        _initialBoundaryTcs?.TrySetResult(true);
-
-        if (isTerminal)
+        string modelId = string.Join(':', parts[2..]);
+        CardModel? named = remaining.FirstOrDefault(card => card.Id.Entry == modelId);
+        if (named is null)
         {
-            // Run has finished; keep server alive for final observation/history inspections
-            return "terminal_halt";
+            throw new InvalidOperationException(
+                $"A card prompt offers {string.Join(", ", remaining.Select(card => card.Id.Entry))}, "
+                + $"which does not include {modelId}.");
         }
 
-        _pendingActionTcs = new TaskCompletionSource<string>();
-        string chosenAction = await _pendingActionTcs.Task;
-        AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}:{chosenAction}");
-        return chosenAction;
+        if (int.TryParse(parts[1], out int index) && index >= 0 && index < remaining.Count
+            && remaining[index].Id.Entry == modelId)
+        {
+            return remaining[index];
+        }
+
+        return named;
     }
 }

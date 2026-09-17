@@ -136,6 +136,86 @@ three accessors are pinned offline by
 `tests/test_bridge_observation_shape.py` against the simulator's own card projection, and the
 acceptance observes the fields present, typed and non-zero where the game charges energy.
 
+**Observed since: the card-select prompt an Ancient choice opens is on the bridge (ticket 14).** Two
+runs, both against game assembly `A1F9E653…`, and one before-and-after pair that is the whole point
+of the ticket.
+
+*Before the seam existed*, the bridge reported nothing at this prompt, and the game log says what
+answered it instead. On `TRACERBULLET` (`DEFECT`, Ascension 0), whose first Ancient choice is
+`PRECISE_SCISSORS`, the run's own autoplay log carries `Auto-selected 1 card(s) for selection
+prompt` — the random selector `AutoSlayer` installs, which the game consults before it would push any
+card-selection screen, so the removal was decided before any bridge stage saw it. On `GYMSCENAR10`
+(`IRONCLAD`, Ascension 0), whose second Ancient choice is `SCROLL_BOXES`, the log carries
+`Handling screen: NChooseABundleSelectionScreen` twice and then `Action: Selecting card bundle` — a
+bundle pick has no selector branch in the shipped game, so its screen appears and the shipped
+autoplay's own handler answers it, not the bridge. Either way the run continued with the relic
+granted and no observation naming the prompt: no room, no legal actions.
+
+*With the seam*, by `python/bridge_card_select_acceptance.py` (four headless workers: three prompts and
+the bundle bound): the bridge takes the card selector the game consults, reports the offered cards as
+a stage of their own, and applies the caller's selection. Three Ancient choices are driven, one per
+prompt kind the choices in this repository's sweep open:
+
+- `TRACERBULLET`'s first choice grants `PRECISE_SCISSORS`, a one-card removal. The prompt is reported
+  at stage `simple_card_select`, room `SimpleCardSelect`, offering the deck's ten cards in deck order —
+  five `STRIKE_DEFECT`, four `DEFEND_DEFECT`, `ZAP`, `DUALCAST` — with ten
+  `choose_card_select:{i}:{model}` actions naming each one and `details`
+  `{min_select: 1, max_select: 1, selected: []}`. Selecting `choose_card_select:0:STRIKE_DEFECT` cost
+  the deck exactly that card (10 → 9, three `STRIKE_DEFECT` left), the stages ran
+  `event → simple_card_select → event → map`, and the prompt's own observation hashed
+  `AAFDCB93B88451C7A7CB75BE184F051BF889C1B30347B5F4B786E6F155B85726`.
+- `ANC1ENT01`'s third choice grants `PRECARIOUS_SHEARS`, which asks for **two** cards: the prompt
+  reports `{min_select: 2, max_select: 2}` over the same ten, the second report offers the remaining
+  nine with `selected: [STRIKE_IRONCLAD]`, the two selections cost the deck 10 → 8 with three
+  `STRIKE_IRONCLAD` left, and the prompt's first observation hashed
+  `7E1F39AB70A879E6807083B4260D0C1FC522FAEEF5A89271A9AF323D986F070B`.
+- `ANCIENT01`'s third choice grants `HEFTY_TABLET`, whose pick-up offers a handful of rare cards to
+  *add* and lets the player skip. Its prompt reports `{min_select: 0, max_select: 1}` over
+  `[DEMON_FORM, FEED, MANGLE]`, offers the three card actions **and** `finish_card_select` — which is
+  how a minimum of zero is skipped — and answering with `finish_card_select` advanced the run with an
+  empty selection: the deck gained only the `Injury` Hefty Tablet adds whatever the player chooses
+  (10 → 11) and none of the three offered cards, stages `event → simple_card_select → event → map`,
+  prompt observation
+  `02FD391C88F2A808A03FFD909FDAF992B5E5C47E68A3774BC4A0F2F0C5A0465E`. `ANCIENT01` is not a
+  canonical seed — the shipped game canonicalises it to `ANC1ENT01`, whose offer is the one above —
+  which is why both forms appear here.
+
+All three reached the map afterwards, so the prompts and their resolutions are observed end to end
+rather than inferred. What is *not* measured is the upgrade, transform and discard prompt the same
+selector answers: they are read from the decompiled build's own call sites (every one of the thirteen
+card-selection entry points in `CardSelectCmd` consults `Selector` before it would push a screen).
+
+Two consequences worth stating plainly. **The deck card-select screen stage is untouched and is not
+observed**: the shipped autoplay's selector answers before `NDeckCardSelectScreen` or
+`NSimpleCardSelectScreen` is ever pushed — before this ticket as much as after it — so the bridge's
+screen stages are not what a bridged run reaches for a card choice; the selector seam is. Its handler
+is unmodified, and its stage block now reports the offered cards through the same helper the new stage
+uses, so what it reports is unchanged while the two can no longer drift apart. **The bundle pick stays
+undrivable, and that is now a measurement**: the same acceptance drives `GYMSCENAR10` to
+`SCROLL_BOXES` and records that the only stage seen is `event`, `bundle_stage_reported` false, with the
+relic granted — so `nested_kinds_this_seam_does_not_drive` names `option_choice` and ticket 15's
+sample must state it. A relic pick (`RelicSelectCmd.FromChooseARelicScreen`) is the same kind and the
+same gap. Neither `card_choice` nor the observation's shape moved the `schema_version`, which stays 6:
+no DTO member changed, and the stage table in `python/sts2_native_sim/decision_vocabulary.py` lost
+`card_choice` from `combat` and `card_reward` because a card select now reports that stage of its own.
+
+Two more repairs came with it, and they are why the prompt is answerable at all. **The bridge's
+decision boundaries are now serialised.** A room's loop re-reports the room while a prompt an effect
+inside it opened is still open, and with two boundaries live at once the caller's action completed
+whichever published last — so a caller that took longer than the room loop's 50 ms to answer a card
+prompt would have had its answer delivered to the room and left the game blocked on the prompt. A
+boundary now waits its turn, which keeps the caller's action with the decision it was shown. **A card
+action that names nothing the prompt offers is refused to the caller**, because such an action is
+answered by the game's own flow rather than by the loop that consumes every other action: the tracker
+would throw on the game's task and the caller would wait for a boundary that never comes, so `step`
+now checks a card action against the actions the bridge is reporting and answers with an error
+instead. That the already-handled path is unchanged is measured too: the
+`python/bridge_combat_observation_acceptance.py` control run after these changes reproduces the state
+hashes recorded above for schema version 6 byte for byte —
+`8C6638C1768F703CE36E9BCF4DB6400EDCF28F0E9A899E29D2CA2B7991A5401F` at the fight and
+`37F1CB880C8EE96CAEDD2D0529CA3649363779FDA52B1A8C534BB48B9D63717E` on the turn a power is
+reported.
+
 ## The oracle's own projection is thin
 
 Parity can only be checked through the full-app bridge, so the bridge's combat observation is on the critical path. Inventoried against the contract **before this feature's bridge work landed**, it was missing or wrong in roughly three dozen combat-relevant fields: the encounter id; ordered draw, discard, exhaust and play piles (draw/discard/exhaust are counts only, and the play pile has no representation at all); card instance ids, card type, cost-x, enchantment and native state; the full intent list, of which only the next move's id is present; a creature `side`; the player's own creature row; max energy; stars; the granular turn phase; RNG counters; act floor; map coordinate; relic counters and native states; potion slots (empty slots are skipped, which destroys the slot index); and game build.
@@ -171,9 +251,12 @@ rather than a guess.
 
 - **No field-by-field parity comparison has been run yet.** The evidence above establishes that the
   oracle starts, can be driven, and now carries every field the contract names — the combat block,
-  the fight's ordered piles and card rows, and the run block, coordinate, inventory and build. It
-  still does not compare a single field against a generated record, which is ticket 15's projection
-  layer and comparison; the bridge seam it needs is now complete.
+  the fight's ordered piles and card rows, and the run block, coordinate, inventory and build — and
+  that a card-select prompt an Ancient choice opens is observed and answered by card identity (ticket
+  14). It still does not compare a single field against a generated record, which is ticket 15's
+  projection layer and comparison; the bridge seam it needs is now complete, except for the bundle
+  and relic *option* picks, whose screens the shipped autoplay answers and which ticket 15's sample
+  must therefore name as not covered.
 
 - **The `TotalFloor` divergence remains a static conclusion.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator.
 - **The Act-variant roll is no longer static, but has not been compared against the shipped game.** Ticket 02's `python/act_variant_acceptance.py` runs the shipped install and confirms, for 8 seeds, that the simulator's variant matches an independent port of the shipped roll (4 `Overgrowth`, 4 `Underdocks`), that the map and the run's own counters do not move, and that the variant is reported on the run observation. What is still unmeasured is the other side of the claim: that a shipped run on a non-default seed plays the same act-1 rooms, which needs the field-by-field parity run on a non-default seed (ticket 15).

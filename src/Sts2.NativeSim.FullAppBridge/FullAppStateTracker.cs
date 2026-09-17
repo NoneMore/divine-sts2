@@ -332,18 +332,38 @@ public static class FullAppStateTracker
             var roomObs = new RoomObservationDto { RoomType = "DeckCardSelect" };
             if (contextObject is IReadOnlyList<CardModel> selectableCards)
             {
-                for (int i = 0; i < selectableCards.Count; i++)
+                AddCardSelectActions(roomObs, legalActions, selectableCards);
+            }
+            obs.Room = roomObs;
+        }
+        else if (phase == "simple_card_select")
+        {
+            // The flat card-set prompt, whichever seam reported it: the selector the game consults
+            // before it would push a screen, which is what several Ancient choices' card selects
+            // reach the bridge through, or the screen itself when nothing answers for it.
+            var roomObs = new RoomObservationDto { RoomType = "SimpleCardSelect" };
+            if (contextObject is CardSelectPrompt prompt)
+            {
+                AddCardSelectActions(roomObs, legalActions, prompt.Offered);
+
+                // A prompt the game allows to be left with what has been chosen so far — including a
+                // prompt whose minimum is zero, which is how a skippable one is skipped.
+                if (prompt.Selected.Count >= prompt.MinSelect && prompt.Selected.Count < prompt.MaxSelect)
                 {
-                    CardModel card = selectableCards[i];
-                    roomObs.Options.Add(card.Id.Entry);
                     legalActions.Add(new LegalActionDto
                     {
-                        ActionId = $"choose_card_select:{i}:{card.Id.Entry}",
-                        ActionType = "choose_card_select",
-                        Description = $"Select {card.Id.Entry}",
-                        Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
+                        ActionId = CardSelectPrompt.FinishActionId,
+                        ActionType = CardSelectPrompt.FinishActionId,
+                        Description = $"Finish selecting ({prompt.Selected.Count} chosen)",
+                        Metadata = new Dictionary<string, object?> { ["selected_count"] = prompt.Selected.Count }
                     });
                 }
+
+                // A prompt that wants more than one card is not finished by one selection, so the
+                // range the game asked for and what has been chosen so far travel with the room.
+                roomObs.Details["min_select"] = prompt.MinSelect;
+                roomObs.Details["max_select"] = prompt.MaxSelect;
+                roomObs.Details["selected"] = prompt.Selected;
             }
             obs.Room = roomObs;
         }
@@ -447,6 +467,31 @@ public static class FullAppStateTracker
 
         obs.StateHash = ComputeHash(obs);
         return (obs, legalActions);
+    }
+
+    /// <summary>
+    /// The cards a flat card-set prompt offers, as one action each: the room names them in the order
+    /// the game offered them, and every action names the card it selects, so a caller picks a card by
+    /// identity rather than guessing which position the bridge means. Both card-select stages offer
+    /// the same kind of set through the same shape, so both report it through this one place.
+    /// </summary>
+    private static void AddCardSelectActions(
+        RoomObservationDto roomObs,
+        List<LegalActionDto> legalActions,
+        IReadOnlyList<CardModel> offered)
+    {
+        for (int i = 0; i < offered.Count; i++)
+        {
+            CardModel card = offered[i];
+            roomObs.Options.Add(card.Id.Entry);
+            legalActions.Add(new LegalActionDto
+            {
+                ActionId = $"choose_card_select:{i}:{card.Id.Entry}",
+                ActionType = "choose_card_select",
+                Description = $"Select {card.Id.Entry}",
+                Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
+            });
+        }
     }
 
     /// <summary>

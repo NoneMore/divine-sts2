@@ -21,7 +21,6 @@ FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "canonical-observa
 CAPTURES: dict[str, dict[str, object]] = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 BRIDGE_DIR = paths.REPOSITORY_ROOT / "src" / "Sts2.NativeSim.FullAppBridge"
-BRIDGE_MOD = BRIDGE_DIR / "FullAppBridgeMod.cs"
 STATE_TRACKER = BRIDGE_DIR / "FullAppStateTracker.cs"
 ENVIRONMENT = paths.REPOSITORY_ROOT / "src" / "Sts2.NativeSim.Core" / "PersistentNativeCombatEnvironment.cs"
 
@@ -31,16 +30,34 @@ ACTION_PHASE = "Play"
 NO_ACTION_PHASE = "None"
 
 
+def bridge_emitted_phase_words() -> set[str]:
+    """The phase words the bridge hands the snapshot builder, read from every site that emits one.
+
+    The emission sites are the bridge's own sources rather than one file: a handler in the mod names
+    the stage it is standing in, and a prompt the game's own flow opened names its own from the
+    server. Reading one file would let an emission in the other pass the coverage check silently.
+    """
+    emitted: set[str] = set()
+    for source in sorted(BRIDGE_DIR.glob("*.cs")):
+        emitted |= set(
+            re.findall(r'WaitForCoordinatorActionAsync\(\s*"([a-z_]+)"', source.read_text(encoding="utf-8"))
+        )
+    return emitted
+
+
+def bridge_dispatched_phase_words() -> set[str]:
+    """The phase words the snapshot builder describes a stage block for, read from its own dispatch."""
+    return set(re.findall(r'phase == "([a-z_]+)"', STATE_TRACKER.read_text(encoding="utf-8")))
+
+
 def bridge_phase_words() -> set[str]:
-    """The phase words the bridge can put on an observation, read from the sites that emit them.
+    """The phase words the bridge can put on an observation.
 
     A handler reaches the snapshot builder by handing it the stage it is standing in, and the
     builder dispatches on that same word for the stage blocks it describes. Both sites have to
     agree, so the vocabulary is the union of what each names.
     """
-    emitted = set(re.findall(r'WaitForCoordinatorActionAsync\(\s*"([a-z_]+)"', BRIDGE_MOD.read_text(encoding="utf-8")))
-    dispatched = set(re.findall(r'phase == "([a-z_]+)"', STATE_TRACKER.read_text(encoding="utf-8")))
-    return emitted | dispatched
+    return bridge_emitted_phase_words() | bridge_dispatched_phase_words()
 
 
 def test_the_phase_words_this_test_reads_are_the_ones_the_bridge_emits() -> None:
@@ -62,6 +79,19 @@ def test_the_mapping_covers_every_phase_word_the_bridge_can_emit() -> None:
     stale = set(vocabulary.BRIDGE_PHASE_TO_DECISION_KINDS) - words
     assert not unmapped, f"the bridge can report {sorted(unmapped)} and the mapping does not name it"
     assert not stale, f"the mapping names {sorted(stale)}, which the bridge cannot report"
+
+
+def test_every_phase_word_the_bridge_waits_under_describes_a_stage() -> None:
+    """A word the bridge waits under with no branch is a decision it reports nothing about.
+
+    A caller that reaches such a stage is handed an observation with no room and no legal action, so
+    it cannot advance the run — which is a gap in the bridge, not a state of the game. The two sites
+    are compared here because only their agreement makes a stage observable at all.
+    """
+    undescribed = bridge_emitted_phase_words() - bridge_dispatched_phase_words()
+    assert not undescribed, (
+        f"the bridge waits for a decision in {sorted(undescribed)} and the snapshot describes no stage for it"
+    )
 
 
 def test_the_mapping_maps_onto_decision_kinds_the_module_declares() -> None:

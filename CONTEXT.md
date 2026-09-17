@@ -32,6 +32,14 @@ _Avoid_: Neow as a general name for Ancients or for the Ancient room type
 One of the choices an Ancient room offers at run start, including the nested choice — a card select, reward set, or bundle pick — that some choices open before the run continues.
 _Avoid_: Neow blessing, blessing, boon
 
+**Card-select prompt**:
+A decision in which the shipped game offers a flat set of cards and waits for the player to choose from them — a removal, an upgrade, a transform, a discard, or a card to add — as distinct from an option pick, which offers bundles or relics. The game asks the card selector the run installed before it would push a selection screen, so a bridged run reports the prompt as one stage of its own wherever it was opened from, with the cards on offer named so a caller selects one by identity.
+_Avoid_: Card select screen, simple card select screen, choose-cards prompt
+
+**Option pick**:
+A decision in which the shipped game offers whole options rather than single cards — a bundle of cards, or a relic to choose — and which no card selector answers, so a bridged run reports no stage of its own for it yet.
+_Avoid_: Bundle pick, mixed with card-select prompt
+
 **Combat initial state**:
 The state of a combat at the moment it has begun and before the player has made any decision.
 _Avoid_: Starting state, opening state, run-start state

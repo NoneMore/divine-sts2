@@ -104,6 +104,25 @@ BUILD_KEYS = frozenset({"version", "assembly_sha256", "pck_sha256"})
 REPLACED_FLAT_KEYS = frozenset({"seed", "ascension", "act", "floor", "gold", "relics", "potions"})
 
 
+#: The two card-select stages the bridge describes: the deck screen the game pushes for a deck-wide
+#: prompt, and the flat card-set prompt the selector seam reports for every Ancient choice that opens
+#: one. Both offer a set of cards, so both have to name the cards they offer — a caller selects one by
+#: identity, never by guessing an index the bridge chose.
+CARD_SELECT_PHASES = ("deck_card_select", "simple_card_select")
+
+#: The card-select action id both stages report: the offered card's position, the model id it names,
+#: and the metadata a caller reads the same two out of.
+CARD_SELECT_ACTION_PREFIX = "choose_card_select:"
+
+#: The one place both stages report that action shape through, so the two cannot drift apart.
+CARD_SELECT_ACTIONS_SIGNATURE = (
+    "private static void AddCardSelectActions(\n"
+    "        RoomObservationDto roomObs,\n"
+    "        List<LegalActionDto> legalActions,\n"
+    "        IReadOnlyList<CardModel> offered)"
+)
+
+
 def dto_properties() -> dict[str, list[str]]:
     """Every bridge DTO's JSON member names, in declaration order, read from its own declarations."""
     source = PROTOCOL_MESSAGES.read_text(encoding="utf-8")
@@ -178,6 +197,14 @@ def bridge_method_body(signature: str) -> str:
     source = (BRIDGE_DIR / "FullAppStateTracker.cs").read_text(encoding="utf-8")
     body = re.search(rf"{re.escape(signature)}\s*\n\s*\{{(.*?)\n    \}}", source, re.DOTALL)
     assert body, f"this test no longer reads {signature}"
+    return body.group(1)
+
+
+def bridge_phase_branch(phase: str) -> str:
+    """The body of the snapshot's stage block for one phase word."""
+    source = (BRIDGE_DIR / "FullAppStateTracker.cs").read_text(encoding="utf-8")
+    body = re.search(rf'phase == "{phase}"\)\s*\n\s*\{{(.*?)\n        \}}', source, re.DOTALL)
+    assert body, f"this test no longer reads the {phase} stage block"
     return body.group(1)
 
 
@@ -513,6 +540,95 @@ def test_the_bridge_snapshot_actually_fills_the_blocks_it_declares() -> None:
     assert "obs.Inventory = InventoryObservation(player);" in source
     assert "obs.MapCoord = new CoordObservationDto { Col = coord.col, Row = coord.row };" in source
     assert "GameBuild = GameBuild.Current," in source
+
+
+def test_a_card_select_stage_names_the_cards_it_offers() -> None:
+    """A card-select stage offers a set of cards, so the cards are part of the decision.
+
+    An observation that reported only a count, or only the position a caller has to guess, would make
+    the prompt undrivable by identity: the caller picks a card, so the card's own name has to be on
+    the room and on the action that selects it. Both card-select stages offer a flat set of cards, so
+    both report it through one shape rather than two that can drift apart.
+    """
+    actions = bridge_method_body(CARD_SELECT_ACTIONS_SIGNATURE)
+    assert "roomObs.Options.Add(card.Id.Entry)" in actions, "the offered cards are not named on the room"
+    assert re.search(
+        rf'ActionId = \$"{CARD_SELECT_ACTION_PREFIX}\{{i\}}:\{{card\.Id\.Entry\}}"', actions
+    ), "the action does not name the card it selects"
+    assert '["card_id"] = card.Id.Entry' in actions, "the action does not report the card in its metadata"
+
+    for phase in CARD_SELECT_PHASES:
+        branch = bridge_phase_branch(phase)
+        assert re.search(r'RoomType = "\w+"', branch), f"{phase} reports no room type"
+        assert "AddCardSelectActions(roomObs, legalActions," in branch, (
+            f"{phase} does not report the offered cards through the shared shape"
+        )
+        assert "obs.Room = roomObs;" in branch, f"{phase} builds a room the observation does not carry"
+
+
+def test_a_multi_card_prompt_reports_its_range_and_how_to_leave_it() -> None:
+    """A prompt the game does not finish in one card has to say so, and how to stop.
+
+    The selector is handed the game's own minimum and maximum, so the room carries them and what has
+    been chosen so far; a caller that has reached the minimum may leave with what it has, which is
+    also how a prompt whose minimum is zero is skipped. A prompt that wants every card it offers
+    (`min_select == max_select`) has nothing to decide here, so the offer is conditional on the range.
+    """
+    branch = bridge_phase_branch("simple_card_select")
+    for member in ('Details["min_select"]', 'Details["max_select"]', 'Details["selected"]'):
+        assert member in branch, f"the prompt does not report {member}"
+    assert re.search(
+        r"prompt\.Selected\.Count >= prompt\.MinSelect && prompt\.Selected\.Count < prompt\.MaxSelect", branch
+    ), "the prompt offers no way to finish once its own range allows it"
+    assert "CardSelectPrompt.FinishActionId" in branch, "the finish action is not the prompt's own action id"
+
+    prompt = (BRIDGE_DIR / "CardSelectPrompt.cs").read_text(encoding="utf-8")
+    assert 'FinishActionId = "finish_card_select"' in prompt, "this test no longer reads the finish action id"
+    # The selector seam reports the game's range; the screen seam reports what its own loop can do.
+    assert "OneCardFrom" in prompt, "the screen seam no longer states the one card it selects"
+
+
+def test_the_bridge_takes_the_games_card_selector_so_a_card_prompt_reaches_the_caller() -> None:
+    """The game asks its installed selector before it pushes any card-selection screen.
+
+    The shipped AutoSlay installs a selector that answers a nested card choice at random, so a bridge
+    that never takes that seam is handed no decision to report and cannot drive the prompt — which is
+    how several Ancient choices became undrivable. The seam is wrapped rather than replaced, so a run
+    nobody is driving still answers the way it did; and the patch is required rather than optional,
+    because a game that renamed this method would otherwise leave the seam silently absent.
+    """
+    mod = (BRIDGE_DIR / "FullAppBridgeMod.cs").read_text(encoding="utf-8")
+    assert "PatchRequiredPrefix(harmony, typeof(CardSelectCmd), nameof(CardSelectCmd.UseSelector)" in mod, (
+        "the bridge does not require the game's card selector seam, so a rename would drop it silently"
+    )
+
+    selector = BRIDGE_DIR / "BridgeCardSelector.cs"
+    assert selector.is_file(), "the bridge has no selector of its own to route a card prompt through"
+    source = selector.read_text(encoding="utf-8")
+    assert "ICardSelector" in source, "the bridge's selector does not implement the game's selector seam"
+    assert "CoordinateCardChoiceAsync" in source, "the offered cards do not reach the coordinator"
+    # A card *reward* is the rewards stage's decision, which an already-handled stage reports; the
+    # wrapped selector keeps answering it rather than a second stage claiming it.
+    assert "_inner.GetSelectedCardReward" in source, "the bridge also intercepted the card reward choice"
+    # And a run nobody is driving keeps the shipped selector's own answer.
+    assert "HasClient" in source, "the bridge does not defer a prompt no client is connected for"
+
+
+def test_a_card_action_the_prompt_does_not_offer_is_refused_to_the_caller() -> None:
+    """A card action is answered by the game's flow, so a wrong one would hang the caller.
+
+    The loop that answers every other action reads the id and reports the next boundary; a card action
+    that named nothing the prompt offers would instead leave the game blocked with the caller waiting
+    for a boundary that never comes. It is therefore checked against the actions the bridge is
+    reporting, so the mistake comes back as an error rather than as a stall.
+    """
+    server = (BRIDGE_DIR / "FullAppBridgeServer.cs").read_text(encoding="utf-8")
+    assert "IsCardSelectAction(actionId) && !CurrentLegalActions.Any(" in server, (
+        "a card action is not validated against the prompt's own legal actions"
+    )
+    assert "private static bool IsCardSelectAction(string actionId)" in server, (
+        "this test no longer reads the card-action guard"
+    )
 
 
 def test_the_bridge_relic_row_reads_the_counter_the_way_the_other_projections_read_it() -> None:

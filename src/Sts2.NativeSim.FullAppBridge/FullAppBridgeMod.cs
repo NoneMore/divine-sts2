@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.AutoSlay.Handlers.Rooms;
 using MegaCrit.Sts2.Core.AutoSlay.Handlers.Screens;
 using MegaCrit.Sts2.Core.AutoSlay.Helpers;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
@@ -78,6 +79,12 @@ public static class FullAppBridgeMod
         TryPatchPrefix(harmony, typeof(DeckUpgradeScreenHandler), nameof(DeckUpgradeScreenHandler.HandleAsync), nameof(HandleDeckUpgradeScreenAsync));
         TryPatchPrefix(harmony, typeof(DeckCardSelectScreenHandler), nameof(DeckCardSelectScreenHandler.HandleAsync), nameof(HandleDeckCardSelectScreenAsync));
         TryPatchPrefix(harmony, typeof(SimpleCardSelectScreenHandler), nameof(SimpleCardSelectScreenHandler.HandleAsync), nameof(HandleSimpleCardSelectScreenAsync));
+        // The game consults its installed card selector before it pushes any card-selection screen,
+        // so this is the seam a flat card-set prompt reaches the bridge through. Without it the
+        // shipped AutoSlay's own selector answers those prompts at random, several Ancient choices
+        // included, and no caller ever sees them. Required rather than optional: a game that renamed
+        // the seam would otherwise leave this bridge silently unable to drive a card select.
+        PatchRequiredPrefix(harmony, typeof(CardSelectCmd), nameof(CardSelectCmd.UseSelector), [typeof(MegaCrit.Sts2.Core.TestSupport.ICardSelector)], nameof(OnCardSelectorUsed));
         TryPatchPrefix(harmony, typeof(ShopRoomHandler), nameof(ShopRoomHandler.HandleAsync), nameof(HandleShopRoomAsync));
         TryPatchPrefix(harmony, typeof(EventRoomHandler), nameof(EventRoomHandler.HandleAsync), nameof(HandleEventRoomAsync));
         TryPatchPrefix(harmony, typeof(TreasureRoomHandler), nameof(TreasureRoomHandler.HandleAsync), nameof(HandleTreasureRoomAsync));
@@ -635,7 +642,8 @@ public static class FullAppBridgeMod
         var cardHolders = UiHelper.FindAll<NGridCardHolder>(screen).Where(h => h.CardModel != null).ToList();
         List<CardModel> selectableCards = cardHolders.Select(h => h.CardModel).ToList();
 
-        string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync("simple_card_select", isTerminal: false, isVictory: false, selectableCards);
+        string actionId = await FullAppBridgeServer.WaitForCoordinatorActionAsync(
+            "simple_card_select", isTerminal: false, isVictory: false, CardSelectPrompt.OneCardFrom(selectableCards));
 
         int cardIdx = 0;
         if (actionId.StartsWith("choose_card_select:", StringComparison.Ordinal))
@@ -833,5 +841,16 @@ public static class FullAppBridgeMod
         await WaitHelper.Until(
             () => GetTopScreen<NRewardsScreen>() != null || GetTopScreen<MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen.NGameOverScreen>() != null,
             ct, TimeSpan.FromSeconds(15), "Neither rewards nor game over screen appeared after combat");
+    }
+
+    /// <summary>
+    /// Wrap the card selector the shipped AutoSlay installs, so the flat card-set prompt the game
+    /// consults it for becomes a decision this bridge reports and a caller answers by identity.
+    /// Harmony binds the parameter by name, matching `CardSelectCmd.UseSelector(ICardSelector selector)`.
+    /// </summary>
+    private static void OnCardSelectorUsed(ref MegaCrit.Sts2.Core.TestSupport.ICardSelector selector)
+    {
+        if (selector is BridgeCardSelector) return;
+        selector = new BridgeCardSelector(selector);
     }
 }
