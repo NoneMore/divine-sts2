@@ -2,9 +2,9 @@
 
 **Question:** for a given run seed, what must the simulator reproduce for a generated "act 1 first combat" scenario to be reachable — and identical — in the shipped game?
 
-**Answer (short):** the map and the encounter *choice* are already correct and provably immune to the missing Ancient room; two other things are not. `TotalFloor` is off by one, which changes randomized intra-encounter monster composition, and the act-1 variant (`Overgrowth` vs `Underdocks`) is rolled in the shipped game but hard-coded in the simulator, which changes the entire encounter/event/boss pool.
+**Answer (short):** the map and the encounter *choice* are already correct and provably immune to the missing Ancient room; three other things are not. `TotalFloor` was off by one and is repaired by entering the Ancient room — measured, the floors now agree at the first fight. The act-1 variant (`Overgrowth` vs `Underdocks`) is rolled in the shipped game and was hard-coded in the simulator, which is repaired by deriving it from the seed; what a field-by-field run adds is that the *shipped* side is the constrained one, because a fresh profile forces the non-default variant. And the first fight is still not the same fight on the two sides: the run-mode reset builds a throwaway combat the shipped game never builds, so the record's first fight is one `Niche` draw and one deck shuffle further along its streams than the game's — the enemy HP and the whole draw order differ with it.
 
-**Sources:** static reading of the shipped decompiled build (`sts2.dll` v0.107.1), plus the runtime observations under *Runtime evidence* and *The oracle's own projection is thin*, which say which of them were measured rather than read. Game citations are relative to the decompiled root `MegaCrit/sts2/`; repo citations are relative to the repo root. Every claim above the *Runtime evidence* heading is a static conclusion unless it says otherwise.
+**Sources:** static reading of the shipped decompiled build (`sts2.dll` v0.107.1), plus the runtime observations under *Runtime evidence* and *The oracle's own projection is thin*, which say which of them were measured rather than read. The field-by-field parity run belongs to the runtime observations: it drove real shipped-game processes and compared 51 contract fields per scenario. Game citations are relative to the decompiled root `MegaCrit/sts2/`; repo citations are relative to the repo root. Every claim above the *Runtime evidence* heading is a static conclusion unless it says otherwise.
 
 ---
 
@@ -216,6 +216,85 @@ hashes recorded above for schema version 6 byte for byte —
 `37F1CB880C8EE96CAEDD2D0529CA3649363779FDA52B1A8C534BB48B9D63717E` on the turn a power is
 reported.
 
+**Observed since: the field-by-field parity run has been made, and it does not pass (ticket 15).** By
+`python/parity_run_acceptance.py` on game assembly `A1F9E653…`, over a fixed sample of **fourteen**
+generated scenarios — two characters (IRONCLAD, DEFECT), Ascensions 0 and 2, ten runs, every Ancient
+choice whose pick-up this seam can drive — driven end to end: the generator records the row on a
+native worker, a real headless game is started with the same character, Ascension and canonical seed,
+travels the Ancient room, takes the choice at the index the record holds, answers the card prompt that
+choice opens with the same rule the record used, travels to the recorded row-1 node, and stops at the
+first fight.
+
+*Every one reached a fight to compare* — the fourteenth, `IRONCLAD@A2/ANC1ENT19#1`, was lost to a
+dropped game process on the first pass and re-driven on its own with `--only`, where it reached the
+fight like the rest — and every one of them stood on the node the record names, held the relic its
+choice grants and reported the encounter the record names. The card prompts were driven on the shipped
+side in eight of them: a one-card removal (min 1, max 1), a two-card removal (min 2, max 2) and Hefty
+Tablet's skippable pick-up (min 0, max 1), the stages running `event → simple_card_select → event →
+map` each time; the prompt-free choices ran `event → event → map`.
+
+**Every one differed, in 15 to 37 leaf paths, and the same one draw is in all of them.** Every sample's
+differing set contains `$.run.rng_counters.Niche` one higher on the record than on the shipped run — 2
+against 1, 3 against 2, 4 against 3, seed by seed — and `$.run.rng_counters.Shuffle` beside it. The
+helper the comparison runs through keeps every mismatch, so the report names the *first* one in its own
+sorted order and the count next to it; that first path is the enemy's `hp` in eleven of the fourteen
+(44 against 45, 25 against 26, 26 against 25 — the sign follows the roll) and a hand card's
+`card_type`/`model_id` in the other three. Nothing else in the run block differed: canonical seed,
+Ascension, gold, Act variant, act index, act floor and total floor all agreed, so entering the Ancient
+room does repair the floor bookkeeping this feature was scoped around. Behind the counters, the same
+root cause moves the two things a policy actually reads — measured by keeping both sides of
+`IRONCLAD@A0/ANC1ENT10#2`, the prompt-free `LARGE_CAPSULE` row: the enemy's `hp`/`max_hp` are 44 on the
+record and 45 in the game, and the ordered piles differ outright (the record's hand holds `BASH` where
+the game's holds `STRIKE_IRONCLAD`, and the draw pile is a different permutation, `Shuffle` 20 against
+11 — a difference of exactly the nine draws the record had already spent before the fight).
+
+**The root cause is the run-mode reset's throwaway combat, and it is measured stage by stage.** The
+simulator's counters at each stage of one drive (`ANC1ENT10`, one native worker): at the *reset* — the
+run sitting on the act map, before the Ancient and before any room — `Niche` is already 1 and `Shuffle`
+already 9; they are unchanged at the Ancient and after leaving it; and at the fight they are 2 and 20
+(18 for the choice that removes a card; the rows that draw a third `Niche` show 3 and 21). The shipped
+run's whole fight costs one `Niche` draw and the same eleven `Shuffle` draws, counted from zero. So the
+reset has already built a combat — one monster-composition draw and one shuffle of the starting deck —
+that the shipped game has not built and will never play, and every stream the first real fight reads is
+one draw ahead from that moment on. Read from the environment:
+`PersistentNativeCombatEnvironment.Reset` constructs `_combat`, calls `GenerateMonstersWithSlots` and
+`PopulateCombatState(…, Shuffle)` unconditionally (`:455-466`) whatever the request is for, a scenario
+run's reset included.
+
+That is a defect in the environment's reset path, not in the bridge, and it is filed as ticket 16
+rather than repaired here: the fix is a Core change, and every table recorded from a run reset moves
+with it — the generator's `_OBSERVED`/`_OBSERVED_CHOICES` state hashes and `act_variant_acceptance`'s
+counter baseline among them.
+
+**The Act-variant bound is a measurement now too, and it is why the compared sample is one variant.**
+The shipped game forces act 1's non-default variant until a profile has met it
+(`ActModel.GetRandomList` reads `SaveManager.Progress.DiscoveredActs`, `Core/Models/ActModel.cs:550`),
+the bridge's sandbox profile is a fresh one, and the simulator pins that check off and lets the seed
+alone decide (ADR-0001; ticket 02). Two probes — `SCENAR10A01` and `ANC1ENT01`, whose records are
+`OVERGROWTH` — were driven to the Ancient on the shipped side and both report `UNDERDOCKS`, each on the
+row-0 coordinate `{col: 3, row: 0}`. So on this oracle a shipped run plays `UNDERDOCKS` whatever the
+seed rolls, and the fourteen compared scenarios are therefore the seeds whose roll is that variant;
+the default-variant half of the dimension is unreachable here until the discovered-acts question the
+spec's Further Notes defers is settled.
+
+**What the comparison is, and what it is not.** Both observations go through one projection
+(`sts2_native_sim/parity_projection.py`) into one shape of **50 declared field paths** and are compared
+with the repository's existing per-path helper, `sts2_native_sim.parity.compare_snapshots` — the helper
+the architecture review found with no caller, and which this comparison is now the caller of. It
+flattens both projections into leaf paths and keeps *every* mismatch, so a turn-1 fight compares 134 to
+172 leaves (every card and creature instance is one), and the report names the first field that moved in
+the helper's own sorted order with the count and the whole set beside it — which is what makes a root
+cause visible rather than only its first symptom. The projection is where the two encoders' vocabulary
+is reconciled: the bridge's stage word and its granular turn phase are mapped onto the simulator's
+decision kind through `decision_vocabulary`, and the act-index base is declared once, zero-based, for
+both sides. Three things are named as **not** compared, each with its reason: the per-card
+`instance_id`, which each encoder mints for itself (a card is compared as its position in an ordered
+pile plus its attributes); an intent's implementing class, which the contract does not name; and either
+side's `state_hash`. No hash is compared at any point — the report states `state_hashes_compared: 0` —
+and it also names the four declared fields **no sample exercised** (the potion slot and the
+enchantment members: a turn-1 fight holds no potion and enchants no card), so a field that is declared
+and never read cannot be mistaken for one that was.
+
 ## The oracle's own projection is thin
 
 Parity can only be checked through the full-app bridge, so the bridge's combat observation is on the critical path. Inventoried against the contract **before this feature's bridge work landed**, it was missing or wrong in roughly three dozen combat-relevant fields: the encounter id; ordered draw, discard, exhaust and play piles (draw/discard/exhaust are counts only, and the play pile has no representation at all); card instance ids, card type, cost-x, enchantment and native state; the full intent list, of which only the next move's id is present; a creature `side`; the player's own creature row; max energy; stars; the granular turn phase; RNG counters; act floor; map coordinate; relic counters and native states; potion slots (empty slots are skipped, which destroys the slot index); and game build.
@@ -249,14 +328,24 @@ rather than a guess.
 
 ## Still open
 
-- **No field-by-field parity comparison has been run yet.** The evidence above establishes that the
-  oracle starts, can be driven, and now carries every field the contract names — the combat block,
-  the fight's ordered piles and card rows, and the run block, coordinate, inventory and build — and
-  that a card-select prompt an Ancient choice opens is observed and answered by card identity (ticket
-  14). It still does not compare a single field against a generated record, which is ticket 15's
-  projection layer and comparison; the bridge seam it needs is now complete, except for the bundle
-  and relic *option* picks, whose screens the shipped autoplay answers and which ticket 15's sample
-  must therefore name as not covered.
+- **The field-by-field parity comparison has been run, and the feature does not pass it.** The
+  fourteen-scenario sample above reached its fights and compared 51 contract fields with no hash
+  compared, and every sample differed at `$.run.rng_counters.Niche` — one extra draw on the record's
+  side — with the enemy HP and the ordered piles moving behind it. The cause is measured and localised
+  to the run-mode reset building a throwaway combat (ticket 16); until that is repaired, a generated
+  scenario's first fight is not the shipped game's first fight, and the gate stays red. The bundle and
+  relic *option* picks remain undrivable, so eight of the sample's choices open a card select and the
+  rest open nothing; complete Ancient-choice coverage still waits on that seam.
 
-- **The `TotalFloor` divergence remains a static conclusion.** The cheapest empirical check is to compare the first combat's monster ids and HP for one seed between a real run and the simulator.
-- **The Act-variant roll is no longer static, but has not been compared against the shipped game.** Ticket 02's `python/act_variant_acceptance.py` runs the shipped install and confirms, for 8 seeds, that the simulator's variant matches an independent port of the shipped roll (4 `Overgrowth`, 4 `Underdocks`), that the map and the run's own counters do not move, and that the variant is reported on the run observation. What is still unmeasured is the other side of the claim: that a shipped run on a non-default seed plays the same act-1 rooms, which needs the field-by-field parity run on a non-default seed (ticket 15).
+- **The `TotalFloor` divergence is measured now, and it is closed by entering the room.** At the first
+  fight of every sample the run's act floor and total floor matched the shipped game's — both 2 — and
+  the first differing contract field came after them. So repair (a) from the *Runtime evidence* entry
+  above is what the record needs; the synthesize-a-history-entry fallback is not.
+
+- **The Act-variant roll is measured on both sides now, and the shipped side is the constrained one.**
+  Ticket 02's `python/act_variant_acceptance.py` confirms the simulator's variant matches an independent
+  port of the shipped roll; ticket 15's probes confirm the other side of the claim is *not* reproduced by
+  a shipped run on a fresh profile, which forces the non-default variant until its profile has met it.
+  A shipped run that plays the seed's own variant needs a profile that has met `UNDERDOCKS` (or a
+  multiplayer run, where the game skips the discovery check) — the discovered-acts question the spec's
+  Further Notes records as an open ADR decision.

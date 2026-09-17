@@ -31,7 +31,15 @@ def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
 
 
 def compare_snapshots(native: dict[str, Any], shadow: dict[str, Any]) -> dict[str, Any]:
-    """Compare two normalized snapshots exactly and retain every mismatch."""
+    """Compare two normalized snapshots exactly and retain every mismatch.
+
+    Two callers want this and neither wants a second implementation of it: the shadow-simulator trust
+    matrix below, and the field-by-field parity run (``sts2_native_sim.parity_projection``), which
+    compares a generated record against the shipped game. The two argument names are the shadow
+    caller's; the parity run passes the record as ``native`` and the bridge's observation as ``shadow``
+    and reads only ``mismatches`` and the counts beside it, so the provenance words stay this module's
+    own. Paths come back sorted, so "the first mismatch" is the alphabetically first field that moved.
+    """
     native_fields, shadow_fields = _flatten(native), _flatten(shadow)
     paths = sorted(set(native_fields) | set(shadow_fields))
     comparisons = []
