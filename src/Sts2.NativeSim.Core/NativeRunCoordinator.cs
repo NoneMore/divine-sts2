@@ -6,7 +6,7 @@ namespace Sts2.NativeSim.Core;
 /// The semantic native seam used by the run coordinator. Implementations own native objects and
 /// continuations; callers see only complete captures and action identifiers.
 /// </summary>
-internal interface INativeRunAdapter : IDisposable
+internal interface INativeRunAdapter
 {
     EnvironmentResult RunReset(ResetRequest request);
     EnvironmentResult Capture();
@@ -21,10 +21,9 @@ internal interface INativeRunAdapter : IDisposable
 /// adapter can mutate state. Room-state dispatch remains in the existing reflection implementation
 /// until the active-session work replaces it.
 /// </summary>
-public sealed class NativeRunCoordinator : IDisposable
+public sealed class NativeRunCoordinator
 {
     private readonly INativeRunAdapter _adapter;
-    private EnvironmentResult? _current;
 
     internal NativeRunCoordinator(INativeRunAdapter adapter)
     {
@@ -39,11 +38,11 @@ public sealed class NativeRunCoordinator : IDisposable
 
     public EnvironmentResult Observe() => Remember(_adapter.Capture());
 
-    public IReadOnlyList<LegalAction> LegalActions() => Current().LegalActions;
+    public IReadOnlyList<LegalAction> LegalActions() => Observe().LegalActions;
 
     public async Task<EnvironmentResult> StepAsync(string actionId)
     {
-        EnvironmentResult before = Current();
+        EnvironmentResult before = Observe();
         LegalAction? action = before.LegalActions.SingleOrDefault(candidate =>
             StringComparer.Ordinal.Equals(candidate.ActionId, actionId));
         if (action is null)
@@ -58,7 +57,7 @@ public sealed class NativeRunCoordinator : IDisposable
         }
         catch
         {
-            _current = Remember(await _adapter.RestoreAsync(checkpoint));
+            _ = Remember(await _adapter.RestoreAsync(checkpoint));
             throw;
         }
     }
@@ -72,14 +71,9 @@ public sealed class NativeRunCoordinator : IDisposable
     public async Task<EnvironmentResult> RestoreAsync(string stateHandle) =>
         Remember(await _adapter.RestoreAsync(stateHandle));
 
-    public void Dispose() => _adapter.Dispose();
-
-    private EnvironmentResult Current() => _current ?? Observe();
-
     private EnvironmentResult Remember(EnvironmentResult result)
     {
         EnsureUnambiguous(result);
-        _current = result;
         return result;
     }
 
@@ -111,5 +105,4 @@ internal sealed class ReflectionNativeRunAdapter : INativeRunAdapter
     public Task<EnvironmentResult> ApplyAsync(string actionId) => _environment.StepAsync(actionId);
     public string Fork() => _environment.Fork();
     public Task<EnvironmentResult> RestoreAsync(string stateHandle) => _environment.RestoreAsync(stateHandle);
-    public void Dispose() { }
 }

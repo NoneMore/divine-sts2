@@ -79,8 +79,6 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         return Task.FromResult(Capture());
     }
 
-    public void Dispose() { }
-
     private static EnvironmentResult Result(string name, ScriptedFrame frame) =>
         new(frame.Observation, frame.Hash, frame.Actions, false, false, $"script:{name}");
 

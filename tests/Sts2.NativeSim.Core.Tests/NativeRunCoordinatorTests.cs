@@ -14,7 +14,7 @@ public sealed class NativeRunCoordinatorTests
     public async Task Caller_can_reset_capture_step_fork_and_restore()
     {
         ScriptedNativeRunAdapter adapter = ScenarioScript();
-        using NativeRunCoordinator coordinator = new(adapter);
+        NativeRunCoordinator coordinator = new(adapter);
 
         EnvironmentResult reset = coordinator.RunReset(Request());
         Assert.Equal("ancient-door", Assert.Single(coordinator.LegalActions()).ActionId);
@@ -34,7 +34,7 @@ public sealed class NativeRunCoordinatorTests
     public async Task Invalid_action_does_not_reach_the_native_port_or_mutate_state()
     {
         ScriptedNativeRunAdapter adapter = ScenarioScript();
-        using NativeRunCoordinator coordinator = new(adapter);
+        NativeRunCoordinator coordinator = new(adapter);
         EnvironmentResult before = coordinator.RunReset(Request());
 
         ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(
@@ -58,7 +58,7 @@ public sealed class NativeRunCoordinatorTests
                 Action("same-id", "choose_event", ("option_index", 0)),
                 Action("same-id", "choose_event", ("option_index", 1)))
             .Transition("safe", "enter-collision", "collision");
-        using NativeRunCoordinator coordinator = new(adapter);
+        NativeRunCoordinator coordinator = new(adapter);
         EnvironmentResult before = coordinator.RunReset(Request());
 
         ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(
@@ -78,7 +78,7 @@ public sealed class NativeRunCoordinatorTests
             .Frame("mutated", "MUTATED", """{"schema_version":3,"decision":{"kind":"map"}}""")
             .Transition("before", "fail", "mutated")
             .ErrorAfterMutation("before", "fail");
-        using NativeRunCoordinator coordinator = new(adapter);
+        NativeRunCoordinator coordinator = new(adapter);
         EnvironmentResult before = coordinator.RunReset(Request());
 
         ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(() => coordinator.StepAsync("fail"));
@@ -99,19 +99,23 @@ public sealed class NativeRunCoordinatorTests
             Encounter: "SLIMES_WEAK",
             StateHash: "39728C896A5AA22C2ACBA91D5F3C350F2AA82C3F1F08AE06B5A5C3A003BCF452",
             ObservationSha256: "85E0A1ECB8D151839B5E243827857F99836CFB28B24F76464153F84E32ED188E");
-        ScriptedNativeRunAdapter adapter = ScenarioScript();
-        using NativeRunCoordinator coordinator = new(adapter);
+        RecordedScenario recorded = LoadRecordedScenarioCapture();
+        AssertRecordedRecipe(recorded.Recipe, recipe);
+        ScriptedNativeRunAdapter adapter = ScenarioScript(recorded);
+        NativeRunCoordinator coordinator = new(adapter);
         EnvironmentResult state = coordinator.RunReset(Request());
 
         state = await coordinator.StepAsync(ActionWith(state, "enter_ancient").ActionId);
-        state = await coordinator.StepAsync(ActionWith(state, "choose_event", "option_index", recipe.AncientOptionIndex).ActionId);
-        foreach (int nestedOptionIndex in recipe.NestedOptionIndices)
-            state = await coordinator.StepAsync(state.LegalActions[nestedOptionIndex].ActionId);
+        int optionIndex = recorded.Recipe.GetProperty("ancient_choice").GetProperty("option_index").GetInt32();
+        state = await coordinator.StepAsync(ActionWith(state, "choose_event", "option_index", optionIndex).ActionId);
+        foreach (JsonElement nested in recorded.Recipe.GetProperty("nested_choices").EnumerateArray())
+            state = await coordinator.StepAsync(state.LegalActions[nested.GetProperty("selected_index").GetInt32()].ActionId);
         state = await coordinator.StepAsync("leave_event");
+        JsonElement recordedNode = recorded.Recipe.GetProperty("node");
         LegalAction mapAction = state.LegalActions.Single(action =>
             action.Kind == "choose_map"
-            && Equals(action.Parameters["col"], recipe.NodeCol)
-            && Equals(action.Parameters["row"], recipe.NodeRow));
+            && Equals(action.Parameters["col"], recordedNode.GetProperty("col").GetInt32())
+            && Equals(action.Parameters["row"], recordedNode.GetProperty("row").GetInt32()));
         state = await coordinator.StepAsync(mapAction.ActionId);
 
         JsonElement actual = Assert.IsType<JsonElement>(state.Observation);
@@ -133,7 +137,7 @@ public sealed class NativeRunCoordinatorTests
                 Action("map-0-2", "choose_map", ("col", 0), ("row", 2)))
             .Transition("combat", "finish-combat", "reward")
             .Transition("reward", "reward-0", "map");
-        using NativeRunCoordinator coordinator = new(adapter);
+        NativeRunCoordinator coordinator = new(adapter);
 
         coordinator.RunReset(Request());
         EnvironmentResult reward = await coordinator.StepAsync("finish-combat");
@@ -208,13 +212,27 @@ public sealed class NativeRunCoordinatorTests
             JsonElement recipe = document.RootElement.GetProperty("recipe");
             if (recipe.GetProperty("nested_choices").GetArrayLength() == 0) continue;
             return new(
+                recipe.Clone(),
                 document.RootElement.GetProperty("combat_initial_state").Clone(),
                 document.RootElement.GetProperty("state_hash").GetString()!);
         }
         throw new InvalidOperationException("The recorded Generated scenario corpus contains no recipe with a nested choice.");
     }
 
-    private sealed record RecordedScenario(JsonElement Observation, string StateHash);
+    private static void AssertRecordedRecipe(JsonElement actual, RecordedRecipe expected)
+    {
+        Assert.Equal("IRONCLAD", actual.GetProperty("character").GetString());
+        Assert.Equal(0, actual.GetProperty("ascension").GetInt32());
+        Assert.Equal("ANC1ENT01", actual.GetProperty("seed").GetString());
+        Assert.Equal(expected.AncientOptionIndex, actual.GetProperty("ancient_choice").GetProperty("option_index").GetInt32());
+        Assert.Equal("PRECARIOUS_SHEARS", actual.GetProperty("ancient_choice").GetProperty("relic_model_id").GetString());
+        Assert.Equal(expected.NestedOptionIndices, actual.GetProperty("nested_choices").EnumerateArray().Select(choice => choice.GetProperty("selected_index").GetInt32()).ToArray());
+        Assert.Equal(expected.NodeCol, actual.GetProperty("node").GetProperty("col").GetInt32());
+        Assert.Equal(expected.NodeRow, actual.GetProperty("node").GetProperty("row").GetInt32());
+        Assert.Equal(expected.Encounter, actual.GetProperty("encounter").GetString());
+    }
+
+    private sealed record RecordedScenario(JsonElement Recipe, JsonElement Observation, string StateHash);
     private sealed record RecordedRecipe(
         int AncientOptionIndex,
         IReadOnlyList<int> NestedOptionIndices,

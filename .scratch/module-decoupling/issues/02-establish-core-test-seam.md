@@ -10,7 +10,7 @@ Ancient, nested choices and map node to the recorded Combat initial state before
 
 - [x] Tests drive reset, legal actions, step, capture and fork/restore through the caller seam.
 - [x] Invalid actions and action-id collisions are proven not to mutate state.
-- [x] A recorded scenario recipe reaches the same encounter, canonical observation and state hash.
+- [x] A recorded Generated scenario recipe reaches the same encounter, canonical observation and state hash.
 - [x] Production reflection and the scripted fake satisfy the same semantic port contract.
 - [x] Ordinary tests require neither a game install nor source-text matching.
 

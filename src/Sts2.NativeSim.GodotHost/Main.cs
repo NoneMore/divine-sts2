@@ -45,7 +45,7 @@ public partial class Main : Node
             else if (server)
             {
                 using PersistentNativeCombatEnvironment environment = new(assemblyPath, pckPath);
-                using NativeRunCoordinator runCoordinator = new(environment);
+                NativeRunCoordinator runCoordinator = new(environment);
                 exitCode = await ServeAsync(environment, runCoordinator);
             }
             else
@@ -214,21 +214,21 @@ public partial class Main : Node
                     "custom_reward_reset" => await environment.CustomRewardResetAsync(Read<CustomRewardResetRequest>(request.Parameters)),
                     "rest_reset" => environment.RestReset(Read<ResetRequest>(request.Parameters)),
                     "event_reset" => await environment.EventResetAsync(Read<EventResetRequest>(request.Parameters)),
-                    "observe" => environment.Observe(),
+                    "observe" => runCoordinator.Observe(),
                     "run_observe" => runCoordinator.Observe(),
-                    "map_observe" => environment.Observe(),
-                    "reward_observe" => environment.Observe(),
-                    "rest_observe" => environment.Observe(),
-                    "event_observe" => environment.Observe(),
-                    "custom_reward_observe" => environment.Observe(),
-                    "legal_actions" => environment.LegalActions(),
-                    "step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "map_observe" => runCoordinator.Observe(),
+                    "reward_observe" => runCoordinator.Observe(),
+                    "rest_observe" => runCoordinator.Observe(),
+                    "event_observe" => runCoordinator.Observe(),
+                    "custom_reward_observe" => runCoordinator.Observe(),
+                    "legal_actions" => runCoordinator.LegalActions(),
+                    "step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "run_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "map_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "reward_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "rest_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "event_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "custom_reward_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "map_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "reward_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "rest_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "event_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "custom_reward_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "fork" => new { state_handle = runCoordinator.Fork() },
                     "restore" => await runCoordinator.RestoreAsync(Read<RestoreRequest>(request.Parameters).StateHandle),
                     "diagnostics" => environment.Diagnostics(),
