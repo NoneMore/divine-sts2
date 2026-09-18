@@ -75,7 +75,7 @@ internal sealed class CardSelectPromptState(
     public override Task<ActiveRunState> ApplyAsync(string actionId)
     {
         LegalAction action = RequireAction(actionId);
-        if (!StringComparer.Ordinal.Equals(action.Kind, "choose_cards"))
+        if (!PromptActionKind.IsCard(action.Kind))
             throw new ProtocolException("invalid_choice", $"Card-select prompt cannot apply '{action.Kind}'.");
         return continuation.ResumeAsync(new(action.ActionId, StringValues(action, "option_ids")));
     }
@@ -99,7 +99,7 @@ internal sealed class RewardPromptState(
     public override Task<ActiveRunState> ApplyAsync(string actionId)
     {
         LegalAction action = RequireAction(actionId);
-        if (action.Kind is not ("choose_custom_reward" or "skip_custom_rewards"))
+        if (!PromptActionKind.IsReward(action.Kind))
             throw new ProtocolException("invalid_choice", $"Reward prompt cannot apply '{action.Kind}'.");
         return continuation.ResumeAsync(new(
             action.ActionId,
@@ -132,9 +132,15 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 
     private static bool IsCardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0
-        && frame.LegalActions.All(action => action.Kind == "choose_cards");
+        && frame.LegalActions.All(action => PromptActionKind.IsCard(action.Kind));
 
     private static bool IsRewardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0
-        && frame.LegalActions.All(action => action.Kind is "choose_custom_reward" or "skip_custom_rewards");
+        && frame.LegalActions.All(action => PromptActionKind.IsReward(action.Kind));
+}
+
+internal static class PromptActionKind
+{
+    public static bool IsCard(string kind) => kind == "choose_cards";
+    public static bool IsReward(string kind) => kind is "choose_custom_reward" or "skip_custom_rewards";
 }
