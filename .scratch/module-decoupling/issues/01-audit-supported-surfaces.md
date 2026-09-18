@@ -7,10 +7,18 @@ scoring and forward-step capabilities needed by later combat research.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Every current entry is classified as supported command, internal tool, experiment or deletion candidate.
-- [ ] A deletion candidate has no uninvestigated consumer or unique capability.
-- [ ] Broken neural/learned paths are removed from public promises without reconstructing their model stack.
-- [ ] The audit records the disposition required for AutoTraceDriver, TraceExporterSmoke and ApiProbe.
-- [ ] No production code or tool is moved in this ticket.
+- [x] Every current entry is classified as supported command, internal tool, experiment or deletion candidate.
+- [x] A deletion candidate has no uninvestigated consumer or unique capability.
+- [x] Broken neural/learned paths are removed from public promises without reconstructing their model stack.
+- [x] The audit records the disposition required for AutoTraceDriver, TraceExporterSmoke and ApiProbe.
+- [x] No production code or tool is moved in this ticket.
+
+## Answer
+
+The completed audit is [`supported-surfaces-audit.md`](../supported-surfaces-audit.md). It classifies
+all 83 current top-level Python entries and the three edge C# tools, records verified consumers and
+replacement capabilities for every deletion candidate, and protects the scenario, acceptance,
+worker, scoring, forward-step and exact-trace surfaces required by later combat research. `README.md`
+now points users at the formal scenario command instead of the deleted neural model stack.

@@ -74,10 +74,10 @@ Generate parallel game trajectories across headless workers:
 python python/native_rollout_farm.py --workers 6 --episodes 100 --ascension 1 --summary-only
 ```
 
-### 4. Neural Turn Sequence Search
-Run policy-guided turn search evaluated by the Set Transformer Critic $V(s')$:
+### 4. Generated Scenario Corpus
+Record reproducible act-1 opening scenarios into deterministic corpus shards:
 ```powershell
-python python/neural_turn_search.py
+python -m sts2_native_sim.cli scenario --character IRONCLAD --seed A1B2C3D4E5 --workers 1 --output-dir artifacts/scenarios/quickstart
 ```
 
 ---
