@@ -51,7 +51,16 @@ public sealed class NativeRunCoordinator : IDisposable
                 "invalid_action",
                 $"Action '{actionId}' is not legal in state {before.StateHash}.");
 
-        return Remember(await _adapter.ApplyAsync(actionId));
+        string checkpoint = _adapter.Fork();
+        try
+        {
+            return Remember(await _adapter.ApplyAsync(actionId));
+        }
+        catch
+        {
+            _current = Remember(await _adapter.RestoreAsync(checkpoint));
+            throw;
+        }
     }
 
     public string Fork()
@@ -99,21 +108,7 @@ internal sealed class ReflectionNativeRunAdapter : INativeRunAdapter
 
     public EnvironmentResult RunReset(ResetRequest request) => _environment.RunReset(request);
     public EnvironmentResult Capture() => _environment.Observe();
-    public async Task<EnvironmentResult> ApplyAsync(string actionId)
-    {
-        string before = _environment.Fork();
-        EnvironmentResult result = await _environment.StepAsync(actionId);
-        try
-        {
-            NativeRunCoordinator.EnsureUnambiguous(result);
-            return result;
-        }
-        catch
-        {
-            await _environment.RestoreAsync(before);
-            throw;
-        }
-    }
+    public Task<EnvironmentResult> ApplyAsync(string actionId) => _environment.StepAsync(actionId);
     public string Fork() => _environment.Fork();
     public Task<EnvironmentResult> RestoreAsync(string stateHandle) => _environment.RestoreAsync(stateHandle);
     public void Dispose() { }

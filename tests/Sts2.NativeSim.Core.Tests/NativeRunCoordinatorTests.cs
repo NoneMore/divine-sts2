@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Sts2.NativeSim.Core;
 using Sts2.NativeSim.Protocol;
@@ -21,11 +23,11 @@ public sealed class NativeRunCoordinatorTests
         EnvironmentResult ancient = await coordinator.StepAsync("ancient-door");
         string branch = coordinator.Fork();
         EnvironmentResult choice = await coordinator.StepAsync("ancient-choice-2");
-        Assert.Equal("nested-card-0", Assert.Single(choice.LegalActions).ActionId);
+        Assert.Contains(choice.LegalActions, action => action.ActionId == "nested-card-0");
 
         EnvironmentResult restored = await coordinator.RestoreAsync(branch);
         Assert.Equal(ancient.StateHash, restored.StateHash);
-        Assert.Equal("ancient-choice-2", Assert.Single(restored.LegalActions).ActionId);
+        Assert.Contains(restored.LegalActions, action => action.ActionId == "ancient-choice-2");
     }
 
     [Fact]
@@ -44,7 +46,7 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
-    public async Task Action_id_collision_does_not_reach_the_native_port_or_mutate_state()
+    public async Task Action_id_collision_restores_the_state_that_preceded_the_action()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("safe")
             .Frame("safe", "SAFE", """
@@ -63,31 +65,60 @@ public sealed class NativeRunCoordinatorTests
             () => coordinator.StepAsync("enter-collision"));
 
         Assert.Equal("action_id_collision", error.Code);
-        Assert.Equal(0, adapter.MutationCount);
+        Assert.Equal(1, adapter.MutationCount);
+        Assert.Equal(before.StateHash, coordinator.Observe().StateHash);
+    }
+
+    [Fact]
+    public async Task Native_error_after_mutation_restores_the_state_that_preceded_the_action()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("before")
+            .Frame("before", "BEFORE", """{"schema_version":3,"decision":{"kind":"event"}}""",
+                Action("fail", "choose_event"))
+            .Frame("mutated", "MUTATED", """{"schema_version":3,"decision":{"kind":"map"}}""")
+            .Transition("before", "fail", "mutated")
+            .ErrorAfterMutation("before", "fail");
+        using NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult before = coordinator.RunReset(Request());
+
+        ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(() => coordinator.StepAsync("fail"));
+
+        Assert.Equal("scripted_native_error", error.Code);
+        Assert.Equal(1, adapter.MutationCount);
         Assert.Equal(before.StateHash, coordinator.Observe().StateHash);
     }
 
     [Fact]
     public async Task Recorded_generated_scenario_recipe_reaches_the_recorded_combat_initial_state()
     {
-        RecordedScenario recorded = LoadRecordedScenario();
-        ScriptedNativeRunAdapter adapter = ScenarioScript(recorded);
+        RecordedRecipe recipe = new(
+            AncientOptionIndex: 2,
+            NestedOptionIndices: [0],
+            NodeCol: 0,
+            NodeRow: 1,
+            Encounter: "SLIMES_WEAK",
+            StateHash: "39728C896A5AA22C2ACBA91D5F3C350F2AA82C3F1F08AE06B5A5C3A003BCF452",
+            ObservationSha256: "85E0A1ECB8D151839B5E243827857F99836CFB28B24F76464153F84E32ED188E");
+        ScriptedNativeRunAdapter adapter = ScenarioScript();
         using NativeRunCoordinator coordinator = new(adapter);
         EnvironmentResult state = coordinator.RunReset(Request());
 
         state = await coordinator.StepAsync(ActionWith(state, "enter_ancient").ActionId);
-        int optionIndex = recorded.Recipe.GetProperty("ancient_choice").GetProperty("option_index").GetInt32();
-        state = await coordinator.StepAsync(ActionWith(state, "choose_event", "option_index", optionIndex).ActionId);
-        foreach (JsonElement nested in recorded.Recipe.GetProperty("nested_choices").EnumerateArray())
-            state = await coordinator.StepAsync(state.LegalActions[nested.GetProperty("selected_index").GetInt32()].ActionId);
+        state = await coordinator.StepAsync(ActionWith(state, "choose_event", "option_index", recipe.AncientOptionIndex).ActionId);
+        foreach (int nestedOptionIndex in recipe.NestedOptionIndices)
+            state = await coordinator.StepAsync(state.LegalActions[nestedOptionIndex].ActionId);
         state = await coordinator.StepAsync("leave_event");
-        int row = recorded.Recipe.GetProperty("node").GetProperty("row").GetInt32();
-        state = await coordinator.StepAsync(ActionWith(state, "choose_map", "row", row).ActionId);
+        LegalAction mapAction = state.LegalActions.Single(action =>
+            action.Kind == "choose_map"
+            && Equals(action.Parameters["col"], recipe.NodeCol)
+            && Equals(action.Parameters["row"], recipe.NodeRow));
+        state = await coordinator.StepAsync(mapAction.ActionId);
 
         JsonElement actual = Assert.IsType<JsonElement>(state.Observation);
-        Assert.Equal(recorded.Recipe.GetProperty("encounter").GetString(), actual.GetProperty("combat").GetProperty("encounter").GetString());
-        Assert.Equal(recorded.Observation.GetRawText(), actual.GetRawText());
-        Assert.Equal(recorded.StateHash, state.StateHash);
+        string observationHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actual.GetRawText())));
+        Assert.Equal(recipe.Encounter, actual.GetProperty("combat").GetProperty("encounter").GetString());
+        Assert.Equal(recipe.ObservationSha256, observationHash);
+        Assert.Equal(recipe.StateHash, state.StateHash);
     }
 
     [Fact]
@@ -119,7 +150,7 @@ public sealed class NativeRunCoordinatorTests
         Assert.True(typeof(INativeRunAdapter).IsAssignableFrom(typeof(ScriptedNativeRunAdapter)));
     }
 
-    private static ScriptedNativeRunAdapter ScenarioScript() => ScenarioScript(LoadRecordedScenario());
+    private static ScriptedNativeRunAdapter ScenarioScript() => ScenarioScript(LoadRecordedScenarioCapture());
 
     private static ScriptedNativeRunAdapter ScenarioScript(RecordedScenario recorded)
     {
@@ -129,16 +160,23 @@ public sealed class NativeRunCoordinatorTests
                 """, Action("ancient-door", "enter_ancient"))
             .Frame("ancient", "ANCIENT-HASH", """
                 {"schema_version":3,"decision":{"kind":"event"}}
-                """, Action("ancient-choice-2", "choose_event", ("option_index", 2), ("relic_model_id", "PRECARIOUS_SHEARS")))
+                """,
+                Action("ancient-choice-0", "choose_event", ("option_index", 0), ("relic_model_id", "BOOMING_CONCH")),
+                Action("ancient-choice-1", "choose_event", ("option_index", 1), ("relic_model_id", "GOLDEN_PEARL")),
+                Action("ancient-choice-2", "choose_event", ("option_index", 2), ("relic_model_id", "PRECARIOUS_SHEARS")))
             .Frame("nested", "NESTED-HASH", """
                 {"schema_version":3,"decision":{"kind":"card_select"}}
-                """, Action("nested-card-0", "choose_cards", ("option_ids", new[] { "generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD" })))
+                """,
+                Action("nested-card-0", "choose_cards", ("option_ids", new[] { "generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD" })),
+                Action("nested-card-1", "choose_cards", ("option_ids", new[] { "generated-card-choice-0-2-DEFEND_IRONCLAD" })))
             .Frame("complete", "ANCIENT-COMPLETE-HASH", """
                 {"schema_version":3,"decision":{"kind":"event_complete"}}
                 """, Action("leave_event", "leave_event"))
             .Frame("route", "ROUTE-HASH", """
                 {"schema_version":3,"decision":{"kind":"map"}}
-                """, Action("map-0-1", "choose_map", ("col", 0), ("row", 1), ("point_type", "Monster")))
+                """,
+                Action("map-2-1", "choose_map", ("col", 2), ("row", 1), ("point_type", "Monster")),
+                Action("map-0-1", "choose_map", ("col", 0), ("row", 1), ("point_type", "Monster")))
             .Frame("combat", recorded.StateHash, recorded.Observation.GetRawText())
             .Transition("map", "ancient-door", "ancient")
             .Transition("ancient", "ancient-choice-2", "nested")
@@ -158,9 +196,9 @@ public sealed class NativeRunCoordinatorTests
         Array.Empty<CardSpec>(), Array.Empty<string>(), Array.Empty<RelicSpec>(), Array.Empty<PotionSpec>(), 99,
         ResetMode: ResetModes.Run);
 
-    private static RecordedScenario LoadRecordedScenario()
+    private static RecordedScenario LoadRecordedScenarioCapture()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "recorded-generated-scenarios.jsonl.gz");
+        string path = Path.Combine(AppContext.BaseDirectory, "GeneratedScenarios", "recorded-scenarios.jsonl.gz");
         using FileStream file = File.OpenRead(path);
         using GZipStream gzip = new(file, CompressionMode.Decompress);
         using StreamReader reader = new(gzip);
@@ -170,12 +208,19 @@ public sealed class NativeRunCoordinatorTests
             JsonElement recipe = document.RootElement.GetProperty("recipe");
             if (recipe.GetProperty("nested_choices").GetArrayLength() == 0) continue;
             return new(
-                recipe.Clone(),
                 document.RootElement.GetProperty("combat_initial_state").Clone(),
                 document.RootElement.GetProperty("state_hash").GetString()!);
         }
-        throw new InvalidOperationException("The recorded fixture contains no Generated scenario with a nested choice.");
+        throw new InvalidOperationException("The recorded Generated scenario corpus contains no recipe with a nested choice.");
     }
 
-    private sealed record RecordedScenario(JsonElement Recipe, JsonElement Observation, string StateHash);
+    private sealed record RecordedScenario(JsonElement Observation, string StateHash);
+    private sealed record RecordedRecipe(
+        int AncientOptionIndex,
+        IReadOnlyList<int> NestedOptionIndices,
+        int NodeCol,
+        int NodeRow,
+        string Encounter,
+        string StateHash,
+        string ObservationSha256);
 }

@@ -8,6 +8,7 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
+    private readonly HashSet<(string Frame, string Action)> _errorsAfterMutation = [];
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
     private string _currentFrame;
@@ -34,6 +35,12 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         return this;
     }
 
+    public ScriptedNativeRunAdapter ErrorAfterMutation(string from, string actionId)
+    {
+        _errorsAfterMutation.Add((from, actionId));
+        return this;
+    }
+
     public EnvironmentResult RunReset(ResetRequest request)
     {
         _currentFrame = _resetFrame;
@@ -51,9 +58,11 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         string nextFrame = _transitions[(_currentFrame, actionId)];
         ScriptedFrame next = _frames[nextFrame];
         EnvironmentResult result = Result(nextFrame, next);
-        NativeRunCoordinator.EnsureUnambiguous(result);
         MutationCount++;
+        string previousFrame = _currentFrame;
         _currentFrame = nextFrame;
+        if (_errorsAfterMutation.Contains((previousFrame, actionId)))
+            throw new ProtocolException("scripted_native_error", "The scripted native adapter failed after mutation.");
         return Task.FromResult(result);
     }
 
