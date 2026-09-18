@@ -6,4 +6,3 @@ internal interface IActiveRunSession
     DecisionFrame Current { get; }
     Task ApplyAsync(string actionId);
 }
-

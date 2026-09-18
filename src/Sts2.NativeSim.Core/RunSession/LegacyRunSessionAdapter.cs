@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core.RunSession;
@@ -12,12 +13,13 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
-    public string Fork() => _environment.Fork();
-    public async Task<CompatibilityCapture> RestoreAsync(string stateHandle) =>
-        Capture(await _environment.RestoreAsync(stateHandle).ConfigureAwait(false));
-    public void Retain(string stateHandle) { }
+    public object CaptureCheckpoint() => _environment.Fork();
+    public async Task<CompatibilityCapture> RestoreAsync(object checkpoint) =>
+        Capture(
+            await _environment.RestoreAsync((string)checkpoint).ConfigureAwait(false),
+            includeRestore: true);
 
-    private CompatibilityCapture Capture(EnvironmentResult result)
+    private CompatibilityCapture Capture(EnvironmentResult result, bool includeRestore = false)
     {
         DecisionFrame frame = new(
             result.Observation,
@@ -31,6 +33,17 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
             throw new ProtocolException(
                 "protocol_desync",
                 $"The compatibility frame projected hash {projectedHash}, but the legacy state reported {result.StateHash}.");
-        return new(frame, result.Transition);
+        return new(frame, includeRestore ? RestoreProjection(result.Transition) : null);
+    }
+
+    private static CompatibilityRestore RestoreProjection(object? transition)
+    {
+        JsonElement value = JsonSerializer.SerializeToElement(transition);
+        return new(
+            value.GetProperty("kind").GetString()!,
+            value.GetProperty("replayed_actions").GetInt32(),
+            value.TryGetProperty("resident_prefix_hit", out JsonElement resident)
+                ? resident.GetBoolean()
+                : null);
     }
 }

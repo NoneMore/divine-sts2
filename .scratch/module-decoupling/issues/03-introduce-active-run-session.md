@@ -25,7 +25,8 @@ projection.
 
 `NativeRunCoordinator` projects frames into the existing RPC result, computes the unchanged state
 hash and `s:` branch identity, and owns action history and transition timing. Every legacy run state,
-including combat, is reachable through the single `LegacyRunSessionAdapter`; that adapter checks the
+including combat, is reachable through the single `LegacyRunSessionAdapter`; native snapshots cross
+that adapter only as opaque checkpoints, never as public branch handles. The adapter checks the
 coordinator's projected hash against the legacy environment on every real capture and reports
 `protocol_desync` rather than allowing drift. Offline session tests cover atomic frames, serial
 mutation, pre-mutation validation, recovery and poison semantics, while the shipped-game Ancient

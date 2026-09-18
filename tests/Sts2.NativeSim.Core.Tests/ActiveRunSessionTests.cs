@@ -83,7 +83,7 @@ public sealed class ActiveRunSessionTests
         public int MaximumConcurrentMutations { get; private set; }
 
         public CompatibilityCapture Reset(ResetRequest request) => new(_current);
-        public string Fork() => "checkpoint";
+        public object CaptureCheckpoint() => "checkpoint";
 
         public async Task<CompatibilityCapture> ApplyAsync(string actionId)
         {
@@ -102,12 +102,10 @@ public sealed class ActiveRunSessionTests
             }
         }
 
-        public Task<CompatibilityCapture> RestoreAsync(string stateHandle)
+        public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
         {
             if (RestoreFailure is not null) throw RestoreFailure;
             return Task.FromResult(new CompatibilityCapture(_current));
         }
-
-        public void Retain(string stateHandle) { }
     }
 }

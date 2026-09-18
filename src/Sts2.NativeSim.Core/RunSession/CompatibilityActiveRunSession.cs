@@ -10,12 +10,18 @@ internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
-    string Fork();
-    Task<CompatibilityCapture> RestoreAsync(string stateHandle);
-    void Retain(string stateHandle);
+    object CaptureCheckpoint();
+    Task<CompatibilityCapture> RestoreAsync(object checkpoint);
 }
 
-internal sealed record CompatibilityCapture(DecisionFrame Frame, object? Transition = null);
+internal sealed record CompatibilityCapture(
+    DecisionFrame Frame,
+    CompatibilityRestore? Restore = null);
+
+internal sealed record CompatibilityRestore(
+    string Kind,
+    int ReplayedActions,
+    bool? ResidentPrefixHit = null);
 
 /// <summary>
 /// Serial compatibility implementation of the active-run interface. Its action table is built
@@ -69,7 +75,7 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
                     "invalid_action",
                     $"Action '{actionId}' is not legal in the current decision frame.");
 
-            string checkpoint = _adapter.Fork();
+            object checkpoint = _adapter.CaptureCheckpoint();
             try
             {
                 CompatibilityCapture next = await _adapter.ApplyAsync(actionId).ConfigureAwait(false);
@@ -99,7 +105,7 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
         }
     }
 
-    internal async Task<CompatibilityCapture> RestoreAsync(string stateHandle)
+    internal async Task<CompatibilityCapture> RestoreAsync(object checkpoint)
     {
         await _serial.WaitAsync().ConfigureAwait(false);
         try
@@ -107,7 +113,7 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
             ThrowIfPoisoned();
             try
             {
-                CompatibilityCapture restored = await _adapter.RestoreAsync(stateHandle).ConfigureAwait(false);
+                CompatibilityCapture restored = await _adapter.RestoreAsync(checkpoint).ConfigureAwait(false);
                 _executors = BuildExecutorTable(restored.Frame);
                 _current = restored.Frame;
                 return restored;

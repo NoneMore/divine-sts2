@@ -13,7 +13,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
     private string _currentFrame;
-    private string? _retainedHandle;
+    private int _checkpointOrdinal;
 
     public ScriptedNativeRunAdapter(string resetFrame)
     {
@@ -22,6 +22,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     }
 
     public int MutationCount { get; private set; }
+    public TimeSpan ApplyDelay { get; init; }
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
@@ -54,8 +55,9 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return Result(frame);
     }
 
-    public Task<CompatibilityCapture> ApplyAsync(string actionId)
+    public async Task<CompatibilityCapture> ApplyAsync(string actionId)
     {
+        if (ApplyDelay > TimeSpan.Zero) await Task.Delay(ApplyDelay);
         string nextFrame = _transitions[(_currentFrame, actionId)];
         ScriptedFrame next = _frames[nextFrame];
         CompatibilityCapture result = Result(next);
@@ -64,22 +66,20 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         _currentFrame = nextFrame;
         if (_errorsAfterMutation.Contains((previousFrame, actionId)))
             throw new ProtocolException("scripted_native_error", "The scripted native adapter failed after mutation.");
-        return Task.FromResult(result);
+        return result;
     }
 
-    public string Fork() => _retainedHandle
-        ?? throw new InvalidOperationException("The coordinator has not retained the current frame.");
-
-    public Task<CompatibilityCapture> RestoreAsync(string stateHandle)
+    public object CaptureCheckpoint()
     {
-        _currentFrame = _branches[stateHandle];
+        string checkpoint = $"checkpoint-{++_checkpointOrdinal}";
+        _branches.Add(checkpoint, _currentFrame);
+        return checkpoint;
+    }
+
+    public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
+    {
+        _currentFrame = _branches[(string)checkpoint];
         return Task.FromResult(Capture());
-    }
-
-    public void Retain(string stateHandle)
-    {
-        _branches.TryAdd(stateHandle, _currentFrame);
-        _retainedHandle = stateHandle;
     }
 
     private static CompatibilityCapture Result(ScriptedFrame frame) => new(

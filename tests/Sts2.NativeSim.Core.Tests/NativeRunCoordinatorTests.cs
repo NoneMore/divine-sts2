@@ -148,6 +148,31 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
+    public async Task Concurrent_steps_return_the_frame_and_history_for_their_own_action()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("zero")
+        {
+            ApplyDelay = TimeSpan.FromMilliseconds(30)
+        }
+            .Frame("zero", """{"step":0}""", Action("advance", "choose_event"))
+            .Frame("one", """{"step":1}""", Action("advance", "choose_event"))
+            .Frame("two", """{"step":2}""")
+            .Transition("zero", "advance", "one")
+            .Transition("one", "advance", "two");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        Task<EnvironmentResult> first = coordinator.StepAsync("advance");
+        Task<EnvironmentResult> second = coordinator.StepAsync("advance");
+        EnvironmentResult[] results = await Task.WhenAll(first, second);
+
+        Assert.Equal(1, Assert.IsType<JsonElement>(results[0].Observation).GetProperty("step").GetInt32());
+        Assert.Equal(2, Assert.IsType<JsonElement>(results[1].Observation).GetProperty("step").GetInt32());
+        Assert.Equal(1, JsonSerializer.SerializeToElement(results[0].Transition).GetProperty("history_length").GetInt32());
+        Assert.Equal(2, JsonSerializer.SerializeToElement(results[1].Transition).GetProperty("history_length").GetInt32());
+    }
+
+    [Fact]
     public void Reflection_adapter_and_scripted_adapter_share_the_compatibility_port()
     {
         Assert.True(typeof(IRunSessionCompatibilityAdapter).IsAssignableFrom(typeof(LegacyRunSessionAdapter)));

@@ -20,6 +20,7 @@ public sealed class NativeRunCoordinator
     private readonly Dictionary<string, CoordinatorBranch> _branches = new(StringComparer.Ordinal);
     private readonly LinkedList<string> _branchOrder = [];
     private readonly List<string> _history = [];
+    private readonly SemaphoreSlim _serial = new(1, 1);
     private CompatibilityActiveRunSession? _session;
     private ResetRequest? _reset;
     private string? _currentBranchHandle;
@@ -31,77 +32,137 @@ public sealed class NativeRunCoordinator
 
     public EnvironmentResult RunReset(ResetRequest request)
     {
-        CompatibilityCapture initial = _adapter.Reset(request);
-        _session = new(_adapter, initial);
-        _reset = request with { ResetMode = ResetModes.Run };
-        _history.Clear();
-        _currentBranchHandle = null;
-        return Project(initial.Frame, initial.Transition);
+        _serial.Wait();
+        try
+        {
+            CompatibilityCapture initial = _adapter.Reset(request);
+            _session = new(_adapter, initial);
+            _reset = request with { ResetMode = ResetModes.Run };
+            _history.Clear();
+            _currentBranchHandle = null;
+            return Project(initial.Frame, new { kind = "run_reset", replayed_actions = 0 });
+        }
+        finally
+        {
+            _serial.Release();
+        }
     }
 
-    public EnvironmentResult Observe() => Project(Session.Current, transition: null);
+    public EnvironmentResult Observe()
+    {
+        _serial.Wait();
+        try
+        {
+            return Project(Session.Current, transition: null);
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
 
-    public IReadOnlyList<LegalAction> LegalActions() => Session.Current.LegalActions;
+    public IReadOnlyList<LegalAction> LegalActions()
+    {
+        _serial.Wait();
+        try
+        {
+            return Session.Current.LegalActions;
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
 
     public async Task<EnvironmentResult> StepAsync(string actionId)
     {
-        DecisionFrame before = Session.Current;
-        LegalAction? action = before.LegalActions.SingleOrDefault(candidate =>
-            StringComparer.Ordinal.Equals(candidate.ActionId, actionId));
-        // The session repeats this check while holding its serial gate. This lookup only preserves
-        // the action kind in the coordinator-owned transition envelope.
-        if (action is null)
-            throw new ProtocolException(
-                "invalid_action",
-                $"Action '{actionId}' is not legal in state {ComputeStateHash(before)}.");
+        await _serial.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            DecisionFrame before = Session.Current;
+            LegalAction? action = before.LegalActions.SingleOrDefault(candidate =>
+                StringComparer.Ordinal.Equals(candidate.ActionId, actionId));
+            // The session repeats this check while holding its serial gate. This lookup only preserves
+            // the action kind in the coordinator-owned transition envelope.
+            if (action is null)
+                throw new ProtocolException(
+                    "invalid_action",
+                    $"Action '{actionId}' is not legal in state {ComputeStateHash(before)}.");
 
-        Stopwatch timer = Stopwatch.StartNew();
-        await Session.ApplyAsync(actionId).ConfigureAwait(false);
-        timer.Stop();
-        _history.Add(actionId);
-        return Project(
-            Session.Current,
-            new
-            {
-                kind = action.Kind,
-                action_id = actionId,
-                elapsed_ms = timer.Elapsed.TotalMilliseconds,
-                history_length = _history.Count
-            },
-            actionId);
+            Stopwatch timer = Stopwatch.StartNew();
+            await Session.ApplyAsync(actionId).ConfigureAwait(false);
+            timer.Stop();
+            _history.Add(actionId);
+            return Project(
+                Session.Current,
+                new
+                {
+                    kind = action.Kind,
+                    action_id = actionId,
+                    elapsed_ms = timer.Elapsed.TotalMilliseconds,
+                    history_length = _history.Count
+                },
+                actionId);
+        }
+        finally
+        {
+            _serial.Release();
+        }
     }
 
     public string Fork()
     {
-        _ = Project(Session.Current, transition: null);
-        return _currentBranchHandle!;
+        _serial.Wait();
+        try
+        {
+            _ = Project(Session.Current, transition: null);
+            return _currentBranchHandle!;
+        }
+        finally
+        {
+            _serial.Release();
+        }
     }
 
     public async Task<EnvironmentResult> RestoreAsync(string stateHandle)
     {
-        if (!_branches.TryGetValue(stateHandle, out CoordinatorBranch? branch))
-            throw new ProtocolException("unknown_state_handle", stateHandle);
-
-        Stopwatch timer = Stopwatch.StartNew();
-        CompatibilityCapture restored = await Session.RestoreAsync(stateHandle).ConfigureAwait(false);
-        string actualHash = ComputeStateHash(restored.Frame);
-        if (!StringComparer.Ordinal.Equals(branch.ExpectedHash, actualHash))
-            throw new ProtocolException(
-                "replay_divergence",
-                $"Expected {branch.ExpectedHash}, obtained {actualHash}.",
-                new { history_length = branch.History.Count });
-
-        _history.Clear();
-        _history.AddRange(branch.History);
-        _currentBranchHandle = stateHandle;
-        timer.Stop();
-        object transition = restored.Transition ?? new
+        await _serial.WaitAsync().ConfigureAwait(false);
+        try
         {
-            kind = "restore",
-            replayed_actions = branch.History.Count,
-            elapsed_ms = timer.Elapsed.TotalMilliseconds
-        };
-        return Project(restored.Frame, transition);
+            if (!_branches.TryGetValue(stateHandle, out CoordinatorBranch? branch))
+                throw new ProtocolException("unknown_state_handle", stateHandle);
+
+            Stopwatch timer = Stopwatch.StartNew();
+            CompatibilityCapture restored = await Session.RestoreAsync(branch.Checkpoint).ConfigureAwait(false);
+            string actualHash = ComputeStateHash(restored.Frame);
+            if (!StringComparer.Ordinal.Equals(branch.ExpectedHash, actualHash))
+                throw new ProtocolException(
+                    "replay_divergence",
+                    $"Expected {branch.ExpectedHash}, obtained {actualHash}.",
+                    new { history_length = branch.History.Count });
+
+            _history.Clear();
+            _history.AddRange(branch.History);
+            _currentBranchHandle = stateHandle;
+            timer.Stop();
+            CompatibilityRestore metadata = restored.Restore
+                ?? new("restore", branch.History.Count);
+            Dictionary<string, object?> transition = new(StringComparer.Ordinal)
+            {
+                ["kind"] = metadata.Kind,
+                ["replayed_actions"] = metadata.ReplayedActions,
+                ["elapsed_ms"] = metadata.ResidentPrefixHit is true
+                    ? 0.0
+                    : timer.Elapsed.TotalMilliseconds
+            };
+            if (metadata.ResidentPrefixHit is { } resident)
+                transition["resident_prefix_hit"] = resident;
+            return Project(restored.Frame, transition);
+        }
+        finally
+        {
+            _serial.Release();
+        }
     }
 
     private CompatibilityActiveRunSession Session =>
@@ -129,6 +190,10 @@ public sealed class NativeRunCoordinator
             && _branches.TryGetValue(_currentBranchHandle, out CoordinatorBranch? resident)
             && StringComparer.Ordinal.Equals(resident.ExpectedHash, stateHash))
         {
+            _branches[_currentBranchHandle] = resident with
+            {
+                Checkpoint = _adapter.CaptureCheckpoint()
+            };
             Touch(_currentBranchHandle);
             return _currentBranchHandle;
         }
@@ -144,11 +209,11 @@ public sealed class NativeRunCoordinator
             kernel = frame.KernelProjection
         });
         string handle = "s:" + Convert.ToHexString(SHA256.HashData(payload));
+        object checkpoint = _adapter.CaptureCheckpoint();
         if (!_branches.ContainsKey(handle))
         {
-            _branches.Add(handle, new(stateHash, _history.ToArray()));
+            _branches.Add(handle, new(stateHash, _history.ToArray(), checkpoint));
             _branchOrder.AddLast(handle);
-            _adapter.Retain(handle);
             while (_branches.Count > BranchCapacity && _branchOrder.First is { } oldest)
             {
                 _branchOrder.RemoveFirst();
@@ -157,6 +222,7 @@ public sealed class NativeRunCoordinator
         }
         else
         {
+            _branches[handle] = _branches[handle] with { Checkpoint = checkpoint };
             Touch(handle);
         }
         _currentBranchHandle = handle;
@@ -180,5 +246,8 @@ public sealed class NativeRunCoordinator
         return Convert.ToHexString(SHA256.HashData(payload));
     }
 
-    private sealed record CoordinatorBranch(string ExpectedHash, IReadOnlyList<string> History);
+    private sealed record CoordinatorBranch(
+        string ExpectedHash,
+        IReadOnlyList<string> History,
+        object Checkpoint);
 }

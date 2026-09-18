@@ -13,4 +13,3 @@ internal sealed record DecisionFrame(
     bool Victory,
     object KernelProjection,
     object? ScoringFeatures);
-
