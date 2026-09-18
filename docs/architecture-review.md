@@ -1,5 +1,11 @@
 # Architecture review — divine-sts2
 
+> **Historical input.** This review records the repository state observed on 2026-09-15; several
+> defects and repository facts below have since changed. The accepted restructuring plan is
+> [`.scratch/module-decoupling/spec.md`](../.scratch/module-decoupling/spec.md), and current domain
+> decisions live in [`CONTEXT.md`](../CONTEXT.md) and [`docs/adr/`](adr/). Treat candidate evidence
+> here as investigation history, not as the current implementation plan.
+
 **rev 2 · 2026-09-15 · 13 candidates (7 Strong, 4 Worth exploring, 2 Speculative)**
 
 Headless Slay the Spire 2 execution environment. 8 C# projects under `src/`, ~80 Python modules under `python/`.
@@ -11,7 +17,8 @@ Hot spots were chosen by **commit frequency, not file size**. The last eight com
 - the macro/policy layer under `python/`
 - reward / potion / room handling in `src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs` — the most-committed file in the repository, and a single 3 268-line class
 
-> **Repo state note.** There is no `CONTEXT.md` and no `docs/adr/` — a `docs: remove legacy design and status documents` commit cleared them. Candidate modules are therefore named from the code's own vocabulary, with no glossary to anchor them. Per `docs/agents/domain.md` this is noted rather than treated as a defect.
+> **Repo state at review time.** There was no `CONTEXT.md` or `docs/adr/` when this review was written.
+> Both now exist; use their current vocabulary and decisions rather than this historical absence.
 
 ## Contents
 
