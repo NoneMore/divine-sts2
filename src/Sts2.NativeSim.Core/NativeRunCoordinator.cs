@@ -38,6 +38,8 @@ public sealed class NativeRunCoordinator
             CompatibilityCapture initial = _adapter.Reset(request);
             _session = new(_adapter, initial);
             _reset = request with { ResetMode = ResetModes.Run };
+            _branches.Clear();
+            _branchOrder.Clear();
             _history.Clear();
             _currentBranchHandle = null;
             return Project(initial.Frame, new { kind = "run_reset", replayed_actions = 0 });

@@ -173,6 +173,22 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
+    public async Task Reset_forgets_old_branches_without_poisoning_the_new_session()
+    {
+        ScriptedNativeRunAdapter adapter = ScenarioScript();
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+        string oldHandle = coordinator.Fork();
+
+        EnvironmentResult reset = coordinator.RunReset(Request() with { Seed = "ANOTHER-SEED" });
+        ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(
+            () => coordinator.RestoreAsync(oldHandle));
+
+        Assert.Equal("unknown_state_handle", error.Code);
+        Assert.Equal(reset.StateHash, coordinator.Observe().StateHash);
+    }
+
+    [Fact]
     public void Reflection_adapter_and_scripted_adapter_share_the_compatibility_port()
     {
         Assert.True(typeof(IRunSessionCompatibilityAdapter).IsAssignableFrom(typeof(LegacyRunSessionAdapter)));
