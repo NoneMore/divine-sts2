@@ -10,6 +10,7 @@ internal interface INativeRunAdapter : IDisposable
 {
     EnvironmentResult RunReset(ResetRequest request);
     EnvironmentResult Capture();
+    /// <summary>Apply one advertised action atomically, including capture validation.</summary>
     Task<EnvironmentResult> ApplyAsync(string actionId);
     string Fork();
     Task<EnvironmentResult> RestoreAsync(string stateHandle);
@@ -20,14 +21,23 @@ internal interface INativeRunAdapter : IDisposable
 /// adapter can mutate state. Room-state dispatch remains in the existing reflection implementation
 /// until the active-session work replaces it.
 /// </summary>
-internal sealed class NativeRunCoordinator(INativeRunAdapter adapter) : IDisposable
+public sealed class NativeRunCoordinator : IDisposable
 {
+    private readonly INativeRunAdapter _adapter;
     private EnvironmentResult? _current;
 
-    public EnvironmentResult RunReset(ResetRequest request) =>
-        Remember(adapter.RunReset(request));
+    internal NativeRunCoordinator(INativeRunAdapter adapter)
+    {
+        _adapter = adapter;
+    }
 
-    public EnvironmentResult Observe() => Remember(adapter.Capture());
+    public NativeRunCoordinator(PersistentNativeCombatEnvironment environment)
+        : this(new ReflectionNativeRunAdapter(environment)) { }
+
+    public EnvironmentResult RunReset(ResetRequest request) =>
+        Remember(_adapter.RunReset(request));
+
+    public EnvironmentResult Observe() => Remember(_adapter.Capture());
 
     public IReadOnlyList<LegalAction> LegalActions() => Current().LegalActions;
 
@@ -41,23 +51,30 @@ internal sealed class NativeRunCoordinator(INativeRunAdapter adapter) : IDisposa
                 "invalid_action",
                 $"Action '{actionId}' is not legal in state {before.StateHash}.");
 
-        return Remember(await adapter.ApplyAsync(actionId));
+        return Remember(await _adapter.ApplyAsync(actionId));
     }
 
     public string Fork()
     {
-        _ = Current();
-        return adapter.Fork();
+        _ = Observe();
+        return _adapter.Fork();
     }
 
     public async Task<EnvironmentResult> RestoreAsync(string stateHandle) =>
-        Remember(await adapter.RestoreAsync(stateHandle));
+        Remember(await _adapter.RestoreAsync(stateHandle));
 
-    public void Dispose() => adapter.Dispose();
+    public void Dispose() => _adapter.Dispose();
 
     private EnvironmentResult Current() => _current ?? Observe();
 
     private EnvironmentResult Remember(EnvironmentResult result)
+    {
+        EnsureUnambiguous(result);
+        _current = result;
+        return result;
+    }
+
+    internal static void EnsureUnambiguous(EnvironmentResult result)
     {
         string? collision = result.LegalActions
             .GroupBy(action => action.ActionId, StringComparer.Ordinal)
@@ -67,9 +84,6 @@ internal sealed class NativeRunCoordinator(INativeRunAdapter adapter) : IDisposa
             throw new ProtocolException(
                 "action_id_collision",
                 $"Action id '{collision}' is advertised more than once in state {result.StateHash}.");
-
-        _current = result;
-        return result;
     }
 }
 
@@ -80,15 +94,27 @@ internal sealed class ReflectionNativeRunAdapter : INativeRunAdapter
 {
     private readonly PersistentNativeCombatEnvironment _environment;
 
-    public ReflectionNativeRunAdapter(string assemblyPath, string pckPath)
-    {
-        _environment = new(assemblyPath, pckPath);
-    }
+    public ReflectionNativeRunAdapter(PersistentNativeCombatEnvironment environment) =>
+        _environment = environment;
 
     public EnvironmentResult RunReset(ResetRequest request) => _environment.RunReset(request);
     public EnvironmentResult Capture() => _environment.Observe();
-    public Task<EnvironmentResult> ApplyAsync(string actionId) => _environment.StepAsync(actionId);
+    public async Task<EnvironmentResult> ApplyAsync(string actionId)
+    {
+        string before = _environment.Fork();
+        EnvironmentResult result = await _environment.StepAsync(actionId);
+        try
+        {
+            NativeRunCoordinator.EnsureUnambiguous(result);
+            return result;
+        }
+        catch
+        {
+            await _environment.RestoreAsync(before);
+            throw;
+        }
+    }
     public string Fork() => _environment.Fork();
     public Task<EnvironmentResult> RestoreAsync(string stateHandle) => _environment.RestoreAsync(stateHandle);
-    public void Dispose() => _environment.Dispose();
+    public void Dispose() { }
 }

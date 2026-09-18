@@ -14,4 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sts2.NativeSim.Core\Sts2.NativeSim.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\recorded-generated-scenarios.jsonl.gz" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

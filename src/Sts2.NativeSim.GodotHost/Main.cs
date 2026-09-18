@@ -45,7 +45,8 @@ public partial class Main : Node
             else if (server)
             {
                 using PersistentNativeCombatEnvironment environment = new(assemblyPath, pckPath);
-                exitCode = await ServeAsync(environment);
+                using NativeRunCoordinator runCoordinator = new(environment);
+                exitCode = await ServeAsync(environment, runCoordinator);
             }
             else
             {
@@ -193,7 +194,7 @@ public partial class Main : Node
         return 0;
     }
 
-    private static async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment)
+    private static async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment, NativeRunCoordinator runCoordinator)
     {
         while (await Console.In.ReadLineAsync() is { } line)
         {
@@ -206,7 +207,7 @@ public partial class Main : Node
                     "hello" => environment.Hello(),
                     "catalog" => environment.Catalog(),
                     "reset" => environment.Reset(Read<ResetRequest>(request.Parameters)),
-                    "run_reset" => environment.RunReset(Read<ResetRequest>(request.Parameters)),
+                    "run_reset" => runCoordinator.RunReset(Read<ResetRequest>(request.Parameters)),
                     "map_reset" => environment.MapReset(Read<ResetRequest>(request.Parameters)),
                     "reward_reset" => environment.RewardReset(Read<ResetRequest>(request.Parameters)),
                     "item_reward_reset" => environment.ItemRewardReset(Read<ItemRewardResetRequest>(request.Parameters)),
@@ -214,7 +215,7 @@ public partial class Main : Node
                     "rest_reset" => environment.RestReset(Read<ResetRequest>(request.Parameters)),
                     "event_reset" => await environment.EventResetAsync(Read<EventResetRequest>(request.Parameters)),
                     "observe" => environment.Observe(),
-                    "run_observe" => environment.Observe(),
+                    "run_observe" => runCoordinator.Observe(),
                     "map_observe" => environment.Observe(),
                     "reward_observe" => environment.Observe(),
                     "rest_observe" => environment.Observe(),
@@ -222,14 +223,14 @@ public partial class Main : Node
                     "custom_reward_observe" => environment.Observe(),
                     "legal_actions" => environment.LegalActions(),
                     "step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "run_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
+                    "run_step" => await runCoordinator.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "map_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "reward_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "rest_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "event_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
                     "custom_reward_step" => await environment.StepAsync(Read<StepRequest>(request.Parameters).ActionId),
-                    "fork" => new { state_handle = environment.Fork() },
-                    "restore" => await environment.RestoreAsync(Read<RestoreRequest>(request.Parameters).StateHandle),
+                    "fork" => new { state_handle = runCoordinator.Fork() },
+                    "restore" => await runCoordinator.RestoreAsync(Read<RestoreRequest>(request.Parameters).StateHandle),
                     "diagnostics" => environment.Diagnostics(),
                     "close" => new { closed = true },
                     _ => throw new ProtocolException("unknown_method", request.Method)

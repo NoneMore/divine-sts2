@@ -43,14 +43,18 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
     public EnvironmentResult Capture()
     {
         ScriptedFrame frame = _frames[_currentFrame];
-        return new(frame.Observation, frame.Hash, frame.Actions, false, false, $"script:{_currentFrame}");
+        return Result(_currentFrame, frame);
     }
 
     public Task<EnvironmentResult> ApplyAsync(string actionId)
     {
+        string nextFrame = _transitions[(_currentFrame, actionId)];
+        ScriptedFrame next = _frames[nextFrame];
+        EnvironmentResult result = Result(nextFrame, next);
+        NativeRunCoordinator.EnsureUnambiguous(result);
         MutationCount++;
-        _currentFrame = _transitions[(_currentFrame, actionId)];
-        return Task.FromResult(Capture());
+        _currentFrame = nextFrame;
+        return Task.FromResult(result);
     }
 
     public string Fork()
@@ -67,6 +71,9 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
     }
 
     public void Dispose() { }
+
+    private static EnvironmentResult Result(string name, ScriptedFrame frame) =>
+        new(frame.Observation, frame.Hash, frame.Actions, false, false, $"script:{name}");
 
     private sealed record ScriptedFrame(JsonElement Observation, string Hash, IReadOnlyList<LegalAction> Actions);
 }
