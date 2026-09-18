@@ -1,10 +1,11 @@
 using System.Text.Json;
 using Sts2.NativeSim.Core;
+using Sts2.NativeSim.Core.RunSession;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core.Tests;
 
-internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
+internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
@@ -12,7 +13,7 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
     private string _currentFrame;
-    private int _branchOrdinal;
+    private string? _retainedHandle;
 
     public ScriptedNativeRunAdapter(string resetFrame)
     {
@@ -22,10 +23,10 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
 
     public int MutationCount { get; private set; }
 
-    public ScriptedNativeRunAdapter Frame(string name, string hash, string observation, params LegalAction[] actions)
+    public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
         using JsonDocument document = JsonDocument.Parse(observation);
-        _frames.Add(name, new(document.RootElement.Clone(), hash, actions));
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions));
         return this;
     }
 
@@ -41,23 +42,23 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         return this;
     }
 
-    public EnvironmentResult RunReset(ResetRequest request)
+    public CompatibilityCapture Reset(ResetRequest request)
     {
         _currentFrame = _resetFrame;
         return Capture();
     }
 
-    public EnvironmentResult Capture()
+    public CompatibilityCapture Capture()
     {
         ScriptedFrame frame = _frames[_currentFrame];
-        return Result(_currentFrame, frame);
+        return Result(frame);
     }
 
-    public Task<EnvironmentResult> ApplyAsync(string actionId)
+    public Task<CompatibilityCapture> ApplyAsync(string actionId)
     {
         string nextFrame = _transitions[(_currentFrame, actionId)];
         ScriptedFrame next = _frames[nextFrame];
-        EnvironmentResult result = Result(nextFrame, next);
+        CompatibilityCapture result = Result(next);
         MutationCount++;
         string previousFrame = _currentFrame;
         _currentFrame = nextFrame;
@@ -66,21 +67,39 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         return Task.FromResult(result);
     }
 
-    public string Fork()
-    {
-        string handle = $"branch-{++_branchOrdinal}";
-        _branches.Add(handle, _currentFrame);
-        return handle;
-    }
+    public string Fork() => _retainedHandle
+        ?? throw new InvalidOperationException("The coordinator has not retained the current frame.");
 
-    public Task<EnvironmentResult> RestoreAsync(string stateHandle)
+    public Task<CompatibilityCapture> RestoreAsync(string stateHandle)
     {
         _currentFrame = _branches[stateHandle];
         return Task.FromResult(Capture());
     }
 
-    private static EnvironmentResult Result(string name, ScriptedFrame frame) =>
-        new(frame.Observation, frame.Hash, frame.Actions, false, false, $"script:{name}");
+    public void Retain(string stateHandle)
+    {
+        _branches.TryAdd(stateHandle, _currentFrame);
+        _retainedHandle = stateHandle;
+    }
 
-    private sealed record ScriptedFrame(JsonElement Observation, string Hash, IReadOnlyList<LegalAction> Actions);
+    private static CompatibilityCapture Result(ScriptedFrame frame) => new(
+        new(frame.Observation, frame.Actions, false, false, frame.KernelProjection, null));
+
+    private static object Kernel(string frame) => new
+    {
+        run_mode = true,
+        run_stage = frame is "map" or "route" ? "map" : frame == "combat" ? "combat" : "event",
+        map_mode = false,
+        reward_mode = false,
+        reward_kind = "card",
+        reward_model_id = (string?)null,
+        rest_mode = false,
+        event_mode = frame is not ("map" or "route" or "combat"),
+        event_id = (string?)null,
+        custom_reward_mode = false,
+        custom_rewards_linked = false,
+        custom_reward_kinds = Array.Empty<string>()
+    };
+
+    private sealed record ScriptedFrame(JsonElement Observation, object KernelProjection, IReadOnlyList<LegalAction> Actions);
 }

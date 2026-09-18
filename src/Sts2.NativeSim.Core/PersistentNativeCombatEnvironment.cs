@@ -716,7 +716,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (ReflectionTools.Invoke(action, "ExecuteAction") is Task task) await task.ConfigureAwait(false);
     }
 
-    private object TransitionKernelSnapshot() => new
+    internal object TransitionKernelProjection() => new
     {
         run_mode = _runMode,
         run_stage = _runStage,
@@ -738,7 +738,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         {
             hash_schema_version = 4,
             observation,
-            kernel = TransitionKernelSnapshot()
+            kernel = TransitionKernelProjection()
         };
         return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(hashPayload)));
     }
@@ -2810,7 +2810,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             action_id = _lastActionId,
             expected_hash = _hash,
             reset = _reset,
-            kernel = TransitionKernelSnapshot()
+            kernel = TransitionKernelProjection()
         });
         string id = "s:" + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload)));
         // Fast path: if the current branch handle already maps to exactly this
