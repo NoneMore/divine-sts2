@@ -1,4 +1,5 @@
 using Sts2.NativeSim.Protocol;
+using Sts2.NativeSim.Core.RunSession.States;
 
 namespace Sts2.NativeSim.Core.RunSession;
 
@@ -33,9 +34,9 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
         "Worker state is corrupted and must be reconstructed. Discard and replace this worker.";
 
     private readonly IRunSessionCompatibilityAdapter _adapter;
+    private readonly ActiveRunStateFactory _states;
     private readonly SemaphoreSlim _serial = new(1, 1);
-    private DecisionFrame _current;
-    private IReadOnlyDictionary<string, LegalAction> _executors;
+    private ActiveRunState _active;
     private bool _poisoned;
 
     public CompatibilityActiveRunSession(
@@ -43,8 +44,8 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
         CompatibilityCapture initial)
     {
         _adapter = adapter;
-        _current = initial.Frame;
-        _executors = BuildExecutorTable(_current);
+        _states = new(adapter);
+        _active = _states.Create(initial);
     }
 
     public DecisionFrame Current
@@ -55,7 +56,7 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
             try
             {
                 ThrowIfPoisoned();
-                return _current;
+                return _active.Frame;
             }
             finally
             {
@@ -70,26 +71,17 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
         try
         {
             ThrowIfPoisoned();
-            if (!_executors.ContainsKey(actionId))
-                throw new ProtocolException(
-                    "invalid_action",
-                    $"Action '{actionId}' is not legal in the current decision frame.");
-
             object checkpoint = _adapter.CaptureCheckpoint();
             try
             {
-                CompatibilityCapture next = await _adapter.ApplyAsync(actionId).ConfigureAwait(false);
-                IReadOnlyDictionary<string, LegalAction> nextExecutors = BuildExecutorTable(next.Frame);
-                _current = next.Frame;
-                _executors = nextExecutors;
+                _active = await _active.ApplyAsync(actionId).ConfigureAwait(false);
             }
             catch
             {
                 try
                 {
                     CompatibilityCapture restored = await _adapter.RestoreAsync(checkpoint).ConfigureAwait(false);
-                    _current = restored.Frame;
-                    _executors = BuildExecutorTable(restored.Frame);
+                    _active = _states.Create(restored);
                 }
                 catch
                 {
@@ -114,8 +106,7 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
             try
             {
                 CompatibilityCapture restored = await _adapter.RestoreAsync(checkpoint).ConfigureAwait(false);
-                _executors = BuildExecutorTable(restored.Frame);
-                _current = restored.Frame;
+                _active = _states.Create(restored);
                 return restored;
             }
             catch
@@ -128,19 +119,6 @@ internal sealed class CompatibilityActiveRunSession : IActiveRunSession
         {
             _serial.Release();
         }
-    }
-
-    private static IReadOnlyDictionary<string, LegalAction> BuildExecutorTable(DecisionFrame frame)
-    {
-        Dictionary<string, LegalAction> executors = new(StringComparer.Ordinal);
-        foreach (LegalAction action in frame.LegalActions)
-        {
-            if (!executors.TryAdd(action.ActionId, action))
-                throw new ProtocolException(
-                    "action_id_collision",
-                    $"Action id '{action.ActionId}' is advertised more than once in the current decision frame.");
-        }
-        return executors;
     }
 
     private void ThrowIfPoisoned()

@@ -148,6 +148,149 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
+    public async Task Card_select_prompt_suspends_its_parent_until_the_typed_selection_resumes_it()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .Frame("event", """{"decision":{"kind":"event"}}""",
+                Action("open-card-select", "choose_event"),
+                Action("leave-event", "leave_event"))
+            .CardPrompt(
+                "card-select",
+                """{"decision":{"kind":"card_choice"}}""",
+                choiceId: "card-choice-0",
+                optionIds: ["strike", "defend"],
+                minSelect: 1,
+                maxSelect: 1)
+            .Frame("event-resumed", """{"decision":{"kind":"event_complete"}}""",
+                Action("leave-event", "leave_event"))
+            .Transition("event", "open-card-select", "card-select")
+            .ResumeCardPrompt("card-select", ["strike"], "event-resumed");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        EnvironmentResult prompt = await coordinator.StepAsync("open-card-select");
+
+        Assert.All(prompt.LegalActions, action => Assert.Equal("choose_cards", action.Kind));
+        LegalAction selection = prompt.LegalActions.Single(action =>
+            Assert.IsType<string[]>(action.Parameters["option_ids"]).SequenceEqual(["strike"]));
+        Assert.DoesNotContain(prompt.LegalActions, action => action.ActionId == "leave-event");
+
+        EnvironmentResult resumed = await coordinator.StepAsync(selection.ActionId);
+
+        Assert.Equal("leave-event", Assert.Single(resumed.LegalActions).ActionId);
+    }
+
+    [Fact]
+    public async Task Nested_reward_prompt_resumes_the_reward_parent_it_suspended()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .Frame("event", """{"decision":{"kind":"event"}}""",
+                Action("open-rewards", "choose_event"))
+            .RewardPrompt("outer-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [0])
+            .RewardPrompt("inner-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [1])
+            .RewardPrompt("outer-resumed", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [])
+            .Frame("map", """{"decision":{"kind":"map"}}""", Action("map-0-1", "choose_map"))
+            .Transition("event", "open-rewards", "outer-reward")
+            .ResumeRewardPrompt("outer-reward", rewardIndex: 0, "inner-reward")
+            .ResumeRewardPrompt("inner-reward", rewardIndex: 1, "outer-resumed")
+            .SkipRewardPrompt("outer-resumed", "map");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        EnvironmentResult outer = await coordinator.StepAsync("open-rewards");
+        EnvironmentResult inner = await coordinator.StepAsync(
+            outer.LegalActions.Single(action => action.Kind == "choose_custom_reward").ActionId);
+
+        Assert.DoesNotContain(inner.LegalActions, action => action.ActionId == "open-rewards");
+        Assert.Contains(inner.LegalActions, action =>
+            action.Kind == "choose_custom_reward" && Equals(action.Parameters["reward_index"], 1));
+
+        EnvironmentResult resumed = await coordinator.StepAsync(
+            inner.LegalActions.Single(action => action.Kind == "choose_custom_reward").ActionId);
+        EnvironmentResult map = await coordinator.StepAsync(
+            resumed.LegalActions.Single(action => action.Kind == "skip_custom_rewards").ActionId);
+
+        Assert.Equal("map-0-1", Assert.Single(map.LegalActions).ActionId);
+    }
+
+    [Fact]
+    public async Task Resolving_card_prompts_can_reach_prompt_map_combat_and_terminal_states()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("first")
+            .CardPrompt("first", """{"decision":{"kind":"card_choice"}}""", "choice-0", ["a"], 1, 1)
+            .CardPrompt("second", """{"decision":{"kind":"card_choice"}}""", "choice-1", ["b"], 1, 1)
+            .Frame("map", """{"decision":{"kind":"map"}}""", Action("open-third", "choose_map"))
+            .CardPrompt("third", """{"decision":{"kind":"card_choice"}}""", "choice-2", ["c"], 1, 1)
+            .Frame("combat", """{"decision":{"kind":"combat"}}""", Action("open-fourth", "end_turn"))
+            .CardPrompt("fourth", """{"decision":{"kind":"card_choice"}}""", "choice-3", ["d"], 1, 1)
+            .TerminalFrame("terminal", """{"decision":{"kind":"terminal"}}""", victory: true)
+            .ResumeCardPrompt("first", ["a"], "second")
+            .ResumeCardPrompt("second", ["b"], "map")
+            .Transition("map", "open-third", "third")
+            .ResumeCardPrompt("third", ["c"], "combat")
+            .Transition("combat", "open-fourth", "fourth")
+            .ResumeCardPrompt("fourth", ["d"], "terminal");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult state = coordinator.RunReset(Request());
+
+        state = await coordinator.StepAsync(Assert.Single(state.LegalActions).ActionId);
+        Assert.Equal("choose_cards", Assert.Single(state.LegalActions).Kind);
+        state = await coordinator.StepAsync(Assert.Single(state.LegalActions).ActionId);
+        Assert.Equal("choose_map", Assert.Single(state.LegalActions).Kind);
+        state = await coordinator.StepAsync("open-third");
+        state = await coordinator.StepAsync(Assert.Single(state.LegalActions).ActionId);
+        Assert.Equal("end_turn", Assert.Single(state.LegalActions).Kind);
+        state = await coordinator.StepAsync("open-fourth");
+        state = await coordinator.StepAsync(Assert.Single(state.LegalActions).ActionId);
+
+        Assert.Empty(state.LegalActions);
+        Assert.True(state.Terminated);
+        Assert.True(state.Victory);
+    }
+
+    [Fact]
+    public async Task Restoring_a_prompt_rebuilds_its_continuation_from_the_checkpoint_replay()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .Frame("event", """{"decision":{"kind":"event"}}""", Action("open", "choose_event"))
+            .CardPrompt("prompt", """{"decision":{"kind":"card_choice"}}""", "choice-0", ["map", "combat"], 1, 1)
+            .Frame("map", """{"decision":{"kind":"map"}}""", Action("route", "choose_map"))
+            .Frame("combat", """{"decision":{"kind":"combat"}}""", Action("play", "play_card"))
+            .Transition("event", "open", "prompt")
+            .ResumeCardPrompt("prompt", ["map"], "map")
+            .ResumeCardPrompt("prompt", ["combat"], "combat");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+        EnvironmentResult prompt = await coordinator.StepAsync("open");
+        string branch = coordinator.Fork();
+
+        await coordinator.StepAsync(ActionSelecting(prompt, "map").ActionId);
+        EnvironmentResult restored = await coordinator.RestoreAsync(branch);
+        EnvironmentResult combat = await coordinator.StepAsync(ActionSelecting(restored, "combat").ActionId);
+
+        Assert.Equal("play", Assert.Single(combat.LegalActions).ActionId);
+        Assert.Equal(1, JsonSerializer.SerializeToElement(restored.Transition).GetProperty("replayed_actions").GetInt32());
+    }
+
+    [Fact]
+    public async Task Option_pick_keeps_its_action_identity_and_parameters()
+    {
+        LegalAction option = Action("choose_option:choice-0:bundle-1", "choose_option",
+            ("choice_id", "choice-0"), ("option_ids", new[] { "bundle-1" }));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("option")
+            .Frame("option", """{"decision":{"kind":"option_choice"}}""", option)
+            .Frame("map", """{"decision":{"kind":"map"}}""", Action("route", "choose_map"))
+            .Transition("option", option.ActionId, "map");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult before = coordinator.RunReset(Request());
+        EnvironmentResult after = await coordinator.StepAsync(option.ActionId);
+
+        Assert.Same(option, Assert.Single(before.LegalActions));
+        Assert.Equal("route", Assert.Single(after.LegalActions).ActionId);
+    }
+
+    [Fact]
     public async Task Concurrent_steps_return_the_frame_and_history_for_their_own_action()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("zero")
@@ -235,6 +378,10 @@ public sealed class NativeRunCoordinatorTests
 
     private static LegalAction ActionWith(EnvironmentResult state, string kind, string? key = null, object? value = null) =>
         state.LegalActions.Single(action => action.Kind == kind && (key is null || Equals(action.Parameters[key], value)));
+
+    private static LegalAction ActionSelecting(EnvironmentResult state, string optionId) =>
+        state.LegalActions.Single(action =>
+            Assert.IsType<string[]>(action.Parameters["option_ids"]).SequenceEqual([optionId]));
 
     private static ResetRequest Request() => new(
         new(), "ANC1ENT01", new Dictionary<string, int>(), "IRONCLAD", 0, "first", 80, 80,

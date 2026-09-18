@@ -5,10 +5,32 @@ an in-memory typed continuation to its suspended parent. Nested reward continuat
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A prompt is the sole active state; its parent is suspended, not simultaneously active.
-- [ ] Resolving a prompt can reach another prompt, its parent, map, combat or terminal state.
-- [ ] Native tasks, selectors and completion sources remain inside the production adapter.
-- [ ] Option picks retain their existing external behaviour.
-- [ ] Restore still uses recipe/history replay; continuations are not serialized.
+- [x] A prompt is the sole active state; its parent is suspended, not simultaneously active.
+- [x] Resolving a prompt can reach another prompt, its parent, map, combat or terminal state.
+- [x] Native tasks, selectors and completion sources remain inside the production adapter.
+- [x] Option picks retain their existing external behaviour.
+- [x] Restore still uses recipe/history replay; continuations are not serialized.
+
+## Answer
+
+`CompatibilityActiveRunSession` now owns exactly one member of a closed active-state model. A
+Card-select prompt replaces the ordinary decision while it is active and carries an in-memory
+`RunContinuation<CardSelection>`; custom and nested reward prompts use the same shape with a typed
+`RewardSelection`. Resolving either prompt asks the semantic native adapter to continue and then
+classifies the one resulting frame, so it can become another prompt, return to its parent flow, or
+reach map, combat, or terminal state. Option picks remain ordinary adapter decisions and retain their
+action identity and parameters.
+
+Native tasks, selectors, reflected objects, and completion sources remain behind
+`LegacyRunSessionAdapter` in `PersistentNativeCombatEnvironment`; none enter the active-state model.
+Coordinator checkpoints still contain only the adapter's opaque recipe/history checkpoint. Restore
+replays that checkpoint and creates a fresh typed continuation from the resulting prompt frame rather
+than serializing a continuation.
+
+Offline coordinator tests cover sole-active prompt behaviour, prompt target states, nested reward
+suspension/resumption, option-pick compatibility, and choosing a different branch after restoring a
+prompt checkpoint. The shipped-game Ancient sweep also passes for all 111 choices across 37 seeds,
+including Card-select prompts, option picks, depth-two reward nesting, skipping nested rewards, and
+restoring the resolved-choice branch to the same state hash.

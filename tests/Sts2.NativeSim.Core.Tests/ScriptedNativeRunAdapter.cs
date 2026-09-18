@@ -9,6 +9,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
+    private readonly Dictionary<(string Frame, string Selection), string> _cardActions = new();
+    private readonly Dictionary<(string Frame, int? RewardIndex), string> _rewardActions = new();
     private readonly HashSet<(string Frame, string Action)> _errorsAfterMutation = [];
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
@@ -27,7 +29,14 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
         using JsonDocument document = JsonDocument.Parse(observation);
-        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions));
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter TerminalFrame(string name, string observation, bool victory)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), [], true, victory));
         return this;
     }
 
@@ -36,6 +45,74 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         _transitions.Add((from, actionId), to);
         return this;
     }
+
+    public ScriptedNativeRunAdapter CardPrompt(
+        string name,
+        string observation,
+        string choiceId,
+        IReadOnlyList<string> optionIds,
+        int minSelect,
+        int maxSelect)
+    {
+        List<LegalAction> actions = [];
+        foreach (string[] selection in EnumerateSelections(optionIds, minSelect, maxSelect))
+        {
+            string suffix = selection.Length == 0 ? "skip" : string.Join('+', selection.Select(Uri.EscapeDataString));
+            LegalAction action = new(
+                $"choose_cards:{choiceId}:{suffix}",
+                "choose_cards",
+                new Dictionary<string, object?>
+                {
+                    ["choice_id"] = choiceId,
+                    ["option_ids"] = selection
+                });
+            actions.Add(action);
+            _cardActions.Add((name, SelectionKey(selection)), action.ActionId);
+        }
+        return Frame(name, observation, actions.ToArray());
+    }
+
+    public ScriptedNativeRunAdapter ResumeCardPrompt(
+        string prompt,
+        IReadOnlyList<string> selectedOptionIds,
+        string to) => Transition(prompt, _cardActions[(prompt, SelectionKey(selectedOptionIds))], to);
+
+    public ScriptedNativeRunAdapter RewardPrompt(
+        string name,
+        string observation,
+        IReadOnlyList<int> rewardIndices)
+    {
+        List<LegalAction> actions = [];
+        foreach (int rewardIndex in rewardIndices)
+        {
+            LegalAction action = new(
+                $"choose_custom_reward:{rewardIndex}:-1:0:gold:none",
+                "choose_custom_reward",
+                new Dictionary<string, object?>
+                {
+                    ["reward_index"] = rewardIndex,
+                    ["child_index"] = -1,
+                    ["option_index"] = 0,
+                    ["reward_kind"] = "gold",
+                    ["model_id"] = null
+                });
+            actions.Add(action);
+            _rewardActions.Add((name, rewardIndex), action.ActionId);
+        }
+        LegalAction skip = new(
+            "skip_custom_rewards",
+            "skip_custom_rewards",
+            new Dictionary<string, object?>());
+        actions.Add(skip);
+        _rewardActions.Add((name, null), skip.ActionId);
+        return Frame(name, observation, actions.ToArray());
+    }
+
+    public ScriptedNativeRunAdapter ResumeRewardPrompt(string prompt, int rewardIndex, string to) =>
+        Transition(prompt, _rewardActions[(prompt, rewardIndex)], to);
+
+    public ScriptedNativeRunAdapter SkipRewardPrompt(string prompt, string to) =>
+        Transition(prompt, _rewardActions[(prompt, null)], to);
 
     public ScriptedNativeRunAdapter ErrorAfterMutation(string from, string actionId)
     {
@@ -83,7 +160,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     }
 
     private static CompatibilityCapture Result(ScriptedFrame frame) => new(
-        new(frame.Observation, frame.Actions, false, false, frame.KernelProjection, null));
+        new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null));
 
     private static object Kernel(string frame) => new
     {
@@ -101,5 +178,34 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         custom_reward_kinds = Array.Empty<string>()
     };
 
-    private sealed record ScriptedFrame(JsonElement Observation, object KernelProjection, IReadOnlyList<LegalAction> Actions);
+    private static IEnumerable<string[]> EnumerateSelections(
+        IReadOnlyList<string> options,
+        int minSelect,
+        int maxSelect)
+    {
+        List<string[]> result = [];
+        List<string> current = [];
+        void Visit(int index)
+        {
+            if (current.Count >= minSelect && current.Count <= maxSelect) result.Add(current.ToArray());
+            if (current.Count == maxSelect) return;
+            for (int i = index; i < options.Count; i++)
+            {
+                current.Add(options[i]);
+                Visit(i + 1);
+                current.RemoveAt(current.Count - 1);
+            }
+        }
+        Visit(0);
+        return result;
+    }
+
+    private static string SelectionKey(IEnumerable<string> optionIds) => string.Join('\u001f', optionIds);
+
+    private sealed record ScriptedFrame(
+        JsonElement Observation,
+        object KernelProjection,
+        IReadOnlyList<LegalAction> Actions,
+        bool Terminated,
+        bool Victory);
 }
