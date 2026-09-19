@@ -9,22 +9,28 @@ internal enum SimpleRoomKind
 
 internal static class SimpleRoomKindExtensions
 {
-    public static string Stage(this SimpleRoomKind room) => room switch
-    {
-        SimpleRoomKind.Rest => "rest",
-        SimpleRoomKind.Treasure => "treasure",
-        SimpleRoomKind.Shop => "shop",
-        _ => throw new ArgumentOutOfRangeException(nameof(room), room, null)
-    };
+    private static readonly IReadOnlyDictionary<SimpleRoomKind, SimpleRoomDescription> Descriptions =
+        new Dictionary<SimpleRoomKind, SimpleRoomDescription>
+        {
+            [SimpleRoomKind.Rest] = new("rest", ["choose_rest", "leave_rest"]),
+            [SimpleRoomKind.Treasure] = new(
+                "treasure",
+                ["open_treasure", "choose_treasure", "skip_treasure", "leave_treasure"]),
+            [SimpleRoomKind.Shop] = new("shop", ["buy_shop", "leave_shop"])
+        };
 
-    public static bool Owns(this SimpleRoomKind room, string actionKind) => room switch
+    public static string Stage(this SimpleRoomKind room) => Describe(room).Stage;
+
+    public static bool Owns(this SimpleRoomKind room, string actionKind) =>
+        Describe(room).ActionKinds.Contains(actionKind, StringComparer.Ordinal);
+
+    private static SimpleRoomDescription Describe(SimpleRoomKind room)
     {
-        SimpleRoomKind.Rest => actionKind is "choose_rest" or "leave_rest",
-        SimpleRoomKind.Treasure => actionKind is
-            "open_treasure" or "choose_treasure" or "skip_treasure" or "leave_treasure",
-        SimpleRoomKind.Shop => actionKind is "buy_shop" or "leave_shop",
-        _ => false
-    };
+        if (Descriptions.TryGetValue(room, out SimpleRoomDescription? description)) return description;
+        throw new ArgumentOutOfRangeException(nameof(room), room, null);
+    }
+
+    private sealed record SimpleRoomDescription(string Stage, IReadOnlyList<string> ActionKinds);
 }
 
 internal sealed record RestSelection(string OptionId);

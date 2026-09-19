@@ -108,7 +108,7 @@ internal abstract class SimpleRoomDecisionState : ActiveRunState
 
     protected SimpleRoomDecisionState(
         DecisionFrame frame,
-        string roomName,
+        SimpleRoomKind room,
         Func<LegalAction, Func<Task<ActiveRunState>>?> executor) : base(frame)
     {
         Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
@@ -118,7 +118,7 @@ internal abstract class SimpleRoomDecisionState : ActiveRunState
                 action.ActionId,
                 executor(action) ?? throw new ProtocolException(
                     "protocol_desync",
-                    $"{roomName} projection advertised non-{roomName.ToLowerInvariant()} action '{action.Kind}'."));
+                    $"{room.Stage()} projection advertised non-{room.Stage()} action '{action.Kind}'."));
         }
         _executors = executors;
     }
@@ -137,7 +137,7 @@ internal sealed class RestDecisionState : SimpleRoomDecisionState
         Func<RestSelection, Task<ActiveRunState>> choose,
         Func<Task<ActiveRunState>> leave) : base(
             frame,
-            "Rest",
+            SimpleRoomKind.Rest,
             action => action.Kind switch
             {
                 "choose_rest" => () => choose(new(Convert.ToString(action.Parameters["option_id"])!)),
@@ -155,7 +155,7 @@ internal sealed class TreasureDecisionState : SimpleRoomDecisionState
         Func<TreasureSelection, Task<ActiveRunState>> choose,
         Func<Task<ActiveRunState>> leave) : base(
             frame,
-            "Treasure",
+            SimpleRoomKind.Treasure,
             action => action.Kind switch
             {
                 "open_treasure" => open,
@@ -174,7 +174,7 @@ internal sealed class ShopDecisionState : SimpleRoomDecisionState
         Func<ShopSelection, Task<ActiveRunState>> buy,
         Func<Task<ActiveRunState>> leave) : base(
             frame,
-            "Shop",
+            SimpleRoomKind.Shop,
             action => action.Kind switch
             {
                 "buy_shop" => () => buy(new(Convert.ToInt32(action.Parameters["entry_index"]))),
