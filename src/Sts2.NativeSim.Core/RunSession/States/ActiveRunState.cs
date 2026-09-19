@@ -42,18 +42,12 @@ internal abstract class ActiveRunState
 }
 
 /// <summary>A typed, in-memory route from a prompt to the native decision it suspended.</summary>
-internal sealed class RunContinuation<T>(Func<T, Task<ActiveRunState>> resume)
+internal sealed class RunContinuation<T>(
+    SuspendedNativeDecision parent,
+    Func<SuspendedNativeDecision, T, Task<ActiveRunState>> resume)
 {
-    public Task<ActiveRunState> ResumeAsync(T value) => resume(value);
+    public Task<ActiveRunState> ResumeAsync(T value) => resume(parent, value);
 }
-
-internal sealed record CardSelection(string ActionId, IReadOnlyList<string> OptionIds);
-
-internal sealed record RewardSelection(
-    string ActionId,
-    int? RewardIndex,
-    int? ChildIndex,
-    int? OptionIndex);
 
 /// <summary>A non-prompt decision, including compatibility states and terminal states.</summary>
 internal sealed class NativeDecisionState(
@@ -120,10 +114,15 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     public ActiveRunState Create(CompatibilityCapture capture)
     {
         DecisionFrame frame = capture.Frame;
+        SuspendedNativeDecision parent = new(adapter, this);
         if (IsCardPrompt(frame))
-            return new CardSelectPromptState(frame, new(selection => ContinueAsync(selection.ActionId)));
+            return new CardSelectPromptState(
+                frame,
+                new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
         if (IsRewardPrompt(frame))
-            return new RewardPromptState(frame, new(selection => ContinueAsync(selection.ActionId)));
+            return new RewardPromptState(
+                frame,
+                new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
         return new NativeDecisionState(frame, ContinueAsync);
     }
 
@@ -137,6 +136,21 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     private static bool IsRewardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0
         && frame.LegalActions.All(action => PromptActionKind.IsReward(action.Kind));
+}
+
+/// <summary>
+/// The typed route back to the native parent suspended by a prompt. The adapter owns the actual
+/// native task/completion source; this object owns only the semantic way to resume it.
+/// </summary>
+internal sealed class SuspendedNativeDecision(
+    IRunSessionCompatibilityAdapter adapter,
+    ActiveRunStateFactory states)
+{
+    public async Task<ActiveRunState> ResumeAsync(CardSelection selection) =>
+        states.Create(await adapter.ResumeCardSelectAsync(selection).ConfigureAwait(false));
+
+    public async Task<ActiveRunState> ResumeAsync(RewardSelection selection) =>
+        states.Create(await adapter.ResumeRewardAsync(selection).ConfigureAwait(false));
 }
 
 internal static class PromptActionKind

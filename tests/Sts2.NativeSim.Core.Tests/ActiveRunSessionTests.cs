@@ -102,6 +102,12 @@ public sealed class ActiveRunSessionTests
             }
         }
 
+        public Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection) =>
+            ApplyAsync(selection.ActionId);
+
+        public Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection) =>
+            ApplyAsync(selection.ActionId);
+
         public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
         {
             if (RestoreFailure is not null) throw RestoreFailure;

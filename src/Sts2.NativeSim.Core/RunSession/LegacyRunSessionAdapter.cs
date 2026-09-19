@@ -13,6 +13,10 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection) =>
+        Capture(await _environment.StepAsync(selection.ActionId).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection) =>
+        Capture(await _environment.StepAsync(selection.ActionId).ConfigureAwait(false));
     public object CaptureCheckpoint() => _environment.Fork();
     public async Task<CompatibilityCapture> RestoreAsync(object checkpoint) =>
         Capture(

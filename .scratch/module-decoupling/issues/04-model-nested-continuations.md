@@ -23,6 +23,11 @@ classifies the one resulting frame, so it can become another prompt, return to i
 reach map, combat, or terminal state. Option picks remain ordinary adapter decisions and retain their
 action identity and parameters.
 
+The prompt continuation captures a `SuspendedNativeDecision` and resumes it through the typed
+`ResumeCardSelectAsync(CardSelection)` or `ResumeRewardAsync(RewardSelection)` adapter operation.
+The scripted adapter routes on the typed payload and records it for seam assertions; prompt
+resolution does not fall back to the ordinary `ApplyAsync(actionId)` path.
+
 Native tasks, selectors, reflected objects, and completion sources remain behind
 `LegacyRunSessionAdapter` in `PersistentNativeCombatEnvironment`; none enter the active-state model.
 Coordinator checkpoints still contain only the adapter's opaque recipe/history checkpoint. Restore

@@ -11,6 +11,8 @@ internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
+    Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection);
+    Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection);
     object CaptureCheckpoint();
     Task<CompatibilityCapture> RestoreAsync(object checkpoint);
 }

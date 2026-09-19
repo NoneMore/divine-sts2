@@ -178,6 +178,9 @@ public sealed class NativeRunCoordinatorTests
         EnvironmentResult resumed = await coordinator.StepAsync(selection.ActionId);
 
         Assert.Equal("leave-event", Assert.Single(resumed.LegalActions).ActionId);
+        CardSelection applied = Assert.Single(adapter.CardSelections);
+        Assert.Equal(selection.ActionId, applied.ActionId);
+        Assert.Equal(["strike"], applied.OptionIds);
     }
 
     [Fact]
@@ -211,6 +214,11 @@ public sealed class NativeRunCoordinatorTests
             resumed.LegalActions.Single(action => action.Kind == "skip_custom_rewards").ActionId);
 
         Assert.Equal("map-0-1", Assert.Single(map.LegalActions).ActionId);
+        Assert.Collection(
+            adapter.RewardSelections,
+            selection => Assert.Equal(0, selection.RewardIndex),
+            selection => Assert.Equal(1, selection.RewardIndex),
+            selection => Assert.Null(selection.RewardIndex));
     }
 
     [Fact]
@@ -368,7 +376,10 @@ public sealed class NativeRunCoordinatorTests
             .Frame("combat", recorded.Observation.GetRawText())
             .Transition("map", "ancient-door", "ancient")
             .Transition("ancient", "ancient-choice-2", "nested")
-            .Transition("nested", "nested-card-0", "complete")
+            .ResumeCardPrompt(
+                "nested",
+                ["generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD"],
+                "complete")
             .Transition("complete", "leave_event", "route")
             .Transition("route", "map-0-1", "combat");
     }

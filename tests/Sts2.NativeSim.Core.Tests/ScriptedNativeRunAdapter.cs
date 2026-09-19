@@ -9,8 +9,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
-    private readonly Dictionary<(string Frame, string Selection), string> _cardActions = new();
-    private readonly Dictionary<(string Frame, int? RewardIndex), string> _rewardActions = new();
+    private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
+    private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), string> _rewardTransitions = new();
     private readonly HashSet<(string Frame, string Action)> _errorsAfterMutation = [];
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
@@ -25,6 +25,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 
     public int MutationCount { get; private set; }
     public TimeSpan ApplyDelay { get; init; }
+    public List<CardSelection> CardSelections { get; } = [];
+    public List<RewardSelection> RewardSelections { get; } = [];
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
@@ -67,7 +69,6 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
                     ["option_ids"] = selection
                 });
             actions.Add(action);
-            _cardActions.Add((name, SelectionKey(selection)), action.ActionId);
         }
         return Frame(name, observation, actions.ToArray());
     }
@@ -75,7 +76,11 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public ScriptedNativeRunAdapter ResumeCardPrompt(
         string prompt,
         IReadOnlyList<string> selectedOptionIds,
-        string to) => Transition(prompt, _cardActions[(prompt, SelectionKey(selectedOptionIds))], to);
+        string to)
+    {
+        _cardTransitions.Add((prompt, SelectionKey(selectedOptionIds)), to);
+        return this;
+    }
 
     public ScriptedNativeRunAdapter RewardPrompt(
         string name,
@@ -97,22 +102,26 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
                     ["model_id"] = null
                 });
             actions.Add(action);
-            _rewardActions.Add((name, rewardIndex), action.ActionId);
         }
         LegalAction skip = new(
             "skip_custom_rewards",
             "skip_custom_rewards",
             new Dictionary<string, object?>());
         actions.Add(skip);
-        _rewardActions.Add((name, null), skip.ActionId);
         return Frame(name, observation, actions.ToArray());
     }
 
-    public ScriptedNativeRunAdapter ResumeRewardPrompt(string prompt, int rewardIndex, string to) =>
-        Transition(prompt, _rewardActions[(prompt, rewardIndex)], to);
+    public ScriptedNativeRunAdapter ResumeRewardPrompt(string prompt, int rewardIndex, string to)
+    {
+        _rewardTransitions.Add((prompt, rewardIndex, -1, 0), to);
+        return this;
+    }
 
-    public ScriptedNativeRunAdapter SkipRewardPrompt(string prompt, string to) =>
-        Transition(prompt, _rewardActions[(prompt, null)], to);
+    public ScriptedNativeRunAdapter SkipRewardPrompt(string prompt, string to)
+    {
+        _rewardTransitions.Add((prompt, null, null, null), to);
+        return this;
+    }
 
     public ScriptedNativeRunAdapter ErrorAfterMutation(string from, string actionId)
     {
@@ -134,8 +143,28 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 
     public async Task<CompatibilityCapture> ApplyAsync(string actionId)
     {
-        if (ApplyDelay > TimeSpan.Zero) await Task.Delay(ApplyDelay);
         string nextFrame = _transitions[(_currentFrame, actionId)];
+        return await ApplyTransitionAsync(actionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection)
+    {
+        CardSelections.Add(selection);
+        string nextFrame = _cardTransitions[(_currentFrame, SelectionKey(selection.OptionIds))];
+        return ApplyTransitionAsync(selection.ActionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection)
+    {
+        RewardSelections.Add(selection);
+        string nextFrame = _rewardTransitions[
+            (_currentFrame, selection.RewardIndex, selection.ChildIndex, selection.OptionIndex)];
+        return ApplyTransitionAsync(selection.ActionId, nextFrame);
+    }
+
+    private async Task<CompatibilityCapture> ApplyTransitionAsync(string actionId, string nextFrame)
+    {
+        if (ApplyDelay > TimeSpan.Zero) await Task.Delay(ApplyDelay);
         ScriptedFrame next = _frames[nextFrame];
         CompatibilityCapture result = Result(next);
         MutationCount++;
