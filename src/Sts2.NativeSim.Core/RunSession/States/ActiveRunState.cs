@@ -61,6 +61,43 @@ internal sealed class NativeDecisionState(
     }
 }
 
+/// <summary>
+/// A map projection and the executors for exactly the actions advertised by that projection.
+/// Each executor carries only a semantic coordinate; the native adapter owns map lookup and room
+/// entry.
+/// </summary>
+internal sealed class MapDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public MapDecisionState(
+        DecisionFrame frame,
+        IReadOnlyDictionary<string, MapPointSelection> actions,
+        Func<MapPointSelection, Task<ActiveRunState>> enter) : base(frame)
+    {
+        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
+        foreach ((string actionId, MapPointSelection selection) in actions)
+        {
+            if (!Actions.ContainsKey(actionId))
+                throw new ProtocolException(
+                    "protocol_desync",
+                    $"Map executor '{actionId}' has no advertised legal action.");
+            executors.Add(actionId, () => enter(selection));
+        }
+        if (executors.Count != Actions.Count)
+            throw new ProtocolException(
+                "protocol_desync",
+                "The map projection and its hidden action executors do not describe the same actions.");
+        _executors = executors;
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
 /// <summary>The sole active state while the shipped game is waiting for cards.</summary>
 internal sealed class CardSelectPromptState(
     DecisionFrame frame,
@@ -114,6 +151,8 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     public ActiveRunState Create(CompatibilityCapture capture)
     {
         DecisionFrame frame = capture.Frame;
+        if (capture.MapActions is { } mapActions)
+            return new MapDecisionState(frame, mapActions, EnterMapPointAsync);
         if (IsCardPrompt(frame))
         {
             SuspendedNativeDecision parent = Parent(capture);
@@ -133,6 +172,9 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 
     private async Task<ActiveRunState> ContinueAsync(string actionId) =>
         Create(await adapter.ApplyAsync(actionId).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> EnterMapPointAsync(MapPointSelection selection) =>
+        Create(await adapter.EnterMapPointAsync(selection).ConfigureAwait(false));
 
     private static bool IsCardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0

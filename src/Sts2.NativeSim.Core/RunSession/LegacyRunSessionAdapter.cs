@@ -13,6 +13,8 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
+        Capture(await _environment.EnterMapPointAsync(selection).ConfigureAwait(false));
     public async Task<CompatibilityCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection) =>
@@ -44,7 +46,17 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
         return new(
             frame,
             includeRestore ? RestoreProjection(result.Transition) : null,
-            _environment.ActivePromptParent());
+            _environment.ActivePromptParent(),
+            _environment.HasActiveMapDecision ? MapActions(frame.LegalActions) : null);
+    }
+
+    private static IReadOnlyDictionary<string, MapPointSelection> MapActions(
+        IReadOnlyList<LegalAction> actions)
+    {
+        Dictionary<string, MapPointSelection> result = new(StringComparer.Ordinal);
+        foreach (LegalAction action in actions)
+            result.Add(action.ActionId, MapPointSelection.FromAction(action));
+        return result;
     }
 
     private static CompatibilityRestore RestoreProjection(object? transition)

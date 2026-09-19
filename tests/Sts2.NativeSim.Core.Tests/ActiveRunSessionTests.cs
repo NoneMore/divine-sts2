@@ -107,6 +107,9 @@ public sealed class ActiveRunSessionTests
             CardSelection selection) =>
             ApplyAsync(selection.ActionId);
 
+        public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
+            ApplyAsync($"choose_map:{selection.Col}:{selection.Row}");
+
         public Task<CompatibilityCapture> ResumeRewardAsync(
             PromptResumeToken parent,
             RewardSelection selection) =>

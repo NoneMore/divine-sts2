@@ -9,6 +9,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
+    private readonly Dictionary<(string Frame, int Col, int Row), string> _mapTransitions = new();
     private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
     private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), ScriptedRewardTransition> _rewardTransitions = new();
     private readonly Stack<object> _suspendedRewardParents = new();
@@ -26,16 +27,25 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     }
 
     public int MutationCount { get; private set; }
+    public int GenericApplyCount { get; private set; }
     public TimeSpan ApplyDelay { get; init; }
     public List<CardSelection> CardSelections { get; } = [];
     public List<RewardSelection> RewardSelections { get; } = [];
     public List<PromptResumeToken> CardResumeTokens { get; } = [];
     public List<PromptResumeToken> RewardResumeTokens { get; } = [];
+    public List<(int Col, int Row)> EnteredMapPoints { get; } = [];
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
         using JsonDocument document = JsonDocument.Parse(observation);
         _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter MapFrame(string name, string observation, params LegalAction[] actions)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false, IsMap: true));
         return this;
     }
 
@@ -49,6 +59,12 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public ScriptedNativeRunAdapter Transition(string from, string actionId, string to)
     {
         _transitions.Add((from, actionId), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter EnterMapPoint(string from, int col, int row, string to)
+    {
+        _mapTransitions.Add((from, col, row), to);
         return this;
     }
 
@@ -155,8 +171,20 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 
     public async Task<CompatibilityCapture> ApplyAsync(string actionId)
     {
+        GenericApplyCount++;
         string nextFrame = _transitions[(_currentFrame, actionId)];
         return await ApplyTransitionAsync(actionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection)
+    {
+        EnteredMapPoints.Add((selection.Col, selection.Row));
+        string nextFrame = _mapTransitions[(_currentFrame, selection.Col, selection.Row)];
+        return ApplyTransitionAsync(
+            _frames[_currentFrame].Actions.Single(action =>
+                Convert.ToInt32(action.Parameters["col"]) == selection.Col
+                && Convert.ToInt32(action.Parameters["row"]) == selection.Row).ActionId,
+            nextFrame);
     }
 
     public Task<CompatibilityCapture> ResumeCardSelectAsync(
@@ -229,8 +257,18 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
             || action.Kind is "choose_custom_reward" or "skip_custom_rewards");
         return new(
             new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null),
-            PromptParent: prompt ? new(_promptMarker) : null);
+            PromptParent: prompt ? new(_promptMarker) : null,
+            MapActions: frame.IsMap ? MapActions(frame.Actions) : null);
     }
+
+    private static IReadOnlyDictionary<string, MapPointSelection> MapActions(IReadOnlyList<LegalAction> actions) =>
+        actions.ToDictionary(
+            action => action.ActionId,
+            action => new MapPointSelection(
+                Convert.ToInt32(action.Parameters["col"]),
+                Convert.ToInt32(action.Parameters["row"]),
+                Convert.ToString(action.Parameters["point_type"])!),
+            StringComparer.Ordinal);
 
     private static bool IsRewardPrompt(ScriptedFrame frame) =>
         frame.Actions.Count > 0
@@ -287,7 +325,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         object KernelProjection,
         IReadOnlyList<LegalAction> Actions,
         bool Terminated,
-        bool Victory);
+        bool Victory,
+        bool IsMap = false);
 
     private sealed record ScriptedRewardTransition(string Frame, bool ResumeParent);
 }

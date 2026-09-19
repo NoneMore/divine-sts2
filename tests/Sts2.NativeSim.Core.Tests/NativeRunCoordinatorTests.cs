@@ -126,6 +126,58 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
+    public async Task Map_actions_are_executed_by_the_semantic_native_port()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("map")
+            .MapFrame("map", """{"decision":{"kind":"map_choice"}}""",
+                MapAction("ancient", 1, 0, "Ancient"),
+                MapAction("monster", 0, 1, "Monster"))
+            .Frame("ancient", """{"decision":{"kind":"event"}}""",
+                Action("choose", "choose_event"))
+            .Frame("combat", """{"decision":{"kind":"combat"}}""",
+                Action("play", "play_card"))
+            .EnterMapPoint("map", col: 1, row: 0, "ancient")
+            .EnterMapPoint("map", col: 0, row: 1, "combat");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult map = coordinator.RunReset(Request());
+
+        EnvironmentResult ancient = await coordinator.StepAsync("ancient");
+
+        Assert.Equal("choose", Assert.Single(ancient.LegalActions).ActionId);
+        Assert.Equal([(1, 0)], adapter.EnteredMapPoints);
+        Assert.Equal(0, adapter.GenericApplyCount);
+        Assert.Equal(2, map.LegalActions.Count);
+    }
+
+    [Theory]
+    [InlineData("Ancient", "event")]
+    [InlineData("Monster", "combat")]
+    [InlineData("Elite", "combat")]
+    [InlineData("Boss", "combat")]
+    [InlineData("RestSite", "rest")]
+    [InlineData("Unknown", "event")]
+    [InlineData("Treasure", "treasure")]
+    [InlineData("Shop", "shop")]
+    public async Task Each_supported_map_point_selects_one_next_active_state(
+        string pointType,
+        string nextDecision)
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("map")
+            .MapFrame("map", """{"decision":{"kind":"map_choice"}}""",
+                MapAction("enter", 2, 3, pointType))
+            .Frame("next", JsonSerializer.Serialize(new { decision = new { kind = nextDecision } }))
+            .EnterMapPoint("map", col: 2, row: 3, "next");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        EnvironmentResult next = await coordinator.StepAsync("enter");
+
+        Assert.Equal(nextDecision, Assert.IsType<JsonElement>(next.Observation)
+            .GetProperty("decision").GetProperty("kind").GetString());
+        Assert.Equal([(2, 3)], adapter.EnteredMapPoints);
+    }
+
+    [Fact]
     public async Task Combat_can_transition_through_reward_to_the_map()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("combat")
@@ -133,8 +185,8 @@ public sealed class NativeRunCoordinatorTests
                 Action("finish-combat", "end_turn"))
             .Frame("reward", """{"schema_version":3,"decision":{"kind":"card_reward"}}""",
                 Action("reward-0", "choose_reward", ("option_index", 0)))
-            .Frame("map", """{"schema_version":3,"decision":{"kind":"map"}}""",
-                Action("map-0-2", "choose_map", ("col", 0), ("row", 2)))
+            .MapFrame("map", """{"schema_version":3,"decision":{"kind":"map"}}""",
+                MapAction("map-0-2", 0, 2, "Monster"))
             .Transition("combat", "finish-combat", "reward")
             .Transition("reward", "reward-0", "map");
         NativeRunCoordinator coordinator = new(adapter);
@@ -192,7 +244,8 @@ public sealed class NativeRunCoordinatorTests
             .RewardPrompt("outer-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [0])
             .RewardPrompt("inner-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [1])
             .RewardPrompt("outer-resumed", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [])
-            .Frame("map", """{"decision":{"kind":"map"}}""", Action("map-0-1", "choose_map"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("map-0-1", 0, 1, "Monster"))
             .Transition("event", "open-rewards", "outer-reward")
             .ResumeRewardPrompt("outer-reward", rewardIndex: 0, "inner-reward")
             .ResumeRewardParent("inner-reward", rewardIndex: 1, "outer-resumed")
@@ -230,14 +283,15 @@ public sealed class NativeRunCoordinatorTests
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("first")
             .CardPrompt("first", """{"decision":{"kind":"card_choice"}}""", "choice-0", ["a"], 1, 1)
             .CardPrompt("second", """{"decision":{"kind":"card_choice"}}""", "choice-1", ["b"], 1, 1)
-            .Frame("map", """{"decision":{"kind":"map"}}""", Action("open-third", "choose_map"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("open-third", 0, 1, "Unknown"))
             .CardPrompt("third", """{"decision":{"kind":"card_choice"}}""", "choice-2", ["c"], 1, 1)
             .Frame("combat", """{"decision":{"kind":"combat"}}""", Action("open-fourth", "end_turn"))
             .CardPrompt("fourth", """{"decision":{"kind":"card_choice"}}""", "choice-3", ["d"], 1, 1)
             .TerminalFrame("terminal", """{"decision":{"kind":"terminal"}}""", victory: true)
             .ResumeCardPrompt("first", ["a"], "second")
             .ResumeCardPrompt("second", ["b"], "map")
-            .Transition("map", "open-third", "third")
+            .EnterMapPoint("map", col: 0, row: 1, "third")
             .ResumeCardPrompt("third", ["c"], "combat")
             .Transition("combat", "open-fourth", "fourth")
             .ResumeCardPrompt("fourth", ["d"], "terminal");
@@ -265,7 +319,8 @@ public sealed class NativeRunCoordinatorTests
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
             .Frame("event", """{"decision":{"kind":"event"}}""", Action("open", "choose_event"))
             .CardPrompt("prompt", """{"decision":{"kind":"card_choice"}}""", "choice-0", ["map", "combat"], 1, 1)
-            .Frame("map", """{"decision":{"kind":"map"}}""", Action("route", "choose_map"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("route", 0, 1, "Monster"))
             .Frame("combat", """{"decision":{"kind":"combat"}}""", Action("play", "play_card"))
             .Transition("event", "open", "prompt")
             .ResumeCardPrompt("prompt", ["map"], "map")
@@ -292,7 +347,8 @@ public sealed class NativeRunCoordinatorTests
             ("choice_id", "choice-0"), ("option_ids", new[] { "bundle-1" }));
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("option")
             .Frame("option", """{"decision":{"kind":"option_choice"}}""", option)
-            .Frame("map", """{"decision":{"kind":"map"}}""", Action("route", "choose_map"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("route", 0, 1, "Monster"))
             .Transition("option", option.ActionId, "map");
         NativeRunCoordinator coordinator = new(adapter);
 
@@ -356,9 +412,10 @@ public sealed class NativeRunCoordinatorTests
     private static ScriptedNativeRunAdapter ScenarioScript(RecordedScenario recorded)
     {
         return new ScriptedNativeRunAdapter("map")
-            .Frame("map", """
+            .MapFrame("map", """
                 {"schema_version":3,"run":{"seed":"ANC1ENT01","act_variant":"OVERGROWTH"},"decision":{"kind":"map"}}
-                """, Action("ancient-door", "enter_ancient"))
+                """, Action("ancient-door", "enter_ancient",
+                    ("col", 0), ("row", 0), ("point_type", "Ancient")))
             .Frame("ancient", """
                 {"schema_version":3,"decision":{"kind":"event"}}
                 """,
@@ -373,24 +430,27 @@ public sealed class NativeRunCoordinatorTests
             .Frame("complete", """
                 {"schema_version":3,"decision":{"kind":"event_complete"}}
                 """, Action("leave_event", "leave_event"))
-            .Frame("route", """
+            .MapFrame("route", """
                 {"schema_version":3,"decision":{"kind":"map"}}
                 """,
                 Action("map-2-1", "choose_map", ("col", 2), ("row", 1), ("point_type", "Monster")),
                 Action("map-0-1", "choose_map", ("col", 0), ("row", 1), ("point_type", "Monster")))
             .Frame("combat", recorded.Observation.GetRawText())
-            .Transition("map", "ancient-door", "ancient")
+            .EnterMapPoint("map", col: 0, row: 0, "ancient")
             .Transition("ancient", "ancient-choice-2", "nested")
             .ResumeCardPrompt(
                 "nested",
                 ["generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD"],
                 "complete")
             .Transition("complete", "leave_event", "route")
-            .Transition("route", "map-0-1", "combat");
+            .EnterMapPoint("route", col: 0, row: 1, "combat");
     }
 
     private static LegalAction Action(string id, string kind, params (string Key, object? Value)[] parameters) =>
         new(id, kind, parameters.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+
+    private static LegalAction MapAction(string id, int col, int row, string pointType) =>
+        Action(id, "choose_map", ("col", col), ("row", row), ("point_type", pointType));
 
     private static LegalAction ActionWith(EnvironmentResult state, string kind, string? key = null, object? value = null) =>
         state.LegalActions.Single(action => action.Kind == kind && (key is null || Equals(action.Parameters[key], value)));

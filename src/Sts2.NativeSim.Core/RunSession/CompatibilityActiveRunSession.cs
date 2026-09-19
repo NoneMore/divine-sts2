@@ -11,6 +11,7 @@ internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
+    Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection);
     Task<CompatibilityCapture> ResumeCardSelectAsync(PromptResumeToken parent, CardSelection selection);
     Task<CompatibilityCapture> ResumeRewardAsync(PromptResumeToken parent, RewardSelection selection);
     object CaptureCheckpoint();
@@ -20,7 +21,8 @@ internal interface IRunSessionCompatibilityAdapter
 internal sealed record CompatibilityCapture(
     DecisionFrame Frame,
     CompatibilityRestore? Restore = null,
-    PromptResumeToken? PromptParent = null);
+    PromptResumeToken? PromptParent = null,
+    IReadOnlyDictionary<string, MapPointSelection>? MapActions = null);
 
 internal sealed record CompatibilityRestore(
     string Kind,

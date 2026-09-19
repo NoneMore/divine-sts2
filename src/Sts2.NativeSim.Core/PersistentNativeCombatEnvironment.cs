@@ -290,11 +290,6 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             await StartTransitionAsync(() => UsePotionAsync(Convert.ToInt32(action.Parameters["slot"]), action.Parameters["target_id"] is null ? null : Convert.ToUInt32(action.Parameters["target_id"])));
         else if (action.Kind == "discard_potion") await StartTransitionAsync(() => DiscardPotionAsync(Convert.ToInt32(action.Parameters["slot"])));
         else if (action.Kind is "choose_cards" or "choose_option") await ResumeChoiceAsync((string[])action.Parameters["option_ids"]!);
-        else if (action.Kind == "choose_map")
-        {
-            int col = Convert.ToInt32(action.Parameters["col"]), row = Convert.ToInt32(action.Parameters["row"]);
-            if (_runMode) await EnterRunMapCoordAsync(col, row); else ChooseMap(col, row);
-        }
         else if (action.Kind == "choose_reward") await ChooseRewardAsync(Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "choose_rest") await ChooseRestAsync((string)action.Parameters["option_id"]!);
         else if (action.Kind == "choose_event") await ChooseEventAsync(Convert.ToInt32(action.Parameters["option_index"]));
@@ -313,6 +308,30 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else if (action.Kind == "choose_custom_reward") await ChooseCustomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["child_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "skip_custom_rewards") await SkipCustomRewardsAsync();
         else throw new ProtocolException("unsupported_action", action.Kind);
+        return FinishStep(action, timer, record);
+    }
+
+    internal bool HasActiveMapDecision => (_runMode && _runStage == "map") || _mapMode;
+
+    internal async Task<EnvironmentResult> EnterMapPointAsync(
+        MapPointSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            candidate.Kind == "choose_map"
+            && Convert.ToInt32(candidate.Parameters["col"]) == selection.Col
+            && Convert.ToInt32(candidate.Parameters["row"]) == selection.Row
+            && StringComparer.Ordinal.Equals(
+                Convert.ToString(candidate.Parameters["point_type"]),
+                selection.PointType))
+            ?? throw new ProtocolException("invalid_action", "The selected map point is not legal in the active map decision.");
+        _lastActionId = action.ActionId;
+        if (_runMode)
+            await EnterRunMapCoordAsync(selection.Col, selection.Row).ConfigureAwait(false);
+        else
+            ChooseMap(selection.Col, selection.Row);
         return FinishStep(action, timer, record);
     }
 
@@ -467,7 +486,21 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         if (_restMode) InitializeRestSite();
         if (_eventMode) await InitializeEventAsync();
         if (_customRewardMode) await InitializeCustomRewardsAsync();
-        foreach (string action in branchHistory) { await StepAsync(action, false); _history.Add(action); }
+        foreach (string actionId in branchHistory)
+        {
+            LegalAction action = BuildActions().Single(candidate => candidate.ActionId == actionId);
+            if (action.Kind == "choose_map")
+            {
+                await EnterMapPointAsync(
+                    MapPointSelection.FromAction(action),
+                    record: false).ConfigureAwait(false);
+            }
+            else
+            {
+                await StepAsync(actionId, record: false).ConfigureAwait(false);
+            }
+            _history.Add(actionId);
+        }
         _currentBranchHandle = id;
         EnvironmentResult result = Capture(null);
         if (!StringComparer.Ordinal.Equals(result.StateHash, branch.ExpectedHash))
