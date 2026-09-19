@@ -402,13 +402,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     {
         ThrowIfPoisoned();
         Stopwatch timer = Stopwatch.StartNew();
-        string stage = room switch
-        {
-            SimpleRoomKind.Rest => "rest",
-            SimpleRoomKind.Treasure => "treasure",
-            SimpleRoomKind.Shop => "shop",
-            _ => throw new ArgumentOutOfRangeException(nameof(room), room, null)
-        };
+        string stage = room.Stage();
         string kind = $"leave_{stage}";
         LegalAction action = BuildActions().SingleOrDefault(candidate => candidate.Kind == kind)
             ?? throw new ProtocolException("invalid_action", $"Cannot leave inactive {stage} room.");

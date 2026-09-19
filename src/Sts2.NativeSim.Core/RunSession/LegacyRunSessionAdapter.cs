@@ -67,13 +67,7 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     {
         SimpleRoomKind? room = _environment.ActiveSimpleRoom;
         if (room is null) return null;
-        return actions.Count == 0 || actions.All(action => room switch
-        {
-            SimpleRoomKind.Rest => action.Kind is "choose_rest" or "leave_rest",
-            SimpleRoomKind.Treasure => action.Kind is "open_treasure" or "choose_treasure" or "skip_treasure" or "leave_treasure",
-            SimpleRoomKind.Shop => action.Kind is "buy_shop" or "leave_shop",
-            _ => false
-        }) ? room : null;
+        return actions.Count == 0 || actions.All(action => room.Value.Owns(action.Kind)) ? room : null;
     }
 
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(

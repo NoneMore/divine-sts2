@@ -102,26 +102,23 @@ internal sealed class MapDecisionState : ActiveRunState
 /// The complete rest-site decision. The state keeps projection and execution paired while the
 /// adapter receives only the selected native option identity.
 /// </summary>
-internal sealed class RestDecisionState : ActiveRunState
+internal abstract class SimpleRoomDecisionState : ActiveRunState
 {
     private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
 
-    public RestDecisionState(
+    protected SimpleRoomDecisionState(
         DecisionFrame frame,
-        Func<RestSelection, Task<ActiveRunState>> choose,
-        Func<Task<ActiveRunState>> leave) : base(frame)
+        string roomName,
+        Func<LegalAction, Func<Task<ActiveRunState>>?> executor) : base(frame)
     {
         Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
         foreach (LegalAction action in frame.LegalActions)
         {
-            executors.Add(action.ActionId, action.Kind switch
-            {
-                "choose_rest" => () => choose(new(Convert.ToString(action.Parameters["option_id"])!)),
-                "leave_rest" => leave,
-                _ => throw new ProtocolException(
+            executors.Add(
+                action.ActionId,
+                executor(action) ?? throw new ProtocolException(
                     "protocol_desync",
-                    $"Rest projection advertised non-rest action '{action.Kind}'.")
-            });
+                    $"{roomName} projection advertised non-{roomName.ToLowerInvariant()} action '{action.Kind}'."));
         }
         _executors = executors;
     }
@@ -133,71 +130,57 @@ internal sealed class RestDecisionState : ActiveRunState
     }
 }
 
-/// <summary>A treasure-room projection paired with semantic open, relic-pick and skip executors.</summary>
-internal sealed class TreasureDecisionState : ActiveRunState
+internal sealed class RestDecisionState : SimpleRoomDecisionState
 {
-    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+    public RestDecisionState(
+        DecisionFrame frame,
+        Func<RestSelection, Task<ActiveRunState>> choose,
+        Func<Task<ActiveRunState>> leave) : base(
+            frame,
+            "Rest",
+            action => action.Kind switch
+            {
+                "choose_rest" => () => choose(new(Convert.ToString(action.Parameters["option_id"])!)),
+                "leave_rest" => leave,
+                _ => null
+            }) { }
+}
 
+/// <summary>A treasure-room projection paired with semantic open, relic-pick and skip executors.</summary>
+internal sealed class TreasureDecisionState : SimpleRoomDecisionState
+{
     public TreasureDecisionState(
         DecisionFrame frame,
         Func<Task<ActiveRunState>> open,
         Func<TreasureSelection, Task<ActiveRunState>> choose,
-        Func<Task<ActiveRunState>> leave) : base(frame)
-    {
-        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
-        foreach (LegalAction action in frame.LegalActions)
-        {
-            executors.Add(action.ActionId, action.Kind switch
+        Func<Task<ActiveRunState>> leave) : base(
+            frame,
+            "Treasure",
+            action => action.Kind switch
             {
                 "open_treasure" => open,
                 "choose_treasure" => () => choose(new(Convert.ToInt32(action.Parameters["option_index"]))),
                 "skip_treasure" => () => choose(new(null)),
                 "leave_treasure" => leave,
-                _ => throw new ProtocolException(
-                    "protocol_desync",
-                    $"Treasure projection advertised non-treasure action '{action.Kind}'.")
-            });
-        }
-        _executors = executors;
-    }
-
-    public override Task<ActiveRunState> ApplyAsync(string actionId)
-    {
-        _ = RequireAction(actionId);
-        return _executors[actionId]();
-    }
+                _ => null
+            }) { }
 }
 
 /// <summary>A shop projection paired with semantic inventory-index and leave executors.</summary>
-internal sealed class ShopDecisionState : ActiveRunState
+internal sealed class ShopDecisionState : SimpleRoomDecisionState
 {
-    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
-
     public ShopDecisionState(
         DecisionFrame frame,
         Func<ShopSelection, Task<ActiveRunState>> buy,
-        Func<Task<ActiveRunState>> leave) : base(frame)
-    {
-        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
-        foreach (LegalAction action in frame.LegalActions)
-        {
-            executors.Add(action.ActionId, action.Kind switch
+        Func<Task<ActiveRunState>> leave) : base(
+            frame,
+            "Shop",
+            action => action.Kind switch
             {
                 "buy_shop" => () => buy(new(Convert.ToInt32(action.Parameters["entry_index"]))),
                 "leave_shop" => leave,
-                _ => throw new ProtocolException(
-                    "protocol_desync",
-                    $"Shop projection advertised non-shop action '{action.Kind}'.")
-            });
-        }
-        _executors = executors;
-    }
-
-    public override Task<ActiveRunState> ApplyAsync(string actionId)
-    {
-        _ = RequireAction(actionId);
-        return _executors[actionId]();
-    }
+                _ => null
+            }) { }
 }
 
 /// <summary>The sole active state while the shipped game is waiting for cards.</summary>
