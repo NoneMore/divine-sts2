@@ -10,6 +10,7 @@ namespace Sts2.NativeSim.Core.RunSession;
 internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
+    CompatibilityCapture ResetMap(ResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
     Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection);
     Task<CompatibilityCapture> ResumeCardSelectAsync(PromptResumeToken parent, CardSelection selection);

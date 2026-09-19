@@ -32,17 +32,30 @@ public sealed class NativeRunCoordinator
 
     public EnvironmentResult RunReset(ResetRequest request)
     {
+        return Reset(request with { ResetMode = ResetModes.Run }, _adapter.Reset, "run_reset");
+    }
+
+    public EnvironmentResult MapReset(ResetRequest request)
+    {
+        return Reset(request with { ResetMode = ResetModes.Combat }, _adapter.ResetMap, "map_reset");
+    }
+
+    private EnvironmentResult Reset(
+        ResetRequest request,
+        Func<ResetRequest, CompatibilityCapture> reset,
+        string transitionKind)
+    {
         _serial.Wait();
         try
         {
-            CompatibilityCapture initial = _adapter.Reset(request);
+            CompatibilityCapture initial = reset(request);
             _session = new(_adapter, initial);
-            _reset = request with { ResetMode = ResetModes.Run };
+            _reset = request;
             _branches.Clear();
             _branchOrder.Clear();
             _history.Clear();
             _currentBranchHandle = null;
-            return Project(initial.Frame, new { kind = "run_reset", replayed_actions = 0 });
+            return Project(initial.Frame, new { kind = transitionKind, replayed_actions = 0 });
         }
         finally
         {

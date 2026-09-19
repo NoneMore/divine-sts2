@@ -83,6 +83,7 @@ public sealed class ActiveRunSessionTests
         public int MaximumConcurrentMutations { get; private set; }
 
         public CompatibilityCapture Reset(ResetRequest request) => new(_current);
+        public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
         public object CaptureCheckpoint() => "checkpoint";
 
         public async Task<CompatibilityCapture> ApplyAsync(string actionId)

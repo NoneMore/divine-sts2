@@ -11,6 +11,7 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public LegacyRunSessionAdapter(PersistentNativeCombatEnvironment environment) => _environment = environment;
 
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
+    public CompatibilityCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
     public async Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>

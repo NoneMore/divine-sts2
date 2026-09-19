@@ -9,7 +9,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
-    private readonly Dictionary<(string Frame, int Col, int Row), string> _mapTransitions = new();
+    private readonly Dictionary<(string Frame, int Col, int Row, string PointType), string> _mapTransitions = new();
     private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
     private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), ScriptedRewardTransition> _rewardTransitions = new();
     private readonly Stack<object> _suspendedRewardParents = new();
@@ -62,9 +62,14 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return this;
     }
 
-    public ScriptedNativeRunAdapter EnterMapPoint(string from, int col, int row, string to)
+    public ScriptedNativeRunAdapter EnterMapPoint(
+        string from,
+        int col,
+        int row,
+        string pointType,
+        string to)
     {
-        _mapTransitions.Add((from, col, row), to);
+        _mapTransitions.Add((from, col, row, pointType), to);
         return this;
     }
 
@@ -163,6 +168,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return Capture();
     }
 
+    public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
+
     public CompatibilityCapture Capture()
     {
         ScriptedFrame frame = _frames[_currentFrame];
@@ -179,7 +186,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection)
     {
         EnteredMapPoints.Add((selection.Col, selection.Row));
-        string nextFrame = _mapTransitions[(_currentFrame, selection.Col, selection.Row)];
+        string nextFrame = _mapTransitions[
+            (_currentFrame, selection.Col, selection.Row, selection.PointType)];
         return ApplyTransitionAsync(
             _frames[_currentFrame].Actions.Single(action =>
                 Convert.ToInt32(action.Parameters["col"]) == selection.Col
@@ -264,10 +272,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(IReadOnlyList<LegalAction> actions) =>
         actions.ToDictionary(
             action => action.ActionId,
-            action => new MapPointSelection(
-                Convert.ToInt32(action.Parameters["col"]),
-                Convert.ToInt32(action.Parameters["row"]),
-                Convert.ToString(action.Parameters["point_type"])!),
+            MapPointSelection.FromAction,
             StringComparer.Ordinal);
 
     private static bool IsRewardPrompt(ScriptedFrame frame) =>
