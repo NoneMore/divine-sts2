@@ -212,7 +212,7 @@ async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment, Native
                 "reward_reset" => environment.RewardReset(Read<ResetRequest>(request.Parameters)),
                 "item_reward_reset" => environment.ItemRewardReset(Read<ItemRewardResetRequest>(request.Parameters)),
                 "custom_reward_reset" => await environment.CustomRewardResetAsync(Read<CustomRewardResetRequest>(request.Parameters)),
-                "rest_reset" => environment.RestReset(Read<ResetRequest>(request.Parameters)),
+                "rest_reset" => runCoordinator.RestReset(Read<ResetRequest>(request.Parameters)),
                 "event_reset" => await environment.EventResetAsync(Read<EventResetRequest>(request.Parameters)),
                 "observe" => runCoordinator.Observe(),
                 "run_observe" => runCoordinator.Observe(),

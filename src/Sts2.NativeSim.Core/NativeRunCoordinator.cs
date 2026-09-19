@@ -40,6 +40,11 @@ public sealed class NativeRunCoordinator
         return Reset(request, _adapter.ResetMap, ResetModes.Combat, "map_reset");
     }
 
+    public EnvironmentResult RestReset(ResetRequest request)
+    {
+        return Reset(request, _adapter.ResetRest, ResetModes.Combat, "rest_reset");
+    }
+
     private EnvironmentResult Reset(
         ResetRequest request,
         Func<ResetRequest, CompatibilityCapture> reset,

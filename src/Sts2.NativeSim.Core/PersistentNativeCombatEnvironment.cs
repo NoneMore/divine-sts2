@@ -291,20 +291,12 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else if (action.Kind == "discard_potion") await StartTransitionAsync(() => DiscardPotionAsync(Convert.ToInt32(action.Parameters["slot"])));
         else if (action.Kind is "choose_cards" or "choose_option") await ResumeChoiceAsync((string[])action.Parameters["option_ids"]!);
         else if (action.Kind == "choose_reward") await ChooseRewardAsync(Convert.ToInt32(action.Parameters["option_index"]));
-        else if (action.Kind == "choose_rest") await ChooseRestAsync((string)action.Parameters["option_id"]!);
         else if (action.Kind == "choose_event") await ChooseEventAsync(Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "generate_room_rewards") await GenerateRoomRewardsAsync();
         else if (action.Kind == "choose_room_reward") await ChooseRoomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "leave_room_rewards") await LeaveRoomRewardsAsync();
         else if (action.Kind == "advance_act") await AdvanceActAsync();
         else if (action.Kind == "leave_event") await LeaveCurrentRunRoomAsync("event");
-        else if (action.Kind == "leave_rest") await LeaveCurrentRunRoomAsync("rest");
-        else if (action.Kind == "open_treasure") await OpenTreasureAsync();
-        else if (action.Kind == "choose_treasure") await ChooseTreasureAsync(Convert.ToInt32(action.Parameters["option_index"]));
-        else if (action.Kind == "skip_treasure") await ChooseTreasureAsync(null);
-        else if (action.Kind == "leave_treasure") await LeaveCurrentRunRoomAsync("treasure");
-        else if (action.Kind == "buy_shop") await BuyShopAsync(Convert.ToInt32(action.Parameters["entry_index"]));
-        else if (action.Kind == "leave_shop") await LeaveCurrentRunRoomAsync("shop");
         else if (action.Kind == "choose_custom_reward") await ChooseCustomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["child_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "skip_custom_rewards") await SkipCustomRewardsAsync();
         else throw new ProtocolException("unsupported_action", action.Kind);
@@ -312,6 +304,15 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     internal bool HasActiveMapDecision => (_runMode && _runStage == "map") || _mapMode;
+
+    internal SimpleRoomKind? ActiveSimpleRoom =>
+        _runMode && _runStage == "rest" || _restMode
+            ? SimpleRoomKind.Rest
+            : _runMode && _runStage == "treasure"
+                ? SimpleRoomKind.Treasure
+                : _runMode && _runStage == "shop"
+                    ? SimpleRoomKind.Shop
+                    : null;
 
     internal async Task<EnvironmentResult> EnterMapPointAsync(
         MapPointSelection selection,
@@ -332,6 +333,87 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             await EnterRunMapCoordAsync(selection.Col, selection.Row).ConfigureAwait(false);
         else
             ChooseMap(selection.Col, selection.Row);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> ChooseRestOptionAsync(
+        RestSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            candidate.Kind == "choose_rest"
+            && StringComparer.Ordinal.Equals(
+                Convert.ToString(candidate.Parameters["option_id"]),
+                selection.OptionId))
+            ?? throw new ProtocolException("invalid_action", "The selected rest-site option is not legal.");
+        _lastActionId = action.ActionId;
+        await ChooseRestAsync(selection.OptionId).ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> OpenTreasureRoomAsync(bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate => candidate.Kind == "open_treasure")
+            ?? throw new ProtocolException("invalid_action", "No unopened treasure room is active.");
+        _lastActionId = action.ActionId;
+        await OpenTreasureAsync().ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> ChooseTreasureRelicAsync(
+        TreasureSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            selection.OptionIndex is { } index
+                ? candidate.Kind == "choose_treasure"
+                    && Convert.ToInt32(candidate.Parameters["option_index"]) == index
+                : candidate.Kind == "skip_treasure")
+            ?? throw new ProtocolException("invalid_action", "The selected treasure relic is not legal.");
+        _lastActionId = action.ActionId;
+        await ChooseTreasureAsync(selection.OptionIndex).ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> BuyShopEntryAsync(
+        ShopSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            candidate.Kind == "buy_shop"
+            && Convert.ToInt32(candidate.Parameters["entry_index"]) == selection.EntryIndex)
+            ?? throw new ProtocolException("invalid_action", "The selected shop entry is not legal.");
+        _lastActionId = action.ActionId;
+        await BuyShopAsync(selection.EntryIndex).ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> LeaveSimpleRoomAsync(
+        SimpleRoomKind room,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        string stage = room switch
+        {
+            SimpleRoomKind.Rest => "rest",
+            SimpleRoomKind.Treasure => "treasure",
+            SimpleRoomKind.Shop => "shop",
+            _ => throw new ArgumentOutOfRangeException(nameof(room), room, null)
+        };
+        string kind = $"leave_{stage}";
+        LegalAction action = BuildActions().SingleOrDefault(candidate => candidate.Kind == kind)
+            ?? throw new ProtocolException("invalid_action", $"Cannot leave inactive {stage} room.");
+        _lastActionId = action.ActionId;
+        await LeaveCurrentRunRoomAsync(stage).ConfigureAwait(false);
         return FinishStep(action, timer, record);
     }
 
@@ -494,6 +576,42 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 await EnterMapPointAsync(
                     MapPointSelection.FromAction(action),
                     record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "choose_rest")
+            {
+                await ChooseRestOptionAsync(
+                    new(Convert.ToString(action.Parameters["option_id"])!),
+                    record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "leave_rest")
+            {
+                await LeaveSimpleRoomAsync(SimpleRoomKind.Rest, record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "open_treasure")
+            {
+                await OpenTreasureRoomAsync(record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind is "choose_treasure" or "skip_treasure")
+            {
+                await ChooseTreasureRelicAsync(
+                    new(action.Kind == "choose_treasure"
+                        ? Convert.ToInt32(action.Parameters["option_index"])
+                        : null),
+                    record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "leave_treasure")
+            {
+                await LeaveSimpleRoomAsync(SimpleRoomKind.Treasure, record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "buy_shop")
+            {
+                await BuyShopEntryAsync(
+                    new(Convert.ToInt32(action.Parameters["entry_index"])),
+                    record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "leave_shop")
+            {
+                await LeaveSimpleRoomAsync(SimpleRoomKind.Shop, record: false).ConfigureAwait(false);
             }
             else
             {

@@ -98,6 +98,108 @@ internal sealed class MapDecisionState : ActiveRunState
     }
 }
 
+/// <summary>
+/// The complete rest-site decision. The state keeps projection and execution paired while the
+/// adapter receives only the selected native option identity.
+/// </summary>
+internal sealed class RestDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public RestDecisionState(
+        DecisionFrame frame,
+        Func<RestSelection, Task<ActiveRunState>> choose,
+        Func<Task<ActiveRunState>> leave) : base(frame)
+    {
+        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
+        foreach (LegalAction action in frame.LegalActions)
+        {
+            executors.Add(action.ActionId, action.Kind switch
+            {
+                "choose_rest" => () => choose(new(Convert.ToString(action.Parameters["option_id"])!)),
+                "leave_rest" => leave,
+                _ => throw new ProtocolException(
+                    "protocol_desync",
+                    $"Rest projection advertised non-rest action '{action.Kind}'.")
+            });
+        }
+        _executors = executors;
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
+/// <summary>A treasure-room projection paired with semantic open, relic-pick and skip executors.</summary>
+internal sealed class TreasureDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public TreasureDecisionState(
+        DecisionFrame frame,
+        Func<Task<ActiveRunState>> open,
+        Func<TreasureSelection, Task<ActiveRunState>> choose,
+        Func<Task<ActiveRunState>> leave) : base(frame)
+    {
+        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
+        foreach (LegalAction action in frame.LegalActions)
+        {
+            executors.Add(action.ActionId, action.Kind switch
+            {
+                "open_treasure" => open,
+                "choose_treasure" => () => choose(new(Convert.ToInt32(action.Parameters["option_index"]))),
+                "skip_treasure" => () => choose(new(null)),
+                "leave_treasure" => leave,
+                _ => throw new ProtocolException(
+                    "protocol_desync",
+                    $"Treasure projection advertised non-treasure action '{action.Kind}'.")
+            });
+        }
+        _executors = executors;
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
+/// <summary>A shop projection paired with semantic inventory-index and leave executors.</summary>
+internal sealed class ShopDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public ShopDecisionState(
+        DecisionFrame frame,
+        Func<ShopSelection, Task<ActiveRunState>> buy,
+        Func<Task<ActiveRunState>> leave) : base(frame)
+    {
+        Dictionary<string, Func<Task<ActiveRunState>>> executors = new(StringComparer.Ordinal);
+        foreach (LegalAction action in frame.LegalActions)
+        {
+            executors.Add(action.ActionId, action.Kind switch
+            {
+                "buy_shop" => () => buy(new(Convert.ToInt32(action.Parameters["entry_index"]))),
+                "leave_shop" => leave,
+                _ => throw new ProtocolException(
+                    "protocol_desync",
+                    $"Shop projection advertised non-shop action '{action.Kind}'.")
+            });
+        }
+        _executors = executors;
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
 /// <summary>The sole active state while the shipped game is waiting for cards.</summary>
 internal sealed class CardSelectPromptState(
     DecisionFrame frame,
@@ -153,6 +255,19 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
         DecisionFrame frame = capture.Frame;
         if (capture.MapActions is { } mapActions)
             return new MapDecisionState(frame, mapActions, EnterMapPointAsync);
+        if (capture.SimpleRoom is SimpleRoomKind.Rest)
+            return new RestDecisionState(frame, ChooseRestAsync, () => LeaveSimpleRoomAsync(SimpleRoomKind.Rest));
+        if (capture.SimpleRoom is SimpleRoomKind.Treasure)
+            return new TreasureDecisionState(
+                frame,
+                OpenTreasureAsync,
+                ChooseTreasureAsync,
+                () => LeaveSimpleRoomAsync(SimpleRoomKind.Treasure));
+        if (capture.SimpleRoom is SimpleRoomKind.Shop)
+            return new ShopDecisionState(
+                frame,
+                BuyShopEntryAsync,
+                () => LeaveSimpleRoomAsync(SimpleRoomKind.Shop));
         if (IsCardPrompt(frame))
         {
             SuspendedNativeDecision parent = Parent(capture);
@@ -175,6 +290,21 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 
     private async Task<ActiveRunState> EnterMapPointAsync(MapPointSelection selection) =>
         Create(await adapter.EnterMapPointAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> ChooseRestAsync(RestSelection selection) =>
+        Create(await adapter.ChooseRestAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> OpenTreasureAsync() =>
+        Create(await adapter.OpenTreasureAsync().ConfigureAwait(false));
+
+    private async Task<ActiveRunState> ChooseTreasureAsync(TreasureSelection selection) =>
+        Create(await adapter.ChooseTreasureAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> BuyShopEntryAsync(ShopSelection selection) =>
+        Create(await adapter.BuyShopEntryAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
+        Create(await adapter.LeaveSimpleRoomAsync(room).ConfigureAwait(false));
 
     private static bool IsCardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0

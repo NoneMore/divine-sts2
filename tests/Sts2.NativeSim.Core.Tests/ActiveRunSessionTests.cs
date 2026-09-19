@@ -84,6 +84,7 @@ public sealed class ActiveRunSessionTests
 
         public CompatibilityCapture Reset(ResetRequest request) => new(_current);
         public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
+        public CompatibilityCapture ResetRest(ResetRequest request) => Reset(request);
         public object CaptureCheckpoint() => "checkpoint";
 
         public async Task<CompatibilityCapture> ApplyAsync(string actionId)
@@ -110,6 +111,20 @@ public sealed class ActiveRunSessionTests
 
         public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
             ApplyAsync($"choose_map:{selection.Col}:{selection.Row}");
+
+        public Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection) =>
+            ApplyAsync($"choose_rest:{selection.OptionId}");
+
+        public Task<CompatibilityCapture> OpenTreasureAsync() => ApplyAsync("open_treasure");
+
+        public Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection) =>
+            ApplyAsync(selection.OptionIndex is { } index ? $"choose_treasure:{index}" : "skip_treasure");
+
+        public Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection) =>
+            ApplyAsync($"buy_shop:{selection.EntryIndex}");
+
+        public Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
+            ApplyAsync($"leave_{room.ToString().ToLowerInvariant()}");
 
         public Task<CompatibilityCapture> ResumeRewardAsync(
             PromptResumeToken parent,

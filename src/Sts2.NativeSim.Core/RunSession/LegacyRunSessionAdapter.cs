@@ -12,10 +12,21 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
 
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public CompatibilityCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
+    public CompatibilityCapture ResetRest(ResetRequest request) => Capture(_environment.RestReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
     public async Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
         Capture(await _environment.EnterMapPointAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection) =>
+        Capture(await _environment.ChooseRestOptionAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> OpenTreasureAsync() =>
+        Capture(await _environment.OpenTreasureRoomAsync().ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection) =>
+        Capture(await _environment.ChooseTreasureRelicAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection) =>
+        Capture(await _environment.BuyShopEntryAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
+        Capture(await _environment.LeaveSimpleRoomAsync(room).ConfigureAwait(false));
     public async Task<CompatibilityCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection) =>
@@ -48,7 +59,21 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
             frame,
             includeRestore ? RestoreProjection(result.Transition) : null,
             _environment.ActivePromptParent(),
-            _environment.HasActiveMapDecision ? MapActions(frame.LegalActions) : null);
+            _environment.HasActiveMapDecision ? MapActions(frame.LegalActions) : null,
+            SimpleRoom(frame.LegalActions));
+    }
+
+    private SimpleRoomKind? SimpleRoom(IReadOnlyList<LegalAction> actions)
+    {
+        SimpleRoomKind? room = _environment.ActiveSimpleRoom;
+        if (room is null) return null;
+        return actions.Count == 0 || actions.All(action => room switch
+        {
+            SimpleRoomKind.Rest => action.Kind is "choose_rest" or "leave_rest",
+            SimpleRoomKind.Treasure => action.Kind is "open_treasure" or "choose_treasure" or "skip_treasure" or "leave_treasure",
+            SimpleRoomKind.Shop => action.Kind is "buy_shop" or "leave_shop",
+            _ => false
+        }) ? room : null;
     }
 
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(

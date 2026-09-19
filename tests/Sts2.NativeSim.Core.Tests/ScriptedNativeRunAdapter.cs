@@ -10,6 +10,11 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
     private readonly Dictionary<(string Frame, int Col, int Row, string PointType), string> _mapTransitions = new();
+    private readonly Dictionary<(string Frame, string OptionId), string> _restTransitions = new();
+    private readonly Dictionary<string, string> _openTreasureTransitions = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Frame, int? OptionIndex), string> _treasureTransitions = new();
+    private readonly Dictionary<(string Frame, int EntryIndex), string> _shopTransitions = new();
+    private readonly Dictionary<(string Frame, SimpleRoomKind Room), string> _leaveSimpleRoomTransitions = new();
     private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
     private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), ScriptedRewardTransition> _rewardTransitions = new();
     private readonly Stack<object> _suspendedRewardParents = new();
@@ -34,6 +39,11 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public List<PromptResumeToken> CardResumeTokens { get; } = [];
     public List<PromptResumeToken> RewardResumeTokens { get; } = [];
     public List<(int Col, int Row)> EnteredMapPoints { get; } = [];
+    public List<RestSelection> RestSelections { get; } = [];
+    public int OpenTreasureCount { get; private set; }
+    public List<TreasureSelection> TreasureSelections { get; } = [];
+    public List<ShopSelection> ShopSelections { get; } = [];
+    public List<SimpleRoomKind> LeftSimpleRooms { get; } = [];
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
@@ -46,6 +56,27 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     {
         using JsonDocument document = JsonDocument.Parse(observation);
         _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false, IsMap: true));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter RestFrame(string name, string observation, params LegalAction[] actions)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false, SimpleRoom: SimpleRoomKind.Rest));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter TreasureFrame(string name, string observation, params LegalAction[] actions)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false, SimpleRoom: SimpleRoomKind.Treasure));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter ShopFrame(string name, string observation, params LegalAction[] actions)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false, SimpleRoom: SimpleRoomKind.Shop));
         return this;
     }
 
@@ -70,6 +101,36 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         string to)
     {
         _mapTransitions.Add((from, col, row, pointType), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter RestTransition(string from, RestSelection selection, string to)
+    {
+        _restTransitions.Add((from, selection.OptionId), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter OpenTreasure(string from, string to)
+    {
+        _openTreasureTransitions.Add(from, to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter TreasureTransition(string from, TreasureSelection selection, string to)
+    {
+        _treasureTransitions.Add((from, selection.OptionIndex), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter ShopTransition(string from, ShopSelection selection, string to)
+    {
+        _shopTransitions.Add((from, selection.EntryIndex), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter LeaveSimpleRoom(string from, SimpleRoomKind room, string to)
+    {
+        _leaveSimpleRoomTransitions.Add((from, room), to);
         return this;
     }
 
@@ -172,6 +233,12 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return Reset();
     }
 
+    public CompatibilityCapture ResetRest(ResetRequest request)
+    {
+        ValidateResetMode(request, ResetModes.Combat);
+        return Reset();
+    }
+
     private CompatibilityCapture Reset()
     {
         _currentFrame = _resetFrame;
@@ -211,6 +278,52 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
                 Convert.ToInt32(action.Parameters["col"]) == selection.Col
                 && Convert.ToInt32(action.Parameters["row"]) == selection.Row).ActionId,
             nextFrame);
+    }
+
+    public Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection)
+    {
+        RestSelections.Add(selection);
+        string nextFrame = _restTransitions[(_currentFrame, selection.OptionId)];
+        return ApplyTransitionAsync(
+            _frames[_currentFrame].Actions.Single(action =>
+                action.Kind == "choose_rest"
+                && StringComparer.Ordinal.Equals(Convert.ToString(action.Parameters["option_id"]), selection.OptionId)).ActionId,
+            nextFrame);
+    }
+
+    public Task<CompatibilityCapture> OpenTreasureAsync()
+    {
+        OpenTreasureCount++;
+        return ApplyTransitionAsync("open_treasure", _openTreasureTransitions[_currentFrame]);
+    }
+
+    public Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection)
+    {
+        TreasureSelections.Add(selection);
+        string nextFrame = _treasureTransitions[(_currentFrame, selection.OptionIndex)];
+        string actionId = selection.OptionIndex is { } index
+            ? _frames[_currentFrame].Actions.Single(action =>
+                action.Kind == "choose_treasure"
+                && Convert.ToInt32(action.Parameters["option_index"]) == index).ActionId
+            : "skip_treasure";
+        return ApplyTransitionAsync(actionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection)
+    {
+        ShopSelections.Add(selection);
+        string nextFrame = _shopTransitions[(_currentFrame, selection.EntryIndex)];
+        string actionId = _frames[_currentFrame].Actions.Single(action =>
+            action.Kind == "buy_shop"
+            && Convert.ToInt32(action.Parameters["entry_index"]) == selection.EntryIndex).ActionId;
+        return ApplyTransitionAsync(actionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room)
+    {
+        LeftSimpleRooms.Add(room);
+        string nextFrame = _leaveSimpleRoomTransitions[(_currentFrame, room)];
+        return ApplyTransitionAsync($"leave_{room.ToString().ToLowerInvariant()}", nextFrame);
     }
 
     public Task<CompatibilityCapture> ResumeCardSelectAsync(
@@ -284,7 +397,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return new(
             new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null),
             PromptParent: prompt ? new(_promptMarker) : null,
-            MapActions: frame.IsMap ? MapActions(frame.Actions) : null);
+            MapActions: frame.IsMap ? MapActions(frame.Actions) : null,
+            SimpleRoom: prompt ? null : frame.SimpleRoom);
     }
 
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(IReadOnlyList<LegalAction> actions) =>
@@ -349,7 +463,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         IReadOnlyList<LegalAction> Actions,
         bool Terminated,
         bool Victory,
-        bool IsMap = false);
+        bool IsMap = false,
+        SimpleRoomKind? SimpleRoom = null);
 
     private sealed record ScriptedRewardTransition(string Frame, bool ResumeParent);
 }

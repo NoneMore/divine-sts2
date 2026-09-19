@@ -179,6 +179,24 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal("invalid_reset", error.Code);
     }
 
+    [Fact]
+    public async Task Standalone_rest_reset_initializes_the_active_session()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("rest")
+            .RestFrame("rest", """{"decision":{"kind":"rest_choice"}}""",
+                Action("choose_rest:REST", "choose_rest", ("option_id", "REST")))
+            .RestFrame("complete", """{"decision":{"kind":"rest_complete"}}""")
+            .RestTransition("rest", new RestSelection("REST"), "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult reset = coordinator.RestReset(Request() with { ResetMode = ResetModes.Combat });
+        EnvironmentResult complete = await coordinator.StepAsync("choose_rest:REST");
+
+        Assert.Equal("choose_rest:REST", Assert.Single(reset.LegalActions).ActionId);
+        Assert.Empty(complete.LegalActions);
+        Assert.Equal([new RestSelection("REST")], adapter.RestSelections);
+    }
+
     [Theory]
     [InlineData("Ancient", "event")]
     [InlineData("Monster", "combat")]
@@ -205,6 +223,103 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal(nextDecision, Assert.IsType<JsonElement>(next.Observation)
             .GetProperty("decision").GetProperty("kind").GetString());
         Assert.Equal([(2, 3)], adapter.EnteredMapPoints);
+    }
+
+    [Fact]
+    public async Task Rest_actions_keep_their_projection_order_and_use_the_semantic_native_port()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("rest")
+            .RestFrame("rest", """{"decision":{"kind":"rest_choice"}}""",
+                Action("choose_rest:SMITH", "choose_rest", ("option_id", "SMITH")),
+                Action("choose_rest:REST", "choose_rest", ("option_id", "REST")))
+            .RestFrame("complete", """{"decision":{"kind":"rest_complete"}}""",
+                Action("leave_rest", "leave_rest"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("route", 0, 1, "Monster"))
+            .RestTransition("rest", new RestSelection("SMITH"), "complete")
+            .LeaveSimpleRoom("complete", SimpleRoomKind.Rest, "map");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult rest = coordinator.RunReset(Request());
+        EnvironmentResult complete = await coordinator.StepAsync("choose_rest:SMITH");
+        EnvironmentResult map = await coordinator.StepAsync("leave_rest");
+
+        Assert.Equal(["choose_rest:SMITH", "choose_rest:REST"], rest.LegalActions.Select(action => action.ActionId));
+        Assert.Equal("leave_rest", Assert.Single(complete.LegalActions).ActionId);
+        Assert.Equal("route", Assert.Single(map.LegalActions).ActionId);
+        Assert.Equal([new RestSelection("SMITH")], adapter.RestSelections);
+        Assert.Equal([SimpleRoomKind.Rest], adapter.LeftSimpleRooms);
+        Assert.Equal(0, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Treasure_actions_keep_their_projection_order_and_use_the_semantic_native_port()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("closed")
+            .TreasureFrame("closed", """{"decision":{"kind":"treasure_open"}}""",
+                Action("open_treasure", "open_treasure"))
+            .TreasureFrame("open", """{"decision":{"kind":"treasure_relic_choice"}}""",
+                Action("choose_treasure:0:ANCHOR", "choose_treasure", ("option_index", 0), ("model_id", "ANCHOR")),
+                Action("choose_treasure:1:BAG_OF_PREPARATION", "choose_treasure", ("option_index", 1), ("model_id", "BAG_OF_PREPARATION")),
+                Action("skip_treasure", "skip_treasure"))
+            .TreasureFrame("complete", """{"decision":{"kind":"treasure_complete"}}""",
+                Action("leave_treasure", "leave_treasure"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("route", 0, 1, "Monster"))
+            .OpenTreasure("closed", "open")
+            .TreasureTransition("open", new TreasureSelection(1), "complete")
+            .LeaveSimpleRoom("complete", SimpleRoomKind.Treasure, "map");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        coordinator.RunReset(Request());
+        EnvironmentResult open = await coordinator.StepAsync("open_treasure");
+        EnvironmentResult complete = await coordinator.StepAsync("choose_treasure:1:BAG_OF_PREPARATION");
+        EnvironmentResult map = await coordinator.StepAsync("leave_treasure");
+
+        Assert.Equal(
+            ["choose_treasure:0:ANCHOR", "choose_treasure:1:BAG_OF_PREPARATION", "skip_treasure"],
+            open.LegalActions.Select(action => action.ActionId));
+        Assert.Equal("leave_treasure", Assert.Single(complete.LegalActions).ActionId);
+        Assert.Equal("route", Assert.Single(map.LegalActions).ActionId);
+        Assert.Equal(1, adapter.OpenTreasureCount);
+        Assert.Equal([new TreasureSelection(1)], adapter.TreasureSelections);
+        Assert.Equal([SimpleRoomKind.Treasure], adapter.LeftSimpleRooms);
+        Assert.Equal(0, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Shop_actions_keep_their_projection_order_and_use_the_semantic_native_port()
+    {
+        LegalAction card = Action(
+            "buy_shop:0:card:BASH",
+            "buy_shop",
+            ("entry_index", 0),
+            ("entry_kind", "card"),
+            ("model_id", "BASH"),
+            ("cost", 50));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("shop")
+            .ShopFrame("shop", """{"decision":{"kind":"shop_choice"}}""",
+                card,
+                Action("leave_shop", "leave_shop"))
+            .ShopFrame("after-buy", """{"decision":{"kind":"shop_choice"}}""",
+                Action("leave_shop", "leave_shop"))
+            .MapFrame("map", """{"decision":{"kind":"map"}}""",
+                MapAction("route", 0, 1, "Monster"))
+            .ShopTransition("shop", new ShopSelection(0), "after-buy")
+            .LeaveSimpleRoom("after-buy", SimpleRoomKind.Shop, "map");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult shop = coordinator.RunReset(Request());
+        EnvironmentResult afterBuy = await coordinator.StepAsync(card.ActionId);
+        EnvironmentResult map = await coordinator.StepAsync("leave_shop");
+
+        Assert.Same(card, shop.LegalActions[0]);
+        Assert.Equal([card.ActionId, "leave_shop"], shop.LegalActions.Select(action => action.ActionId));
+        Assert.Equal("leave_shop", Assert.Single(afterBuy.LegalActions).ActionId);
+        Assert.Equal("route", Assert.Single(map.LegalActions).ActionId);
+        Assert.Equal([new ShopSelection(0)], adapter.ShopSelections);
+        Assert.Equal([SimpleRoomKind.Shop], adapter.LeftSimpleRooms);
+        Assert.Equal(0, adapter.GenericApplyCount);
     }
 
     [Fact]
