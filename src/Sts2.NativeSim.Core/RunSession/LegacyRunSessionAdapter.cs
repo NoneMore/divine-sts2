@@ -13,6 +13,8 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public CompatibilityCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
     public CompatibilityCapture ResetRest(ResetRequest request) => Capture(_environment.RestReset(request));
+    public async Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
+        Capture(await _environment.EventResetAsync(request).ConfigureAwait(false));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
     public async Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
@@ -27,6 +29,10 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
         Capture(await _environment.BuyShopEntryAsync(selection).ConfigureAwait(false));
     public async Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
         Capture(await _environment.LeaveSimpleRoomAsync(room).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection) =>
+        Capture(await _environment.ChooseEventOptionAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> LeaveEventAsync() =>
+        Capture(await _environment.LeaveEventAsync().ConfigureAwait(false));
     public async Task<CompatibilityCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection) =>
@@ -60,7 +66,17 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
             includeRestore ? RestoreProjection(result.Transition) : null,
             _environment.ActivePromptParent(),
             _environment.HasActiveMapDecision ? MapActions(frame.LegalActions) : null,
-            SimpleRoom(frame.LegalActions));
+            SimpleRoom(frame.LegalActions),
+            Event: EventDecision(frame.LegalActions));
+    }
+
+    private EventDecisionMetadata? EventDecision(IReadOnlyList<LegalAction> actions)
+    {
+        EventDecisionMetadata? decision = _environment.ActiveEventDecision;
+        if (decision is null) return null;
+        return actions.Count == 0 || actions.All(action => action.Kind is "choose_event" or "leave_event")
+            ? decision
+            : null;
     }
 
     private SimpleRoomKind? SimpleRoom(IReadOnlyList<LegalAction> actions)

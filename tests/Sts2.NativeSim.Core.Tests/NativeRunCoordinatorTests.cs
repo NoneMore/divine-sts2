@@ -123,6 +123,7 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal(recipe.Encounter, actual.GetProperty("combat").GetProperty("encounter").GetString());
         Assert.Equal(recipe.ObservationSha256, observationHash);
         Assert.Matches("^[0-9A-F]{64}$", state.StateHash);
+        Assert.Equal(0, adapter.GenericApplyCount);
     }
 
     [Fact]
@@ -147,6 +148,48 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal([(1, 0)], adapter.EnteredMapPoints);
         Assert.Equal(0, adapter.GenericApplyCount);
         Assert.Equal(2, map.LegalActions.Count);
+    }
+
+    [Fact]
+    public async Task Event_choices_are_executed_by_the_semantic_native_port()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .EventFrame("event", """{"decision":{"kind":"event_choice"}}""",
+                Action("first", "choose_event", ("option_index", 0)),
+                Action("second", "choose_event", ("option_index", 1)))
+            .EventFrame("complete", """{"decision":{"kind":"event_complete"}}""",
+                Action("leave_event", "leave_event"))
+            .EventTransition("event", new(1), "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult before = coordinator.RunReset(Request());
+
+        EnvironmentResult after = await coordinator.StepAsync("second");
+
+        Assert.Equal(["first", "second"], before.LegalActions.Select(action => action.ActionId));
+        Assert.Equal("leave_event", Assert.Single(after.LegalActions).ActionId);
+        Assert.Equal(1, Assert.Single(adapter.EventSelections).OptionIndex);
+        Assert.Equal(0, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Standalone_event_reset_initializes_the_active_session()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .EventFrame("event", """{"event":{"model_id":"THE_ARCHITECT"},"decision":{"kind":"event_choice"}}""",
+                Action("choose", "choose_event", ("option_index", 0)))
+            .EventFrame("complete", """{"event":{"model_id":"THE_ARCHITECT"},"decision":{"kind":"event_complete"}}""",
+                Action("leave_event", "leave_event"))
+            .EventTransition("event", new(0), "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult reset = await coordinator.EventResetAsync(
+            new(Request() with { ResetMode = null }, "THE_ARCHITECT"));
+        EnvironmentResult observed = coordinator.Observe();
+        EnvironmentResult complete = await coordinator.StepAsync("choose");
+
+        Assert.Equal(reset.StateHash, observed.StateHash);
+        Assert.Equal("leave_event", Assert.Single(complete.LegalActions).ActionId);
+        Assert.Equal(0, adapter.GenericApplyCount);
     }
 
     [Fact]
@@ -348,8 +391,8 @@ public sealed class NativeRunCoordinatorTests
     public async Task Card_select_prompt_suspends_its_parent_until_the_typed_selection_resumes_it()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
-            .Frame("event", """{"decision":{"kind":"event"}}""",
-                Action("open-card-select", "choose_event"),
+            .EventFrame("event", """{"decision":{"kind":"event"}}""",
+                Action("open-card-select", "choose_event", ("option_index", 0)),
                 Action("leave-event", "leave_event"))
             .CardPrompt(
                 "card-select",
@@ -358,9 +401,9 @@ public sealed class NativeRunCoordinatorTests
                 optionIds: ["strike", "defend"],
                 minSelect: 1,
                 maxSelect: 1)
-            .Frame("event-resumed", """{"decision":{"kind":"event_complete"}}""",
+            .EventFrame("event-resumed", """{"decision":{"kind":"event_complete"}}""",
                 Action("leave-event", "leave_event"))
-            .Transition("event", "open-card-select", "card-select")
+            .EventTransition("event", new(0), "card-select")
             .ResumeCardPrompt("card-select", ["strike"], "event-resumed");
         NativeRunCoordinator coordinator = new(adapter);
         coordinator.RunReset(Request());
@@ -384,14 +427,14 @@ public sealed class NativeRunCoordinatorTests
     public async Task Nested_reward_prompt_resumes_the_reward_parent_it_suspended()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
-            .Frame("event", """{"decision":{"kind":"event"}}""",
-                Action("open-rewards", "choose_event"))
+            .EventFrame("event", """{"decision":{"kind":"event"}}""",
+                Action("open-rewards", "choose_event", ("option_index", 0)))
             .RewardPrompt("outer-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [0])
             .RewardPrompt("inner-reward", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [1])
             .RewardPrompt("outer-resumed", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [])
             .MapFrame("map", """{"decision":{"kind":"map"}}""",
                 MapAction("map-0-1", 0, 1, "Monster"))
-            .Transition("event", "open-rewards", "outer-reward")
+            .EventTransition("event", new(0), "outer-reward")
             .ResumeRewardPrompt("outer-reward", rewardIndex: 0, "inner-reward")
             .ResumeRewardParent("inner-reward", rewardIndex: 1, "outer-resumed")
             .SkipRewardPrompt("outer-resumed", "map");
@@ -462,12 +505,13 @@ public sealed class NativeRunCoordinatorTests
     public async Task Restoring_a_prompt_rebuilds_its_continuation_from_the_checkpoint_replay()
     {
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
-            .Frame("event", """{"decision":{"kind":"event"}}""", Action("open", "choose_event"))
+            .EventFrame("event", """{"decision":{"kind":"event"}}""",
+                Action("open", "choose_event", ("option_index", 0)))
             .CardPrompt("prompt", """{"decision":{"kind":"card_choice"}}""", "choice-0", ["map", "combat"], 1, 1)
             .MapFrame("map", """{"decision":{"kind":"map"}}""",
                 MapAction("route", 0, 1, "Monster"))
             .Frame("combat", """{"decision":{"kind":"combat"}}""", Action("play", "play_card"))
-            .Transition("event", "open", "prompt")
+            .EventTransition("event", new(0), "prompt")
             .ResumeCardPrompt("prompt", ["map"], "map")
             .ResumeCardPrompt("prompt", ["combat"], "combat");
         NativeRunCoordinator coordinator = new(adapter);
@@ -502,6 +546,30 @@ public sealed class NativeRunCoordinatorTests
 
         Assert.Same(option, Assert.Single(before.LegalActions));
         Assert.Equal("route", Assert.Single(after.LegalActions).ActionId);
+    }
+
+    [Fact]
+    public async Task Ancient_option_pick_replaces_the_event_until_the_nested_choice_resumes()
+    {
+        LegalAction option = Action("choose_option:choice-0:bundle-1", "choose_option",
+            ("choice_id", "choice-0"), ("option_ids", new[] { "bundle-1" }));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("event")
+            .EventFrame("event", """{"decision":{"kind":"event_choice"}}""",
+                Action("open-option", "choose_event", ("option_index", 0)))
+            .EventFrame("option", """{"decision":{"kind":"option_choice"}}""", option)
+            .EventFrame("complete", """{"decision":{"kind":"event_complete"}}""",
+                Action("leave_event", "leave_event"))
+            .EventTransition("event", new(0), "option")
+            .Transition("option", option.ActionId, "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        EnvironmentResult prompt = await coordinator.StepAsync("open-option");
+        EnvironmentResult complete = await coordinator.StepAsync(option.ActionId);
+
+        Assert.Same(option, Assert.Single(prompt.LegalActions));
+        Assert.Equal("leave_event", Assert.Single(complete.LegalActions).ActionId);
+        Assert.Equal([new EventSelection(0)], adapter.EventSelections);
     }
 
     [Fact]
@@ -560,7 +628,7 @@ public sealed class NativeRunCoordinatorTests
             .MapFrame("map", """
                 {"schema_version":3,"run":{"seed":"ANC1ENT01","act_variant":"OVERGROWTH"},"decision":{"kind":"map"}}
                 """, MapAction("ancient-door", 0, 0, "Ancient"))
-            .Frame("ancient", """
+            .EventFrame("ancient", """
                 {"schema_version":3,"decision":{"kind":"event"}}
                 """,
                 Action("ancient-choice-0", "choose_event", ("option_index", 0), ("relic_model_id", "BOOMING_CONCH")),
@@ -571,7 +639,7 @@ public sealed class NativeRunCoordinatorTests
                 """,
                 Action("nested-card-0", "choose_cards", ("option_ids", new[] { "generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD" })),
                 Action("nested-card-1", "choose_cards", ("option_ids", new[] { "generated-card-choice-0-2-DEFEND_IRONCLAD" })))
-            .Frame("complete", """
+            .EventFrame("complete", """
                 {"schema_version":3,"decision":{"kind":"event_complete"}}
                 """, Action("leave_event", "leave_event"))
             .MapFrame("route", """
@@ -581,12 +649,12 @@ public sealed class NativeRunCoordinatorTests
                 Action("map-0-1", "choose_map", ("col", 0), ("row", 1), ("point_type", "Monster")))
             .Frame("combat", recorded.Observation.GetRawText())
             .EnterMapPoint("map", col: 0, row: 0, pointType: "Ancient", to: "ancient")
-            .Transition("ancient", "ancient-choice-2", "nested")
+            .EventTransition("ancient", new(2), "nested")
             .ResumeCardPrompt(
                 "nested",
                 ["generated-card-choice-0-0-STRIKE_IRONCLAD", "generated-card-choice-0-1-STRIKE_IRONCLAD"],
                 "complete")
-            .Transition("complete", "leave_event", "route")
+            .LeaveEvent("complete", "route")
             .EnterMapPoint("route", col: 0, row: 1, pointType: "Monster", to: "combat");
     }
 

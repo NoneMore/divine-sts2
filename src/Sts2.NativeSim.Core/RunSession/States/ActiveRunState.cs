@@ -183,6 +183,37 @@ internal sealed class ShopDecisionState : SimpleRoomDecisionState
             }) { }
 }
 
+/// <summary>An Ancient or ordinary event projection paired with its semantic executors.</summary>
+internal sealed class EventDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public EventDecisionState(
+        DecisionFrame frame,
+        Func<EventSelection, Task<ActiveRunState>> choose,
+        Func<Task<ActiveRunState>> leave) : base(frame)
+    {
+        _executors = frame.LegalActions.ToDictionary(
+            action => action.ActionId,
+            action => action.Kind switch
+            {
+                "choose_event" => (Func<Task<ActiveRunState>>)(() =>
+                    choose(new(Convert.ToInt32(action.Parameters["option_index"])))),
+                "leave_event" => leave,
+                _ => throw new ProtocolException(
+                    "protocol_desync",
+                    $"Event projection advertised non-event action '{action.Kind}'.")
+            },
+            StringComparer.Ordinal);
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
 /// <summary>The sole active state while the shipped game is waiting for cards.</summary>
 internal sealed class CardSelectPromptState(
     DecisionFrame frame,
@@ -265,6 +296,8 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
                 frame,
                 new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
         }
+        if (capture.Event is not null)
+            return new EventDecisionState(frame, ChooseEventAsync, LeaveEventAsync);
         return new NativeDecisionState(frame, ContinueAsync);
     }
 
@@ -288,6 +321,12 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 
     private async Task<ActiveRunState> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
         Create(await adapter.LeaveSimpleRoomAsync(room).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> ChooseEventAsync(EventSelection selection) =>
+        Create(await adapter.ChooseEventAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> LeaveEventAsync() =>
+        Create(await adapter.LeaveEventAsync().ConfigureAwait(false));
 
     private static bool IsCardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0

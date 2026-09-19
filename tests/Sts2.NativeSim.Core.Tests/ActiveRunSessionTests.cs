@@ -85,6 +85,8 @@ public sealed class ActiveRunSessionTests
         public CompatibilityCapture Reset(ResetRequest request) => new(_current);
         public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
         public CompatibilityCapture ResetRest(ResetRequest request) => Reset(request);
+        public Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
+            Task.FromResult(Reset(request.State));
         public object CaptureCheckpoint() => "checkpoint";
 
         public async Task<CompatibilityCapture> ApplyAsync(string actionId)
@@ -125,6 +127,11 @@ public sealed class ActiveRunSessionTests
 
         public Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
             ApplyAsync($"leave_{room.ToString().ToLowerInvariant()}");
+
+        public Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection) =>
+            ApplyAsync($"choose_event:{selection.OptionIndex}");
+
+        public Task<CompatibilityCapture> LeaveEventAsync() => ApplyAsync("leave_event");
 
         public Task<CompatibilityCapture> ResumeRewardAsync(
             PromptResumeToken parent,

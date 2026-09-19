@@ -213,7 +213,7 @@ public partial class Main : Node
                     "item_reward_reset" => environment.ItemRewardReset(Read<ItemRewardResetRequest>(request.Parameters)),
                     "custom_reward_reset" => await environment.CustomRewardResetAsync(Read<CustomRewardResetRequest>(request.Parameters)),
                     "rest_reset" => environment.RestReset(Read<ResetRequest>(request.Parameters)),
-                    "event_reset" => await environment.EventResetAsync(Read<EventResetRequest>(request.Parameters)),
+                    "event_reset" => await runCoordinator.EventResetAsync(Read<EventResetRequest>(request.Parameters)),
                     "observe" => runCoordinator.Observe(),
                     "run_observe" => runCoordinator.Observe(),
                     "map_observe" => runCoordinator.Observe(),

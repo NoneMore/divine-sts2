@@ -12,6 +12,7 @@ internal interface IRunSessionCompatibilityAdapter
     CompatibilityCapture Reset(ResetRequest request);
     CompatibilityCapture ResetMap(ResetRequest request);
     CompatibilityCapture ResetRest(ResetRequest request);
+    Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
     Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection);
     Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection);
@@ -19,6 +20,8 @@ internal interface IRunSessionCompatibilityAdapter
     Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection);
     Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection);
     Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room);
+    Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection);
+    Task<CompatibilityCapture> LeaveEventAsync();
     Task<CompatibilityCapture> ResumeCardSelectAsync(PromptResumeToken parent, CardSelection selection);
     Task<CompatibilityCapture> ResumeRewardAsync(PromptResumeToken parent, RewardSelection selection);
     object CaptureCheckpoint();
@@ -30,7 +33,8 @@ internal sealed record CompatibilityCapture(
     CompatibilityRestore? Restore = null,
     PromptResumeToken? PromptParent = null,
     IReadOnlyDictionary<string, MapPointSelection>? MapActions = null,
-    SimpleRoomKind? SimpleRoom = null);
+    SimpleRoomKind? SimpleRoom = null,
+    EventDecisionMetadata? Event = null);
 
 internal sealed record CompatibilityRestore(
     string Kind,

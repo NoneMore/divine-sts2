@@ -291,12 +291,10 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else if (action.Kind == "discard_potion") await StartTransitionAsync(() => DiscardPotionAsync(Convert.ToInt32(action.Parameters["slot"])));
         else if (action.Kind is "choose_cards" or "choose_option") await ResumeChoiceAsync((string[])action.Parameters["option_ids"]!);
         else if (action.Kind == "choose_reward") await ChooseRewardAsync(Convert.ToInt32(action.Parameters["option_index"]));
-        else if (action.Kind == "choose_event") await ChooseEventAsync(Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "generate_room_rewards") await GenerateRoomRewardsAsync();
         else if (action.Kind == "choose_room_reward") await ChooseRoomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "leave_room_rewards") await LeaveRoomRewardsAsync();
         else if (action.Kind == "advance_act") await AdvanceActAsync();
-        else if (action.Kind == "leave_event") await LeaveCurrentRunRoomAsync("event");
         else if (action.Kind == "choose_custom_reward") await ChooseCustomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["child_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "skip_custom_rewards") await SkipCustomRewardsAsync();
         else throw new ProtocolException("unsupported_action", action.Kind);
@@ -313,6 +311,37 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
                 : _runMode && _runStage == "shop"
                     ? SimpleRoomKind.Shop
                     : null;
+
+    internal EventDecisionMetadata? ActiveEventDecision =>
+        (_runMode && _runStage == "event") || _eventMode
+            ? new(_eventId)
+            : null;
+
+    internal async Task<EnvironmentResult> ChooseEventOptionAsync(
+        EventSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            candidate.Kind == "choose_event"
+            && Convert.ToInt32(candidate.Parameters["option_index"]) == selection.OptionIndex)
+            ?? throw new ProtocolException("invalid_action", "The selected event option is not legal in the active event decision.");
+        _lastActionId = action.ActionId;
+        await ChooseEventAsync(selection.OptionIndex).ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> LeaveEventAsync(bool record = true)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate => candidate.Kind == "leave_event")
+            ?? throw new ProtocolException("invalid_action", "The active event cannot be left.");
+        _lastActionId = action.ActionId;
+        await LeaveCurrentRunRoomAsync("event").ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
 
     internal async Task<EnvironmentResult> EnterMapPointAsync(
         MapPointSelection selection,
@@ -606,6 +635,16 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             else if (action.Kind == "leave_shop")
             {
                 await LeaveSimpleRoomAsync(SimpleRoomKind.Shop, record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "choose_event")
+            {
+                await ChooseEventOptionAsync(
+                    new(Convert.ToInt32(action.Parameters["option_index"])),
+                    record: false).ConfigureAwait(false);
+            }
+            else if (action.Kind == "leave_event")
+            {
+                await LeaveEventAsync(record: false).ConfigureAwait(false);
             }
             else
             {

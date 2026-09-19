@@ -15,6 +15,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     private readonly Dictionary<(string Frame, int? OptionIndex), string> _treasureTransitions = new();
     private readonly Dictionary<(string Frame, int EntryIndex), string> _shopTransitions = new();
     private readonly Dictionary<(string Frame, SimpleRoomKind Room), string> _leaveSimpleRoomTransitions = new();
+    private readonly Dictionary<(string Frame, int OptionIndex), string> _eventTransitions = new();
+    private readonly Dictionary<string, string> _leaveEventTransitions = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
     private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), ScriptedRewardTransition> _rewardTransitions = new();
     private readonly Stack<object> _suspendedRewardParents = new();
@@ -44,11 +46,26 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public List<TreasureSelection> TreasureSelections { get; } = [];
     public List<ShopSelection> ShopSelections { get; } = [];
     public List<SimpleRoomKind> LeftSimpleRooms { get; } = [];
+    public List<EventSelection> EventSelections { get; } = [];
+    public int LeaveEventCount { get; private set; }
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
         using JsonDocument document = JsonDocument.Parse(observation);
         _frames.Add(name, new(document.RootElement.Clone(), Kernel(name), actions, false, false));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter EventFrame(string name, string observation, params LegalAction[] actions)
+    {
+        using JsonDocument document = JsonDocument.Parse(observation);
+        _frames.Add(name, new(
+            document.RootElement.Clone(),
+            Kernel(name),
+            actions,
+            false,
+            false,
+            Event: new(name)));
         return this;
     }
 
@@ -131,6 +148,18 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public ScriptedNativeRunAdapter LeaveSimpleRoom(string from, SimpleRoomKind room, string to)
     {
         _leaveSimpleRoomTransitions.Add((from, room), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter EventTransition(string from, EventSelection selection, string to)
+    {
+        _eventTransitions.Add((from, selection.OptionIndex), to);
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter LeaveEvent(string from, string to)
+    {
+        _leaveEventTransitions.Add(from, to);
         return this;
     }
 
@@ -239,6 +268,12 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return Reset();
     }
 
+    public Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request)
+    {
+        ValidateResetMode(request.State, ResetModes.Combat);
+        return Task.FromResult(Reset());
+    }
+
     private CompatibilityCapture Reset()
     {
         _currentFrame = _resetFrame;
@@ -326,6 +361,22 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync($"leave_{room.ToString().ToLowerInvariant()}", nextFrame);
     }
 
+    public Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection)
+    {
+        EventSelections.Add(selection);
+        string nextFrame = _eventTransitions[(_currentFrame, selection.OptionIndex)];
+        string actionId = _frames[_currentFrame].Actions.Single(action =>
+            action.Kind == "choose_event"
+            && Convert.ToInt32(action.Parameters["option_index"]) == selection.OptionIndex).ActionId;
+        return ApplyTransitionAsync(actionId, nextFrame);
+    }
+
+    public Task<CompatibilityCapture> LeaveEventAsync()
+    {
+        LeaveEventCount++;
+        return ApplyTransitionAsync("leave_event", _leaveEventTransitions[_currentFrame]);
+    }
+
     public Task<CompatibilityCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection)
@@ -398,8 +449,15 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
             new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null),
             PromptParent: prompt ? new(_promptMarker) : null,
             MapActions: frame.IsMap ? MapActions(frame.Actions) : null,
-            SimpleRoom: prompt ? null : frame.SimpleRoom);
+            SimpleRoom: prompt ? null : frame.SimpleRoom,
+            Event: EventDecision(frame));
     }
+
+    private static EventDecisionMetadata? EventDecision(ScriptedFrame frame) =>
+        frame.Event is not null
+        && (frame.Actions.Count == 0 || frame.Actions.All(action => action.Kind is "choose_event" or "leave_event"))
+            ? frame.Event
+            : null;
 
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(IReadOnlyList<LegalAction> actions) =>
         actions.ToDictionary(
@@ -464,7 +522,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         bool Terminated,
         bool Victory,
         bool IsMap = false,
-        SimpleRoomKind? SimpleRoom = null);
+        SimpleRoomKind? SimpleRoom = null,
+        EventDecisionMetadata? Event = null);
 
     private sealed record ScriptedRewardTransition(string Frame, bool ResumeParent);
 }

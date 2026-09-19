@@ -45,6 +45,31 @@ public sealed class NativeRunCoordinator
         return Reset(request, _adapter.ResetRest, ResetModes.Combat, "rest_reset");
     }
 
+    public async Task<EnvironmentResult> EventResetAsync(EventResetRequest request)
+    {
+        await _serial.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            CompatibilityCapture initial = await _adapter.ResetEventAsync(request).ConfigureAwait(false);
+            _session = new(_adapter, initial);
+            _reset = request.State with { ResetMode = ResetModes.Combat };
+            _branches.Clear();
+            _branchOrder.Clear();
+            _history.Clear();
+            _currentBranchHandle = null;
+            return Project(initial.Frame, new
+            {
+                kind = "event_reset",
+                event_id = request.EventId,
+                replayed_actions = 0
+            });
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
+
     private EnvironmentResult Reset(
         ResetRequest request,
         Func<ResetRequest, CompatibilityCapture> reset,
