@@ -162,13 +162,31 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 
     public CompatibilityCapture Reset(ResetRequest request)
     {
+        ValidateResetMode(request, ResetModes.Run);
+        return Reset();
+    }
+
+    public CompatibilityCapture ResetMap(ResetRequest request)
+    {
+        ValidateResetMode(request, ResetModes.Combat);
+        return Reset();
+    }
+
+    private CompatibilityCapture Reset()
+    {
         _currentFrame = _resetFrame;
         _promptMarker = new();
         _suspendedRewardParents.Clear();
         return Capture();
     }
 
-    public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
+    private static void ValidateResetMode(ResetRequest request, string expected)
+    {
+        if (request.ResetMode is not null && !StringComparer.Ordinal.Equals(request.ResetMode, expected))
+            throw new ProtocolException(
+                "invalid_reset",
+                $"A '{expected}' reset was asked for with reset_mode '{request.ResetMode}'.");
+    }
 
     public CompatibilityCapture Capture()
     {

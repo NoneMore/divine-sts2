@@ -167,6 +167,18 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal([(0, 1)], adapter.EnteredMapPoints);
     }
 
+    [Fact]
+    public void Standalone_map_reset_rejects_an_explicit_run_mode()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("map")
+            .MapFrame("map", """{"decision":{"kind":"map_choice"}}""");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        ProtocolException error = Assert.Throws<ProtocolException>(() => coordinator.MapReset(Request()));
+
+        Assert.Equal("invalid_reset", error.Code);
+    }
+
     [Theory]
     [InlineData("Ancient", "event")]
     [InlineData("Monster", "combat")]

@@ -26,5 +26,5 @@ Both run resets and standalone `map_reset` now initialize the same active-sessio
 map observe, step, fork and restore. Offline seam tests cover projection/executor pairing, semantic
 port execution, every supported map point type, standalone reset and the checked-in Generated
 scenario replay. Shipped-game acceptance covers the full 17-point standalone map path, all 111
-Ancient choices across 37 seeds, and the recorded Ancient-to-first-combat samples without changing
+Ancient choices across 37 seeds, and the recorded Generated scenario replays without changing
 their hashes, floor bookkeeping, encounters or RNG results.
