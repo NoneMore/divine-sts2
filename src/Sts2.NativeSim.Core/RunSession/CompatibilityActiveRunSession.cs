@@ -11,15 +11,16 @@ internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
-    Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection);
-    Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection);
+    Task<CompatibilityCapture> ResumeCardSelectAsync(PromptResumeToken parent, CardSelection selection);
+    Task<CompatibilityCapture> ResumeRewardAsync(PromptResumeToken parent, RewardSelection selection);
     object CaptureCheckpoint();
     Task<CompatibilityCapture> RestoreAsync(object checkpoint);
 }
 
 internal sealed record CompatibilityCapture(
     DecisionFrame Frame,
-    CompatibilityRestore? Restore = null);
+    CompatibilityRestore? Restore = null,
+    PromptResumeToken? PromptParent = null);
 
 internal sealed record CompatibilityRestore(
     string Kind,

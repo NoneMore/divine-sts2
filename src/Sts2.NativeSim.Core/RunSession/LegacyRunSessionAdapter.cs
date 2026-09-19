@@ -13,10 +13,14 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection) =>
-        Capture(await _environment.StepAsync(selection.ActionId).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection) =>
-        Capture(await _environment.StepAsync(selection.ActionId).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ResumeCardSelectAsync(
+        PromptResumeToken parent,
+        CardSelection selection) =>
+        Capture(await _environment.ResumeCardSelectAsync(parent, selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ResumeRewardAsync(
+        PromptResumeToken parent,
+        RewardSelection selection) =>
+        Capture(await _environment.ResumeRewardAsync(parent, selection).ConfigureAwait(false));
     public object CaptureCheckpoint() => _environment.Fork();
     public async Task<CompatibilityCapture> RestoreAsync(object checkpoint) =>
         Capture(
@@ -37,7 +41,10 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
             throw new ProtocolException(
                 "protocol_desync",
                 $"The compatibility frame projected hash {projectedHash}, but the legacy state reported {result.StateHash}.");
-        return new(frame, includeRestore ? RestoreProjection(result.Transition) : null);
+        return new(
+            frame,
+            includeRestore ? RestoreProjection(result.Transition) : null,
+            _environment.ActivePromptParent());
     }
 
     private static CompatibilityRestore RestoreProjection(object? transition)

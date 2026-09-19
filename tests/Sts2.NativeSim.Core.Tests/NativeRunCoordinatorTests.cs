@@ -195,7 +195,7 @@ public sealed class NativeRunCoordinatorTests
             .Frame("map", """{"decision":{"kind":"map"}}""", Action("map-0-1", "choose_map"))
             .Transition("event", "open-rewards", "outer-reward")
             .ResumeRewardPrompt("outer-reward", rewardIndex: 0, "inner-reward")
-            .ResumeRewardPrompt("inner-reward", rewardIndex: 1, "outer-resumed")
+            .ResumeRewardParent("inner-reward", rewardIndex: 1, "outer-resumed")
             .SkipRewardPrompt("outer-resumed", "map");
         NativeRunCoordinator coordinator = new(adapter);
         coordinator.RunReset(Request());
@@ -219,6 +219,9 @@ public sealed class NativeRunCoordinatorTests
             selection => Assert.Equal(0, selection.RewardIndex),
             selection => Assert.Equal(1, selection.RewardIndex),
             selection => Assert.Null(selection.RewardIndex));
+        Assert.Equal(3, adapter.RewardResumeTokens.Count);
+        Assert.NotSame(adapter.RewardResumeTokens[0].Marker, adapter.RewardResumeTokens[1].Marker);
+        Assert.Same(adapter.RewardResumeTokens[0].Marker, adapter.RewardResumeTokens[2].Marker);
     }
 
     [Fact]
@@ -278,6 +281,8 @@ public sealed class NativeRunCoordinatorTests
 
         Assert.Equal("play", Assert.Single(combat.LegalActions).ActionId);
         Assert.Equal(1, JsonSerializer.SerializeToElement(restored.Transition).GetProperty("replayed_actions").GetInt32());
+        Assert.Equal(2, adapter.CardResumeTokens.Count);
+        Assert.NotSame(adapter.CardResumeTokens[0], adapter.CardResumeTokens[1]);
     }
 
     [Fact]

@@ -28,6 +28,12 @@ The prompt continuation captures a `SuspendedNativeDecision` and resumes it thro
 The scripted adapter routes on the typed payload and records it for seam assertions; prompt
 resolution does not fall back to the ordinary `ApplyAsync(actionId)` path.
 
+Each suspended decision also carries an opaque, in-memory `PromptResumeToken` for its exact native
+parent. The production adapter validates that token and dispatches the typed selection directly to
+the native choice/reward continuation; the action id is retained only as the existing history and
+transition identity. Nested rewards restore the enclosing parent's original marker after the inner
+prompt resolves. Replay builds fresh marker objects, so no continuation identity enters a checkpoint.
+
 Native tasks, selectors, reflected objects, and completion sources remain behind
 `LegacyRunSessionAdapter` in `PersistentNativeCombatEnvironment`; none enter the active-state model.
 Coordinator checkpoints still contain only the adapter's opaque recipe/history checkpoint. Restore

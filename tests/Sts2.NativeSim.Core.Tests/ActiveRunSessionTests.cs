@@ -102,10 +102,14 @@ public sealed class ActiveRunSessionTests
             }
         }
 
-        public Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection) =>
+        public Task<CompatibilityCapture> ResumeCardSelectAsync(
+            PromptResumeToken parent,
+            CardSelection selection) =>
             ApplyAsync(selection.ActionId);
 
-        public Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection) =>
+        public Task<CompatibilityCapture> ResumeRewardAsync(
+            PromptResumeToken parent,
+            RewardSelection selection) =>
             ApplyAsync(selection.ActionId);
 
         public Task<CompatibilityCapture> RestoreAsync(object checkpoint)

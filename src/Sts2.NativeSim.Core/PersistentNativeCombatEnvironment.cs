@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Sts2.NativeSim.Core.RunSession;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core;
@@ -312,14 +313,99 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         else if (action.Kind == "choose_custom_reward") await ChooseCustomRewardAsync(Convert.ToInt32(action.Parameters["reward_index"]), Convert.ToInt32(action.Parameters["child_index"]), Convert.ToInt32(action.Parameters["option_index"]));
         else if (action.Kind == "skip_custom_rewards") await SkipCustomRewardsAsync();
         else throw new ProtocolException("unsupported_action", action.Kind);
-        if (record) _history.Add(actionId);
+        return FinishStep(action, timer, record);
+    }
+
+    internal PromptResumeToken? ActivePromptParent()
+    {
+        if (_pendingChoice is { ActionKind: "choose_cards" } choice)
+            return new(choice.ResumeMarker);
+        return CurrentRewardSet is { } reward ? new(reward.ResumeMarker) : null;
+    }
+
+    internal async Task<EnvironmentResult> ResumeCardSelectAsync(
+        PromptResumeToken parent,
+        CardSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        ValidatePromptParent(parent);
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate =>
+            candidate.Kind == "choose_cards"
+            && candidate.Parameters.TryGetValue("option_ids", out object? value)
+            && value is string[] optionIds
+            && optionIds.SequenceEqual(selection.OptionIds, StringComparer.Ordinal))
+            ?? throw new ProtocolException("invalid_action", "The selected cards are not legal in the active prompt.");
+        if (!StringComparer.Ordinal.Equals(action.ActionId, selection.ActionId))
+            throw new ProtocolException("invalid_action", "The Card-select action id does not match its typed selection.");
+        _lastActionId = action.ActionId;
+        await ResumeChoiceAsync(selection.OptionIds.ToArray()).ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
+    internal async Task<EnvironmentResult> ResumeRewardAsync(
+        PromptResumeToken parent,
+        RewardSelection selection,
+        bool record = true)
+    {
+        ThrowIfPoisoned();
+        ValidatePromptParent(parent);
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(candidate => RewardMatches(candidate, selection))
+            ?? throw new ProtocolException("invalid_action", "The selected reward is not legal in the active prompt.");
+        if (!StringComparer.Ordinal.Equals(action.ActionId, selection.ActionId))
+            throw new ProtocolException("invalid_action", "The reward action id does not match its typed selection.");
+        _lastActionId = action.ActionId;
+        if (selection.RewardIndex is { } rewardIndex)
+        {
+            await ChooseCustomRewardAsync(
+                rewardIndex,
+                selection.ChildIndex ?? throw new ProtocolException("invalid_action", "A reward selection has no child index."),
+                selection.OptionIndex ?? throw new ProtocolException("invalid_action", "A reward selection has no option index.")).ConfigureAwait(false);
+        }
+        else
+        {
+            await SkipCustomRewardsAsync().ConfigureAwait(false);
+        }
+        return FinishStep(action, timer, record);
+    }
+
+    private void ValidatePromptParent(PromptResumeToken parent)
+    {
+        PromptResumeToken active = ActivePromptParent()
+            ?? throw new ProtocolException("no_choice", "No native prompt is outstanding.");
+        if (!ReferenceEquals(active.Marker, parent.Marker))
+            throw new ProtocolException("stale_continuation", "The prompt continuation does not belong to the active native parent.");
+    }
+
+    private static bool RewardMatches(LegalAction action, RewardSelection selection)
+    {
+        if (selection.RewardIndex is null) return action.Kind == "skip_custom_rewards";
+        return action.Kind == "choose_custom_reward"
+            && action.Parameters.TryGetValue("reward_index", out object? reward)
+            && Convert.ToInt32(reward) == selection.RewardIndex
+            && action.Parameters.TryGetValue("child_index", out object? child)
+            && Convert.ToInt32(child) == selection.ChildIndex
+            && action.Parameters.TryGetValue("option_index", out object? option)
+            && Convert.ToInt32(option) == selection.OptionIndex;
+    }
+
+    private EnvironmentResult FinishStep(LegalAction action, Stopwatch timer, bool record)
+    {
+        if (record) _history.Add(action.ActionId);
         timer.Stop();
-        // Capture consumes _lastActionId as the transition edge label.  Clear it
-        // immediately after so that a subsequent Observe() or Fork() cannot
-        // replay the same edge and spawn a redundant child branch node.
+        // Capture consumes _lastActionId as the transition edge label. Clear it immediately after
+        // so that a subsequent Observe() or Fork() cannot replay the same edge.
         try
         {
-            return Capture(new { kind = action.Kind, action_id = actionId, elapsed_ms = timer.Elapsed.TotalMilliseconds, history_length = _history.Count });
+            return Capture(new
+            {
+                kind = action.Kind,
+                action_id = action.ActionId,
+                elapsed_ms = timer.Elapsed.TotalMilliseconds,
+                history_length = _history.Count
+            });
         }
         finally
         {
@@ -3476,6 +3562,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     /// </summary>
     private sealed class PendingRewardSet
     {
+        public object ResumeMarker { get; } = new();
         public required object Set { get; init; }
         /// <summary>
         /// The task the run was suspended on when this set became the decision: the transition
@@ -3499,6 +3586,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         Action cancel,
         string provenance = "")
     {
+        public object ResumeMarker { get; } = new();
         public string ChoiceId { get; } = choiceId;
         public string DecisionKind { get; } = decisionKind;
         public string ActionKind { get; } = actionKind;

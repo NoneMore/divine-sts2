@@ -10,11 +10,13 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
     private readonly Dictionary<(string Frame, string Selection), string> _cardTransitions = new();
-    private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), string> _rewardTransitions = new();
+    private readonly Dictionary<(string Frame, int? RewardIndex, int? ChildIndex, int? OptionIndex), ScriptedRewardTransition> _rewardTransitions = new();
+    private readonly Stack<object> _suspendedRewardParents = new();
     private readonly HashSet<(string Frame, string Action)> _errorsAfterMutation = [];
     private readonly Dictionary<string, string> _branches = new(StringComparer.Ordinal);
     private readonly string _resetFrame;
     private string _currentFrame;
+    private object _promptMarker = new();
     private int _checkpointOrdinal;
 
     public ScriptedNativeRunAdapter(string resetFrame)
@@ -27,6 +29,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public TimeSpan ApplyDelay { get; init; }
     public List<CardSelection> CardSelections { get; } = [];
     public List<RewardSelection> RewardSelections { get; } = [];
+    public List<PromptResumeToken> CardResumeTokens { get; } = [];
+    public List<PromptResumeToken> RewardResumeTokens { get; } = [];
 
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
@@ -113,13 +117,19 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
 
     public ScriptedNativeRunAdapter ResumeRewardPrompt(string prompt, int rewardIndex, string to)
     {
-        _rewardTransitions.Add((prompt, rewardIndex, -1, 0), to);
+        _rewardTransitions.Add((prompt, rewardIndex, -1, 0), new(to, ResumeParent: false));
+        return this;
+    }
+
+    public ScriptedNativeRunAdapter ResumeRewardParent(string prompt, int rewardIndex, string to)
+    {
+        _rewardTransitions.Add((prompt, rewardIndex, -1, 0), new(to, ResumeParent: true));
         return this;
     }
 
     public ScriptedNativeRunAdapter SkipRewardPrompt(string prompt, string to)
     {
-        _rewardTransitions.Add((prompt, null, null, null), to);
+        _rewardTransitions.Add((prompt, null, null, null), new(to, ResumeParent: false));
         return this;
     }
 
@@ -132,6 +142,8 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public CompatibilityCapture Reset(ResetRequest request)
     {
         _currentFrame = _resetFrame;
+        _promptMarker = new();
+        _suspendedRewardParents.Clear();
         return Capture();
     }
 
@@ -147,29 +159,50 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return await ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> ResumeCardSelectAsync(CardSelection selection)
+    public Task<CompatibilityCapture> ResumeCardSelectAsync(
+        PromptResumeToken parent,
+        CardSelection selection)
     {
+        ValidateParent(parent);
+        CardResumeTokens.Add(parent);
         CardSelections.Add(selection);
         string nextFrame = _cardTransitions[(_currentFrame, SelectionKey(selection.OptionIds))];
         return ApplyTransitionAsync(selection.ActionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> ResumeRewardAsync(RewardSelection selection)
+    public Task<CompatibilityCapture> ResumeRewardAsync(
+        PromptResumeToken parent,
+        RewardSelection selection)
     {
+        ValidateParent(parent);
+        RewardResumeTokens.Add(parent);
         RewardSelections.Add(selection);
-        string nextFrame = _rewardTransitions[
+        ScriptedRewardTransition transition = _rewardTransitions[
             (_currentFrame, selection.RewardIndex, selection.ChildIndex, selection.OptionIndex)];
-        return ApplyTransitionAsync(selection.ActionId, nextFrame);
+        object? nextParent = null;
+        if (transition.ResumeParent)
+        {
+            nextParent = _suspendedRewardParents.Pop();
+        }
+        else if (IsRewardPrompt(_frames[transition.Frame]))
+        {
+            _suspendedRewardParents.Push(_promptMarker);
+        }
+        return ApplyTransitionAsync(selection.ActionId, transition.Frame, nextParent);
     }
 
-    private async Task<CompatibilityCapture> ApplyTransitionAsync(string actionId, string nextFrame)
+    private async Task<CompatibilityCapture> ApplyTransitionAsync(
+        string actionId,
+        string nextFrame,
+        object? nextPromptMarker = null)
     {
         if (ApplyDelay > TimeSpan.Zero) await Task.Delay(ApplyDelay);
         ScriptedFrame next = _frames[nextFrame];
-        CompatibilityCapture result = Result(next);
-        MutationCount++;
         string previousFrame = _currentFrame;
         _currentFrame = nextFrame;
+        _promptMarker = nextPromptMarker ?? new();
+        CompatibilityCapture result = Result(next);
+        MutationCount++;
         if (_errorsAfterMutation.Contains((previousFrame, actionId)))
             throw new ProtocolException("scripted_native_error", "The scripted native adapter failed after mutation.");
         return result;
@@ -185,11 +218,29 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
     {
         _currentFrame = _branches[(string)checkpoint];
+        _promptMarker = new();
         return Task.FromResult(Capture());
     }
 
-    private static CompatibilityCapture Result(ScriptedFrame frame) => new(
-        new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null));
+    private CompatibilityCapture Result(ScriptedFrame frame)
+    {
+        bool prompt = frame.Actions.Count > 0 && frame.Actions.All(action =>
+            action.Kind == "choose_cards"
+            || action.Kind is "choose_custom_reward" or "skip_custom_rewards");
+        return new(
+            new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null),
+            PromptParent: prompt ? new(_promptMarker) : null);
+    }
+
+    private static bool IsRewardPrompt(ScriptedFrame frame) =>
+        frame.Actions.Count > 0
+        && frame.Actions.All(action => action.Kind is "choose_custom_reward" or "skip_custom_rewards");
+
+    private void ValidateParent(PromptResumeToken parent)
+    {
+        if (!ReferenceEquals(parent.Marker, _promptMarker))
+            throw new ProtocolException("stale_continuation", "The scripted prompt parent is no longer active.");
+    }
 
     private static object Kernel(string frame) => new
     {
@@ -237,4 +288,6 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         IReadOnlyList<LegalAction> Actions,
         bool Terminated,
         bool Victory);
+
+    private sealed record ScriptedRewardTransition(string Frame, bool ResumeParent);
 }

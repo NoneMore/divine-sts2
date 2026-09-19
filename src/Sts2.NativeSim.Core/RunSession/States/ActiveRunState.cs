@@ -114,15 +114,20 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     public ActiveRunState Create(CompatibilityCapture capture)
     {
         DecisionFrame frame = capture.Frame;
-        SuspendedNativeDecision parent = new(adapter, this);
         if (IsCardPrompt(frame))
+        {
+            SuspendedNativeDecision parent = Parent(capture);
             return new CardSelectPromptState(
                 frame,
                 new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
+        }
         if (IsRewardPrompt(frame))
+        {
+            SuspendedNativeDecision parent = Parent(capture);
             return new RewardPromptState(
                 frame,
                 new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
+        }
         return new NativeDecisionState(frame, ContinueAsync);
     }
 
@@ -136,6 +141,14 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     private static bool IsRewardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0
         && frame.LegalActions.All(action => PromptActionKind.IsReward(action.Kind));
+
+    private SuspendedNativeDecision Parent(CompatibilityCapture capture) => new(
+        adapter,
+        this,
+        capture.PromptParent
+            ?? throw new ProtocolException(
+                "protocol_desync",
+                "The native adapter exposed a prompt without its suspended-parent token."));
 }
 
 /// <summary>
@@ -144,13 +157,14 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 /// </summary>
 internal sealed class SuspendedNativeDecision(
     IRunSessionCompatibilityAdapter adapter,
-    ActiveRunStateFactory states)
+    ActiveRunStateFactory states,
+    PromptResumeToken parent)
 {
     public async Task<ActiveRunState> ResumeAsync(CardSelection selection) =>
-        states.Create(await adapter.ResumeCardSelectAsync(selection).ConfigureAwait(false));
+        states.Create(await adapter.ResumeCardSelectAsync(parent, selection).ConfigureAwait(false));
 
     public async Task<ActiveRunState> ResumeAsync(RewardSelection selection) =>
-        states.Create(await adapter.ResumeRewardAsync(selection).ConfigureAwait(false));
+        states.Create(await adapter.ResumeRewardAsync(parent, selection).ConfigureAwait(false));
 }
 
 internal static class PromptActionKind
