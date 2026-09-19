@@ -71,13 +71,7 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
     }
 
     private EventDecisionMetadata? EventDecision(IReadOnlyList<LegalAction> actions)
-    {
-        EventDecisionMetadata? decision = _environment.ActiveEventDecision;
-        if (decision is null) return null;
-        return actions.Count == 0 || actions.All(action => action.Kind is "choose_event" or "leave_event")
-            ? decision
-            : null;
-    }
+        => EventDecisionMetadata.ForActions(_environment.ActiveEventDecision, actions);
 
     private SimpleRoomKind? SimpleRoom(IReadOnlyList<LegalAction> actions)
     {

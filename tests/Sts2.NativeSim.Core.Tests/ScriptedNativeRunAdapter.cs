@@ -454,10 +454,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
     }
 
     private static EventDecisionMetadata? EventDecision(ScriptedFrame frame) =>
-        frame.Event is not null
-        && (frame.Actions.Count == 0 || frame.Actions.All(action => action.Kind is "choose_event" or "leave_event"))
-            ? frame.Event
-            : null;
+        EventDecisionMetadata.ForActions(frame.Event, frame.Actions);
 
     private static IReadOnlyDictionary<string, MapPointSelection> MapActions(IReadOnlyList<LegalAction> actions) =>
         actions.ToDictionary(
