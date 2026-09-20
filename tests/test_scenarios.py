@@ -48,11 +48,13 @@ from sts2_native_sim.scenarios import (
     SCENARIO_RECORD,
     SUMMARY_FILE,
     RunWorker,
+    ScenarioMaterializationError,
     ScenarioRequest,
     ScenarioRequestError,
     encode_row,
     generate_corpus,
     generate_rows,
+    materialize_scenario,
     read_corpus,
     summarize_rows,
 )
@@ -164,7 +166,8 @@ class FakeRunWorker:
         # event back completed. A choice that opens none completes immediately.
         target = self._patched("run_event_complete")
         for nested in reversed(self.nested):
-            self._routes[nested["decision"]["legal_actions"][0]["action_id"]] = target
+            for action in nested["decision"]["legal_actions"]:
+                self._routes[action["action_id"]] = target
             target = nested
         # Every takeable choice is routeable: the generator takes each of them in turn.
         for index, relic in self._choice_indices().items():
@@ -174,9 +177,8 @@ class FakeRunWorker:
                 )
         self._routes["leave_event"] = self._patched(self.leave)
         if self.row_one == "combat":
-            # Only the first row-1 node is routed: taking a later one is not the documented
-            # rule, and this is where that shows up.
-            self._routes[FIRST_ROW_ONE_ACTION] = self._patched("run_combat_action")
+            for action_id in ROW_ONE_ACTIONS:
+                self._routes[action_id] = self._patched("run_combat_action")
         else:
             self._routes[FIRST_ROW_ONE_ACTION] = self._patched("run_event_choice")
         self._routes[ANCIENT_ACTION] = self._event_choice()
@@ -344,6 +346,158 @@ def _element(row: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
     """What one row is an element of the request: character, Ascension, seed, Ancient choice."""
     recipe = row["recipe"]
     return (recipe["character"], recipe["ascension"], recipe["seed"], recipe["ancient_choice"]["option_index"])
+
+
+# -- materializing a recorded scenario -------------------------------------------------
+
+
+def test_materialization_replays_the_recorded_ancient_nested_choice_and_map_coordinate() -> None:
+    nested = (_card_choice("choose_cards:first", "choose_cards:second"),)
+    row = _rows(FakeRunWorker(nested=nested, nested_choice=1))[1]
+    row["recipe"]["nested_choices"][0].update({
+        "selected_index": 1,
+        "selected_option_ids": ["choose_cards:second"],
+    })
+    row["recipe"]["node"].update({"col": 3, "row": 1})
+    worker = FakeRunWorker(nested=nested, nested_choice=1)
+
+    episode = materialize_scenario(row, worker)
+
+    assert worker.steps == [
+        ANCIENT_ACTION,
+        _choice_action(1, RECORDED_OFFER[1]),
+        "choose_cards:second",
+        "leave_event",
+        "choose_map:3:1",
+    ]
+    assert episode.observation == row["combat_initial_state"]
+
+
+def test_materialization_names_the_first_observation_mismatch_before_the_changed_hash() -> None:
+    row = _row()
+
+    class ChangedCombatWorker(FakeRunWorker):
+        def _next(self, observation: dict[str, Any]) -> dict[str, Any]:
+            observation = copy.deepcopy(observation)
+            if observation["decision"]["kind"] == "combat_action":
+                observation["combat"]["energy"] += 1
+            return super()._next(observation)
+
+    with pytest.raises(
+        ScenarioMaterializationError,
+        match=r"combat_initial_state mismatch at \$\.combat\.energy",
+    ):
+        materialize_scenario(row, ChangedCombatWorker())
+
+
+def test_a_combat_episode_steps_forward_to_victory_and_reports_hp_loss() -> None:
+    row = _row()
+    first_action = row["combat_initial_state"]["decision"]["legal_actions"][0]["action_id"]
+    final_action = row["combat_initial_state"]["decision"]["legal_actions"][1]["action_id"]
+
+    class FinishingCombatWorker(FakeRunWorker):
+        def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
+            result = super().run_reset(state)
+            damaged = self._patched("run_combat_action")
+            damaged["combat"]["creatures"][0]["hp"] -= 7
+            self._routes[first_action] = damaged
+            self._routes[final_action] = self._patched("run_room_reward_choice")
+            return result
+
+        def run_step(self, action_id: str) -> dict[str, Any]:
+            result = super().run_step(action_id)
+            if action_id == final_action:
+                result["scoring_features"] = {"current_hp": 9990}
+            return result
+
+    episode = materialize_scenario(row, FinishingCombatWorker())
+
+    assert episode.legal_actions == row["combat_initial_state"]["decision"]["legal_actions"]
+    assert episode.complete is False
+    assert episode.outcome is None
+    assert episode.hp_loss == 0
+
+    damaged = episode.step(first_action)
+    assert damaged["combat"]["creatures"][0]["hp"] == 9992
+    assert episode.complete is False
+    assert episode.hp_loss == 7
+
+    episode.step(final_action)
+    assert episode.complete is True
+    assert episode.outcome == "victory"
+    assert episode.hp_loss == 9
+
+
+def test_materialization_reports_encounter_identity_before_other_combat_drift() -> None:
+    row = _row()
+
+    class ChangedEncounterWorker(FakeRunWorker):
+        def _next(self, observation: dict[str, Any]) -> dict[str, Any]:
+            observation = copy.deepcopy(observation)
+            if observation["decision"]["kind"] == "combat_action":
+                observation["combat"]["encounter"] = "WRONG_ENCOUNTER"
+            return super()._next(observation)
+
+    with pytest.raises(ScenarioMaterializationError, match="encounter mismatch"):
+        materialize_scenario(row, ChangedEncounterWorker())
+
+
+def test_materialization_reports_a_state_hash_mismatch_after_the_observation_matches() -> None:
+    row = _row()
+
+    class ChangedHashWorker(FakeRunWorker):
+        def _next(self, observation: dict[str, Any]) -> dict[str, Any]:
+            result = super()._next(observation)
+            if observation["decision"]["kind"] == "combat_action":
+                result["state_hash"] = "changed-state-hash"
+            return result
+
+    with pytest.raises(ScenarioMaterializationError, match="state_hash mismatch"):
+        materialize_scenario(row, ChangedHashWorker())
+
+
+def test_materialization_refuses_a_failure_row_before_starting_a_run() -> None:
+    failure = _row(row_one="event")
+    worker = FakeRunWorker()
+
+    with pytest.raises(ScenarioMaterializationError, match="requires a scenario row"):
+        materialize_scenario(failure, worker)
+
+    assert worker.resets == 0
+
+
+def test_materialization_validates_the_whole_recipe_before_starting_a_run() -> None:
+    row = _row()
+    del row["recipe"]["node"]
+    worker = FakeRunWorker()
+
+    with pytest.raises(ScenarioMaterializationError, match=r"invalid scenario row: \$\.recipe\.node is required"):
+        materialize_scenario(row, worker)
+
+    assert worker.resets == 0
+
+
+def test_a_combat_episode_reports_defeat_and_the_last_observed_hp_loss() -> None:
+    row = _row()
+    action_id = row["combat_initial_state"]["decision"]["legal_actions"][0]["action_id"]
+
+    class LosingCombatWorker(FakeRunWorker):
+        def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
+            result = super().run_reset(state)
+            defeated = self._patched("run_combat_terminal")
+            defeated["combat"]["creatures"][0]["hp"] = 9987
+            self._routes[action_id] = defeated
+            return result
+
+    episode = materialize_scenario(row, LosingCombatWorker())
+    episode.step(action_id)
+
+    assert episode.complete is True
+    assert episode.outcome == "defeat"
+    assert episode.hp_loss == 12
+    assert episode.legal_actions == []
+    with pytest.raises(RuntimeError, match="episode is complete"):
+        episode.step(action_id)
 
 
 # -- the row envelope and the recipe -----------------------------------------------------

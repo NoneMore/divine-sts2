@@ -3,9 +3,11 @@
 A *generated scenario* is a run-start situation together with the choices that produced it,
 such that the shipped game can reproduce it from the same run seed: paste the seed into the
 custom run screen, take the recorded Ancient choice, and the same fight is there. This module
-is that behaviour: a request in, rows out (:func:`generate_rows`), or a request in, a corpus of
-shards and their summary out (:func:`generate_corpus`). `divine-sts2 scenario` is a thin wrapper
-over the two, so the behaviour is importable and testable rather than a sibling script.
+is that behaviour: a request in, rows out (:func:`generate_rows`), a request in, a corpus of
+shards and their summary out (:func:`generate_corpus`), or one recorded row replayed into a live
+first-combat :class:`CombatEpisode` (:func:`materialize_scenario`). `divine-sts2 scenario` is a
+thin wrapper over generation, so the behaviour is importable and testable rather than a sibling
+script.
 
 The request
 -----------
@@ -167,6 +169,7 @@ from .ancient import (
     map_actions,
 )
 from .client import RESET_MODE_RUN, NativeSimError, NativeWorker
+from .schema import validate_observation
 
 #: The versioned row tag, and the discriminators a row carries: one for an element that produced
 #: a fight, one for an element that could not.
@@ -320,6 +323,320 @@ class CorpusWorker(RunWorker, Protocol):
     def alive(self) -> bool: ...
 
     def close(self) -> None: ...
+
+
+class ScenarioMaterializationError(ValueError):
+    """A record cannot be replayed into the combat it claims to describe."""
+
+
+class CombatEpisode:
+    """A live first combat reached by replaying a Generated scenario."""
+
+    def __init__(self, worker: RunWorker, state: dict[str, Any]) -> None:
+        self._worker = worker
+        self._state = state
+        initial_hp = self._reported_player_hp(state)
+        if initial_hp is None:
+            raise ScenarioMaterializationError("combat result does not report the player's HP")
+        self._initial_hp = initial_hp
+        self._latest_hp = self._initial_hp
+
+    @property
+    def observation(self) -> dict[str, Any]:
+        """The combat's current canonical observation."""
+        return self._state["observation"]
+
+    @property
+    def legal_actions(self) -> list[dict[str, Any]]:
+        """Actions available while the combat is still live."""
+        return [] if self.complete else list(self._state.get("legal_actions") or [])
+
+    @property
+    def complete(self) -> bool:
+        """Whether control has left the combat, by victory or defeat."""
+        return bool(self.observation.get("terminal")) or "combat" not in self.observation
+
+    @property
+    def outcome(self) -> str | None:
+        """``victory`` or ``defeat`` once complete; otherwise ``None``."""
+        if not self.complete:
+            return None
+        if self.observation.get("terminal") and not self.observation.get("victory"):
+            return "defeat"
+        return "victory"
+
+    @property
+    def hp_loss(self) -> int:
+        """Net player HP lost since the recorded combat initial state."""
+        return max(0, self._initial_hp - self._latest_hp)
+
+    def step(self, action_id: str) -> dict[str, Any]:
+        """Apply one legal action and return the resulting canonical observation."""
+        if self.complete:
+            raise RuntimeError("the combat episode is complete")
+        self._state = self._worker.run_step(action_id)
+        reported_hp = self._reported_player_hp(self._state)
+        if reported_hp is not None:
+            self._latest_hp = reported_hp
+        return self.observation
+
+    @staticmethod
+    def _reported_player_hp(state: dict[str, Any]) -> int | None:
+        scoring_hp = (state.get("scoring_features") or {}).get("current_hp")
+        if isinstance(scoring_hp, int):
+            return scoring_hp
+        observation = state["observation"]
+        creatures = (observation.get("combat") or {}).get("creatures") or []
+        player = next((creature for creature in creatures if creature.get("side") == "Player"), None)
+        return player.get("hp") if player is not None and isinstance(player.get("hp"), int) else None
+
+
+def _first_mismatch(expected: Any, actual: Any, path: str = "$") -> str | None:
+    """Return the first deterministic JSON path at which two values differ."""
+    if type(expected) is not type(actual):
+        return path
+    if isinstance(expected, dict):
+        for key in expected:
+            child_path = f"{path}.{key}"
+            if key not in actual:
+                return child_path
+            mismatch = _first_mismatch(expected[key], actual[key], child_path)
+            if mismatch is not None:
+                return mismatch
+        for key in actual:
+            if key not in expected:
+                return f"{path}.{key}"
+        return None
+    if isinstance(expected, list):
+        for index, (expected_item, actual_item) in enumerate(zip(expected, actual)):
+            mismatch = _first_mismatch(expected_item, actual_item, f"{path}[{index}]")
+            if mismatch is not None:
+                return mismatch
+        return None if len(expected) == len(actual) else f"{path}[{min(len(expected), len(actual))}]"
+    return None if expected == actual else path
+
+
+def _require_record_keys(
+    value: Any,
+    required: set[str],
+    optional: set[str],
+    path: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ScenarioMaterializationError(f"invalid scenario row: {path} must be an object")
+    missing = required - value.keys()
+    if missing:
+        key = next(key for key in required if key in missing)
+        raise ScenarioMaterializationError(f"invalid scenario row: {path}.{key} is required")
+    extra = value.keys() - required - optional
+    if extra:
+        key = next(iter(extra))
+        raise ScenarioMaterializationError(f"invalid scenario row: {path}.{key} is not declared by {ROW_SCHEMA}")
+    return value
+
+
+def _require_text(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ScenarioMaterializationError(f"invalid scenario row: {path} must be a non-empty string")
+    return value
+
+
+def _require_integer(value: Any, path: str, *, minimum: int | None = None) -> int:
+    if type(value) is not int or minimum is not None and value < minimum:
+        qualifier = f" at least {minimum}" if minimum is not None else ""
+        raise ScenarioMaterializationError(f"invalid scenario row: {path} must be an integer{qualifier}")
+    return value
+
+
+def _validate_ancient_identity(value: Any, path: str) -> dict[str, Any]:
+    identity = _require_record_keys(value, set(ANCIENT_CHOICE_KEY_ORDER), set(), path)
+    _require_integer(identity["option_index"], f"{path}.option_index", minimum=0)
+    _require_text(identity["relic_model_id"], f"{path}.relic_model_id")
+    return identity
+
+
+def _validated_scenario(
+    scenario: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str, _Element]:
+    row = _require_record_keys(scenario, set(ROW_KEY_ORDER[SCENARIO_RECORD]), set(), "$")
+    game_build = _require_record_keys(
+        row["game_build"], {"version", "assembly_sha256", "pck_sha256"}, set(), "$.game_build"
+    )
+    for key, value in game_build.items():
+        _require_text(value, f"$.game_build.{key}")
+
+    required_recipe_keys = set(RECIPE_KEY_ORDER) - {"raw_seed"}
+    recipe = _require_record_keys(row["recipe"], required_recipe_keys, {"raw_seed"}, "$.recipe")
+    character = _require_text(recipe["character"], "$.recipe.character")
+    ascension = _require_integer(recipe["ascension"], "$.recipe.ascension", minimum=0)
+    seed = _require_text(recipe["seed"], "$.recipe.seed")
+    _require_text(recipe["act_variant"], "$.recipe.act_variant")
+    _require_text(recipe["encounter"], "$.recipe.encounter")
+    if canonicalize_seed(seed) != seed:
+        raise ScenarioMaterializationError("invalid scenario row: $.recipe.seed is not canonical")
+    if "raw_seed" in recipe:
+        raw_seed = _require_text(recipe["raw_seed"], "$.recipe.raw_seed")
+        if raw_seed == seed or canonicalize_seed(raw_seed) != seed:
+            raise ScenarioMaterializationError("invalid scenario row: $.recipe.raw_seed does not resolve to the seed")
+
+    options = recipe["ancient_options"]
+    if not isinstance(options, list) or not options:
+        raise ScenarioMaterializationError("invalid scenario row: $.recipe.ancient_options must be a non-empty array")
+    for index, option in enumerate(options):
+        _validate_ancient_identity(option, f"$.recipe.ancient_options[{index}]")
+    ancient_choice = _validate_ancient_identity(recipe["ancient_choice"], "$.recipe.ancient_choice")
+    if ancient_choice not in options:
+        raise ScenarioMaterializationError("invalid scenario row: $.recipe.ancient_choice is not in ancient_options")
+
+    nested_choices = recipe["nested_choices"]
+    if not isinstance(nested_choices, list):
+        raise ScenarioMaterializationError("invalid scenario row: $.recipe.nested_choices must be an array")
+    for index, value in enumerate(nested_choices):
+        path = f"$.recipe.nested_choices[{index}]"
+        nested = _require_record_keys(value, set(NESTED_CHOICE_KEY_ORDER), set(), path)
+        _require_text(nested["kind"], f"{path}.kind")
+        _require_integer(nested["selected_index"], f"{path}.selected_index", minimum=0)
+        option_ids = nested["selected_option_ids"]
+        if not isinstance(option_ids, list) or any(not isinstance(option_id, str) for option_id in option_ids):
+            raise ScenarioMaterializationError(f"invalid scenario row: {path}.selected_option_ids must be a string array")
+
+    node = _require_record_keys(recipe["node"], set(NODE_KEY_ORDER), set(), "$.recipe.node")
+    _require_integer(node["col"], "$.recipe.node.col", minimum=0)
+    _require_integer(node["row"], "$.recipe.node.row", minimum=0)
+    _require_text(node["point_type"], "$.recipe.node.point_type")
+
+    recorded_observation = row["combat_initial_state"]
+    try:
+        validate_observation(recorded_observation)
+    except ValueError as error:
+        raise ScenarioMaterializationError(f"invalid scenario row: $.combat_initial_state: {error}") from error
+    recorded_hash = _require_text(row["state_hash"], "$.state_hash")
+    if recorded_observation["game_build"] != game_build:
+        raise ScenarioMaterializationError("invalid scenario row: $.game_build differs from combat_initial_state")
+    recorded_run = recorded_observation["run"]
+    for key in ("seed", "ascension", "act_variant"):
+        if recorded_run.get(key) != recipe[key]:
+            raise ScenarioMaterializationError(
+                f"invalid scenario row: $.recipe.{key} differs from combat_initial_state.run.{key}"
+            )
+    if (recorded_observation.get("combat") or {}).get("encounter") != recipe["encounter"]:
+        raise ScenarioMaterializationError(
+            "invalid scenario row: $.recipe.encounter differs from combat_initial_state.combat.encounter"
+        )
+    if recorded_observation["decision"]["kind"] != COMBAT_ACTION:
+        raise ScenarioMaterializationError("invalid scenario row: $.combat_initial_state is not a live combat")
+
+    player = next(
+        (
+            creature
+            for creature in recorded_observation["combat"]["creatures"]
+            if creature.get("side") == "Player"
+        ),
+        None,
+    )
+    if player is None or player.get("model_id") != character:
+        raise ScenarioMaterializationError(
+            "invalid scenario row: $.recipe.character differs from the combat's player"
+        )
+    return recipe, recorded_observation, recorded_hash, _Element(character, ascension, seed, seed)
+
+
+def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatEpisode:
+    """Replay one Generated scenario into ``worker`` and return its live first combat."""
+    if scenario.get("schema") != ROW_SCHEMA:
+        raise ScenarioMaterializationError(f"unsupported scenario schema {scenario.get('schema')!r}")
+    if scenario.get("record_type") != SCENARIO_RECORD:
+        raise ScenarioMaterializationError("materialization requires a scenario row")
+    recipe, recorded_observation, recorded_hash, element = _validated_scenario(scenario)
+
+    state = worker.run_reset(_reset_state(element))
+    actual_variant = state["observation"]["run"].get("act_variant")
+    if actual_variant != recipe["act_variant"]:
+        raise ScenarioMaterializationError(
+            f"act_variant mismatch: expected {recipe['act_variant']!r}, got {actual_variant!r}"
+        )
+    ancient = ancient_action(state)
+    if ancient is None:
+        raise ScenarioMaterializationError("recipe mismatch: the run does not start at its Ancient")
+    state = worker.run_step(ancient["action_id"])
+
+    recorded_ancient = recipe["ancient_choice"]
+    offered = _offered_choices(state)
+    actual_offer = [identity for identity, _ in offered]
+    if actual_offer != recipe["ancient_options"]:
+        raise ScenarioMaterializationError(
+            f"Ancient options mismatch: expected {recipe['ancient_options']!r}, got {actual_offer!r}"
+        )
+    choice = next((action for identity, action in offered if identity == recorded_ancient), None)
+    if choice is None:
+        raise ScenarioMaterializationError(f"recipe mismatch: Ancient choice {recorded_ancient!r} is not offered")
+
+    nested_choices = recipe["nested_choices"]
+    nested_index = 0
+
+    def choose_nested(prompt: dict[str, Any]) -> str:
+        nonlocal nested_index
+        if nested_index >= len(nested_choices):
+            raise ScenarioMaterializationError("recipe mismatch: the Ancient opened an unrecorded nested choice")
+        recorded = nested_choices[nested_index]
+        actual_kind = prompt["observation"]["decision"]["kind"]
+        if recorded.get("kind") != actual_kind:
+            raise ScenarioMaterializationError(
+                f"recipe mismatch: nested choice {nested_index} is {actual_kind!r}, not {recorded.get('kind')!r}"
+            )
+        actions = prompt.get("legal_actions") or []
+        selected_index = recorded.get("selected_index")
+        if not isinstance(selected_index, int) or not 0 <= selected_index < len(actions):
+            raise ScenarioMaterializationError(
+                f"recipe mismatch: nested choice {nested_index} has unavailable selected index {selected_index!r}"
+            )
+        action = actions[selected_index]
+        selected_option_ids = (action.get("parameters") or {}).get("option_ids") or []
+        if recorded.get("selected_option_ids") != selected_option_ids:
+            raise ScenarioMaterializationError(
+                f"recipe mismatch: nested choice {nested_index} option ids are {selected_option_ids!r}, "
+                f"not {recorded.get('selected_option_ids')!r}"
+            )
+        nested_index += 1
+        return action["action_id"]
+
+    try:
+        drive_choice(worker, choice, choose=choose_nested)
+    except ValueError as error:
+        raise ScenarioMaterializationError(f"recipe mismatch: {error}") from error
+    if nested_index != len(nested_choices):
+        raise ScenarioMaterializationError(
+            f"recipe mismatch: {len(nested_choices) - nested_index} recorded nested choice(s) were not opened"
+        )
+
+    state = worker.run_step(LEAVE_EVENT_ACTION)
+    recorded_node = recipe["node"]
+    node = next(
+        (
+            action
+            for action in map_actions(state)
+            if all((action.get("parameters") or {}).get(key) == recorded_node.get(key) for key in NODE_KEY_ORDER)
+        ),
+        None,
+    )
+    if node is None:
+        raise ScenarioMaterializationError(f"recipe mismatch: map node {recorded_node!r} is not reachable")
+    combat = worker.run_step(node["action_id"])
+
+    actual_observation = combat["observation"]
+    actual_encounter = (actual_observation.get("combat") or {}).get("encounter")
+    if actual_encounter != recipe["encounter"]:
+        raise ScenarioMaterializationError(
+            f"encounter mismatch: expected {recipe['encounter']!r}, got {actual_encounter!r}"
+        )
+    mismatch = _first_mismatch(recorded_observation, actual_observation)
+    if mismatch is not None:
+        raise ScenarioMaterializationError(f"combat_initial_state mismatch at {mismatch}")
+    if combat.get("state_hash") != recorded_hash:
+        raise ScenarioMaterializationError(
+            f"state_hash mismatch: expected {recorded_hash!r}, got {combat.get('state_hash')!r}"
+        )
+    return CombatEpisode(worker, combat)
 
 
 @dataclass(frozen=True)
@@ -1409,4 +1726,3 @@ def _close(worker: CorpusWorker | None) -> None:
     if worker is not None:
         with contextlib.suppress(Exception):
             worker.close()
-
