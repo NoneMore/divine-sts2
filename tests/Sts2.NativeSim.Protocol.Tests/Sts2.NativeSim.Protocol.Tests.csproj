@@ -14,5 +14,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sts2.NativeSim.Host\Sts2.NativeSim.Host.csproj" />
     <ProjectReference Include="..\..\src\Sts2.NativeSim.FullAppBridge\Sts2.NativeSim.FullAppBridge.csproj" />
+    <ProjectReference Include="..\..\src\Sts2.NativeSim.TraceExporter\Sts2.NativeSim.TraceExporter.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\fixtures\canonical-observations.json" Link="fixtures\canonical-observations.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\schemas\canonical-state.schema.json" Link="schemas\canonical-state.schema.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,9 @@
     <Reference Include="GodotSharp" HintPath="$(GameDataDir)\GodotSharp.dll" Private="false" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Sts2.NativeSim.Protocol\Sts2.NativeSim.Protocol.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="sts2-native-trace-exporter.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
@@ -18,6 +21,7 @@
   <Target Name="PackageTraceExporter" AfterTargets="Build">
     <MakeDir Directories="$(OutputPath)package" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(OutputPath)package" />
+    <Copy SourceFiles="$(OutputPath)Sts2.NativeSim.Protocol.dll" DestinationFolder="$(OutputPath)package" Condition="Exists('$(OutputPath)Sts2.NativeSim.Protocol.dll')" />
     <Copy SourceFiles="sts2-native-trace-exporter.json" DestinationFolder="$(OutputPath)package" />
   </Target>
 </Project>

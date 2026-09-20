@@ -4,6 +4,9 @@ namespace Sts2.NativeSim.FullAppBridge;
 
 public sealed class ObservationDto
 {
+    [JsonIgnore]
+    public Sts2.NativeSim.Protocol.CanonicalObservation? CanonicalObservation { get; set; }
+
     // The bridge's own observation version, not the simulator's: the two observations are
     // different encodings of one state. 4 was the fight's five ordered piles of converged card rows
     // replacing the hand list and the three pile counts. 5 carried the game build, the run block —

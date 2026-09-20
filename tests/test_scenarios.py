@@ -59,7 +59,7 @@ from sts2_native_sim.scenarios import (
     read_scenario_corpus,
     summarize_rows,
 )
-from sts2_native_sim.schema import validate_observation
+from sts2_native_sim.schema import ObservationSchemaViolation, validate_observation
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "canonical-observations.json"
 CAPTURES: dict[str, Any] = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
@@ -427,6 +427,24 @@ def test_a_combat_episode_steps_forward_to_victory_and_reports_hp_loss() -> None
     assert episode.complete is True
     assert episode.outcome == "victory"
     assert episode.hp_loss == 9
+
+
+def test_a_combat_episode_rejects_a_step_outside_the_canonical_contract() -> None:
+    row = _row()
+    action_id = row["combat_initial_state"]["decision"]["legal_actions"][0]["action_id"]
+
+    class InvalidObservationWorker(FakeRunWorker):
+        def run_reset(self, state: dict[str, Any]) -> dict[str, Any]:
+            result = super().run_reset(state)
+            broken = self._patched("run_combat_action")
+            broken["runtime_only"] = {}
+            self._routes[action_id] = broken
+            return result
+
+    episode = materialize_scenario(row, InvalidObservationWorker())
+
+    with pytest.raises(ObservationSchemaViolation, match=r"runtime_only"):
+        episode.step(action_id)
 
 
 def test_materialization_reports_encounter_identity_before_other_combat_drift() -> None:

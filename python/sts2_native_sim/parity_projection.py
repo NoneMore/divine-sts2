@@ -54,6 +54,7 @@ from typing import Any, Final
 
 from .decision_vocabulary import decision_kinds_for_bridge_phase, decision_kinds_for_combat_phase
 from .parity import compare_snapshots
+from .schema import canonical_object_fields
 
 #: The base every act index in the shared shape is reported in: zero, the run's own
 #: ``CurrentActIndex``. Both encoders report it that way, so this one declaration is what keeps the
@@ -64,27 +65,28 @@ ACT_INDEX_BASE: Final[int] = 0
 #: The rows the shared shape is built from: the keys of one row of each kind, in the order the
 #: comparison reads them. Every row is built through :func:`_row`, which refuses a key these do not
 #: name, so the shape cannot gain a member — or lose one — without the contract saying so.
-BUILD_KEYS: Final[tuple[str, ...]] = ("version", "assembly_sha256", "pck_sha256")
-RUN_KEYS: Final[tuple[str, ...]] = (
-    "seed", "ascension", "gold", "act_variant", "act_index", "act_floor", "total_floor", "rng_counters",
+def _contract_keys(definition: str, *, excluding: frozenset[str] = frozenset()) -> tuple[str, ...]:
+    """One Protocol record's generated fields, minus explicitly documented parity exclusions."""
+    return tuple(key for key in canonical_object_fields(definition) if key not in excluding)
+
+
+BUILD_KEYS: Final[tuple[str, ...]] = _contract_keys("game_build")
+RUN_KEYS: Final[tuple[str, ...]] = _contract_keys(
+    "run", excluding=frozenset({"current_hp", "max_hp", "deck", "relics", "potions"})
 )
+_COMBAT_RECORD_KEYS = _contract_keys("combat", excluding=frozenset({"creatures", "piles", "orbs"}))
 COMBAT_KEYS: Final[tuple[str, ...]] = (
-    "encounter", "turn", "phase", "decision_kind", "energy", "max_energy", "stars",
+    *_COMBAT_RECORD_KEYS[:3], "decision_kind", *_COMBAT_RECORD_KEYS[3:],
 )
-CREATURE_KEYS: Final[tuple[str, ...]] = (
-    "combat_id", "model_id", "side", "hp", "max_hp", "block", "alive", "next_move", "powers",
-)
-MOVE_KEYS: Final[tuple[str, ...]] = ("id", "intents")
-INTENT_KEYS: Final[tuple[str, ...]] = ("intent_type", "damage", "repeats")
-POWER_KEYS: Final[tuple[str, ...]] = ("model_id", "amount")
-PILE_KEYS: Final[tuple[str, ...]] = ("name", "type", "cards")
-CARD_KEYS: Final[tuple[str, ...]] = (
-    "net_id", "model_id", "card_type", "target_type", "energy_cost", "costs_x", "upgrades",
-    "enchantment", "native_state",
-)
-ENCHANTMENT_KEYS: Final[tuple[str, ...]] = ("model_id", "amount")
-RELIC_KEYS: Final[tuple[str, ...]] = ("model_id", "counter", "native_state")
-POTION_KEYS: Final[tuple[str, ...]] = ("slot", "model_id")
+CREATURE_KEYS: Final[tuple[str, ...]] = _contract_keys("creature")
+MOVE_KEYS: Final[tuple[str, ...]] = _contract_keys("next_move")
+INTENT_KEYS: Final[tuple[str, ...]] = _contract_keys("intent", excluding=frozenset({"implementation"}))
+POWER_KEYS: Final[tuple[str, ...]] = _contract_keys("power")
+PILE_KEYS: Final[tuple[str, ...]] = _contract_keys("pile")
+CARD_KEYS: Final[tuple[str, ...]] = _contract_keys("card", excluding=frozenset({"instance_id"}))
+ENCHANTMENT_KEYS: Final[tuple[str, ...]] = _contract_keys("enchantment")
+RELIC_KEYS: Final[tuple[str, ...]] = _contract_keys("inventory_relic")
+POTION_KEYS: Final[tuple[str, ...]] = _contract_keys("potion")
 ROOT_KEYS: Final[tuple[str, ...]] = ("game_build", "run", "combat", "creatures", "piles", "inventory")
 
 #: The members whose value is one opaque object rather than a row of named fields: the run's named
@@ -153,56 +155,18 @@ EXCLUDED_FIELDS: Final[tuple[ExcludedField, ...]] = (
 #: identity, and ``combat.decision_kind``, which is the one word the bridge's two phase words are
 #: normalised into.
 CONTRACT_FIELDS: Final[tuple[str, ...]] = (
-    "$.game_build.version",
-    "$.game_build.assembly_sha256",
-    "$.game_build.pck_sha256",
-    "$.run.seed",
-    "$.run.ascension",
-    "$.run.gold",
-    "$.run.act_variant",
-    "$.run.act_index",
-    "$.run.act_floor",
-    "$.run.total_floor",
-    "$.run.rng_counters",
-    "$.combat.encounter",
-    "$.combat.turn",
-    "$.combat.phase",
-    "$.combat.decision_kind",
-    "$.combat.energy",
-    "$.combat.max_energy",
-    "$.combat.stars",
-    "$.creatures[].combat_id",
-    "$.creatures[].model_id",
-    "$.creatures[].side",
-    "$.creatures[].hp",
-    "$.creatures[].max_hp",
-    "$.creatures[].block",
-    "$.creatures[].alive",
-    "$.creatures[].next_move",
-    "$.creatures[].next_move.id",
-    "$.creatures[].next_move.intents[].intent_type",
-    "$.creatures[].next_move.intents[].damage",
-    "$.creatures[].next_move.intents[].repeats",
-    "$.creatures[].powers[].model_id",
-    "$.creatures[].powers[].amount",
-    "$.piles[].name",
-    "$.piles[].type",
-    "$.piles[].cards[].net_id",
-    "$.piles[].cards[].model_id",
-    "$.piles[].cards[].card_type",
-    "$.piles[].cards[].target_type",
-    "$.piles[].cards[].energy_cost",
-    "$.piles[].cards[].costs_x",
-    "$.piles[].cards[].upgrades",
-    "$.piles[].cards[].enchantment",
-    "$.piles[].cards[].enchantment.model_id",
-    "$.piles[].cards[].enchantment.amount",
-    "$.piles[].cards[].native_state",
-    "$.inventory.relics[].model_id",
-    "$.inventory.relics[].counter",
-    "$.inventory.relics[].native_state",
-    "$.inventory.potions[].slot",
-    "$.inventory.potions[].model_id",
+    *(f"$.game_build.{key}" for key in BUILD_KEYS),
+    *(f"$.run.{key}" for key in RUN_KEYS),
+    *(f"$.combat.{key}" for key in COMBAT_KEYS),
+    *(f"$.creatures[].{key}" for key in CREATURE_KEYS if key not in {"powers"}),
+    *(f"$.creatures[].next_move.{key}" for key in MOVE_KEYS if key != "intents"),
+    *(f"$.creatures[].next_move.intents[].{key}" for key in INTENT_KEYS),
+    *(f"$.creatures[].powers[].{key}" for key in POWER_KEYS),
+    *(f"$.piles[].{key}" for key in PILE_KEYS if key != "cards"),
+    *(f"$.piles[].cards[].{key}" for key in CARD_KEYS),
+    *(f"$.piles[].cards[].enchantment.{key}" for key in ENCHANTMENT_KEYS),
+    *(f"$.inventory.relics[].{key}" for key in RELIC_KEYS),
+    *(f"$.inventory.potions[].{key}" for key in POTION_KEYS),
 )
 
 #: The contract fields whose value is not always there: a creature with no next move, an intent that is

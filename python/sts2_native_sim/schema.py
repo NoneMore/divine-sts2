@@ -7,9 +7,10 @@ capture sites, so it is worth *validating* an observation against it rather than
 parsing the file: a capture that no longer matches, or a schema that no longer describes
 what the environment emits, is then a failure instead of a document nobody reads.
 
-The schema is hand-written and is expected to move with the environment: the observation
-schema version it pins and `ProtocolConstants.ObservationSchemaVersion` are the same
-number, and `tests/test_observation_schema.py` validates recorded captures against it.
+The schema is generated from the Protocol record family by
+`scripts/generate-canonical-schema.ps1`. Its pinned observation schema version and
+`ProtocolConstants.ObservationSchemaVersion` are the same number, and
+`tests/test_observation_schema.py` validates recorded captures against it.
 """
 
 from __future__ import annotations
@@ -38,6 +39,18 @@ def canonical_state_schema() -> dict[str, Any]:
 def observation_schema_version() -> int:
     """The observation schema version the published schema pins."""
     return int(canonical_state_schema()["properties"]["schema_version"]["const"])
+
+
+def canonical_object_fields(definition: str) -> tuple[str, ...]:
+    """Return one canonical record's fields in Protocol's generated order."""
+    definitions = canonical_state_schema().get("$defs", {})
+    schema = definitions.get(definition)
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        raise KeyError(f"the canonical observation schema defines no object named {definition!r}")
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        raise KeyError(f"the canonical observation object {definition!r} defines no properties")
+    return tuple(properties)
 
 
 def validate_observation(observation: Any) -> None:

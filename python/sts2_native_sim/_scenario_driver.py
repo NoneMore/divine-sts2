@@ -50,6 +50,7 @@ class CombatEpisode:
 
     def __init__(self, worker: RunWorker, state: dict[str, Any]) -> None:
         self._worker = worker
+        validate_observation(state["observation"])
         self._state = state
         initial_hp = self._reported_player_hp(state)
         if initial_hp is None:
@@ -90,8 +91,10 @@ class CombatEpisode:
         """Apply one legal action and return the resulting canonical observation."""
         if self.complete:
             raise RuntimeError("the combat episode is complete")
-        self._state = self._worker.run_step(action_id)
-        reported_hp = self._reported_player_hp(self._state)
+        next_state = self._worker.run_step(action_id)
+        validate_observation(next_state["observation"])
+        self._state = next_state
+        reported_hp = self._reported_player_hp(next_state)
         if reported_hp is not None:
             self._latest_hp = reported_hp
         return self.observation

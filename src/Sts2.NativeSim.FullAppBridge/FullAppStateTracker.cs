@@ -467,6 +467,7 @@ public static class FullAppStateTracker
         }
 
         obs.StateHash = ComputeHash(obs);
+        obs.CanonicalObservation = FullAppCanonicalObservationEncoder.Encode(obs, legalActions);
         return (obs, legalActions);
     }
 

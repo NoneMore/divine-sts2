@@ -17,6 +17,7 @@ import pytest
 from sts2_native_sim import paths
 from sts2_native_sim.schema import (
     ObservationSchemaViolation,
+    canonical_object_fields,
     observation_schema_version,
     validate_observation,
 )
@@ -57,6 +58,32 @@ STANDALONE_STAGES = (
 @pytest.mark.parametrize("name", sorted(CAPTURES))
 def test_every_recorded_capture_validates_against_the_published_schema(name: str) -> None:
     validate_observation(CAPTURES[name])
+
+
+def test_python_reads_canonical_field_trees_from_the_generated_schema() -> None:
+    assert canonical_object_fields("game_build") == ("version", "assembly_sha256", "pck_sha256")
+    assert "encounter" in canonical_object_fields("combat")
+    assert "instance_id" in canonical_object_fields("card")
+
+
+def test_a_published_stage_requires_exactly_its_typed_stage_block() -> None:
+    missing = copy.deepcopy(CAPTURES["run_map_choice"])
+    del missing["map"]
+    with pytest.raises(ObservationSchemaViolation):
+        validate_observation(missing)
+
+    mixed = copy.deepcopy(CAPTURES["run_map_choice"])
+    mixed["reward"] = copy.deepcopy(CAPTURES["standalone_item_reward"]["reward"])
+    with pytest.raises(ObservationSchemaViolation):
+        validate_observation(mixed)
+
+
+def test_native_state_retains_its_version_three_scalar_value_contract() -> None:
+    broken = copy.deepcopy(CAPTURES["run_combat_action"])
+    broken["combat"]["piles"][0]["cards"][0]["native_state"]["nested"] = {"not": "v3"}
+
+    with pytest.raises(ObservationSchemaViolation, match="nested"):
+        validate_observation(broken)
 
 
 def test_the_fixture_covers_every_run_stage_and_the_standalone_blocks() -> None:

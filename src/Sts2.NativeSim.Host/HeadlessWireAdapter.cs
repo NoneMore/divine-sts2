@@ -20,10 +20,15 @@ public static class HeadlessWireAdapter
         return new RpcRequest(request.Id, request.Method, request.Parameters);
     }
 
-    public static string EncodeResponse(RpcResponse response) =>
-        JsonSerializer.Serialize(
-            new HeadlessResponse(response.Id, response.Ok, response.Result, response.Error),
+    public static string EncodeResponse(RpcResponse response)
+    {
+        object? result = response.Result is EnvironmentResult environment
+            ? environment with { Observation = CanonicalObservationJson.EncodeRuntime(environment.Observation) }
+            : response.Result;
+        return JsonSerializer.Serialize(
+            new HeadlessResponse(response.Id, response.Ok, result, response.Error),
             Json);
+    }
 
     private sealed record HeadlessRequest(
         [property: JsonPropertyName("id")] string Id,

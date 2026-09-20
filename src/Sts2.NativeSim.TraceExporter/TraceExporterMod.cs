@@ -15,6 +15,7 @@ using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Runs;
 using Sts2.NativeSim.Core;
+using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.TraceExporter;
 
@@ -204,6 +205,7 @@ internal static class NativeTraceExporter
         bool terminal = !playerAlive || !enemyAlive;
         Dictionary<string, object?> combat = new()
         {
+            ["encounter"] = _combat.Encounter?.Id.Entry,
             ["turn"] = player.PlayerCombatState!.TurnNumber,
             ["phase"] = player.PlayerCombatState.Phase.ToString(),
             ["energy"] = player.PlayerCombatState.Energy,
@@ -220,11 +222,21 @@ internal static class NativeTraceExporter
                 }).ToArray()
             }
         };
-        return new
+        object runtimeObservation = new
         {
-            schema_version = 2,
+            schema_version = ProtocolConstants.ObservationSchemaVersion,
             game_build = _build ??= BuildFingerprint(),
-            run = new { seed = CurrentRun.Rng.StringSeed, ascension = CurrentRun.AscensionLevel, gold = player.Gold, rng_counters = RngCounters() },
+            run = new
+            {
+                seed = CurrentRun.Rng.StringSeed,
+                ascension = CurrentRun.AscensionLevel,
+                gold = player.Gold,
+                act_variant = CurrentRun.Act.Id.Entry,
+                act_index = CurrentRun.CurrentActIndex,
+                act_floor = CurrentRun.ActFloor,
+                total_floor = CurrentRun.TotalFloor,
+                rng_counters = RngCounters()
+            },
             combat,
             inventory = new
             {
@@ -236,6 +248,7 @@ internal static class NativeTraceExporter
             terminal,
             victory = playerAlive && !enemyAlive
         };
+        return TraceCanonicalObservationEncoder.Encode(runtimeObservation);
     }
 
     private static object PileSnapshot(CardPile pile) => new
