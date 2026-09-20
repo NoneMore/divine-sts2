@@ -73,7 +73,37 @@ public sealed record CustomRewardResetRequest(
     [property: JsonPropertyName("reward_kinds")] IReadOnlyList<string> RewardKinds,
     [property: JsonPropertyName("linked")] bool Linked = false);
 public sealed record RestoreRequest([property: JsonPropertyName("state_handle")] string StateHandle);
-public sealed record LegalAction([property: JsonPropertyName("action_id")] string ActionId, [property: JsonPropertyName("kind")] string Kind, [property: JsonPropertyName("parameters")] IReadOnlyDictionary<string, object?> Parameters);
+public sealed record LegalAction
+{
+    public LegalAction()
+    {
+    }
+
+    public LegalAction(
+        string actionId,
+        string kind,
+        IReadOnlyDictionary<string, object?> parameters,
+        string? description = null)
+    {
+        ActionId = actionId;
+        Kind = kind;
+        Parameters = parameters;
+        Description = description;
+    }
+
+    [JsonPropertyName("action_id")]
+    public string ActionId { get; set; } = "";
+
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = "";
+
+    [JsonPropertyName("parameters")]
+    public IReadOnlyDictionary<string, object?> Parameters { get; set; } =
+        new Dictionary<string, object?>();
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; set; }
+}
 public sealed record EnvironmentResult(
     [property: JsonPropertyName("observation")] object Observation,
     [property: JsonPropertyName("state_hash")] string StateHash,

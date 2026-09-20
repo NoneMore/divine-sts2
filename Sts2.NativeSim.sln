@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.FullAppBridg
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.Core.Tests", "tests\Sts2.NativeSim.Core.Tests\Sts2.NativeSim.Core.Tests.csproj", "{D46B535D-FA6E-4F98-9EA4-679BB75FC07D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.Protocol.Tests", "tests\Sts2.NativeSim.Protocol.Tests\Sts2.NativeSim.Protocol.Tests.csproj", "{A397F785-7A68-4FB6-B5A6-7229CB75F6EA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -57,6 +59,10 @@ Global
 		{D46B535D-FA6E-4F98-9EA4-679BB75FC07D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D46B535D-FA6E-4F98-9EA4-679BB75FC07D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D46B535D-FA6E-4F98-9EA4-679BB75FC07D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A397F785-7A68-4FB6-B5A6-7229CB75F6EA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A397F785-7A68-4FB6-B5A6-7229CB75F6EA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A397F785-7A68-4FB6-B5A6-7229CB75F6EA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A397F785-7A68-4FB6-B5A6-7229CB75F6EA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -118,7 +118,7 @@ CARD_SELECT_ACTION_PREFIX = "choose_card_select:"
 CARD_SELECT_ACTIONS_SIGNATURE = (
     "private static void AddCardSelectActions(\n"
     "        RoomObservationDto roomObs,\n"
-    "        List<LegalActionDto> legalActions,\n"
+    "        List<LegalAction> legalActions,\n"
     "        IReadOnlyList<CardModel> offered)"
 )
 
@@ -412,8 +412,12 @@ def test_the_bridge_writes_the_same_null_shape_as_the_other_projections() -> Non
     bridge_json = (BRIDGE_DIR / "BridgeJson.cs").read_text(encoding="utf-8")
     assert "JsonIgnoreCondition.WhenWritingNull" in bridge_json
 
-    for path in (BRIDGE_DIR / "FullAppStateTracker.cs", BRIDGE_DIR / "FullAppBridgeServer.cs"):
-        assert "BridgeJson.Options" in path.read_text(encoding="utf-8"), f"{path.name} does not use the shared options"
+    tracker = (BRIDGE_DIR / "FullAppStateTracker.cs").read_text(encoding="utf-8")
+    adapter = (BRIDGE_DIR / "FullAppBridgeWireAdapter.cs").read_text(encoding="utf-8")
+    server = (BRIDGE_DIR / "FullAppBridgeServer.cs").read_text(encoding="utf-8")
+    assert "BridgeJson.Options" in tracker
+    assert "BridgeJson.Options" in adapter
+    assert "FullAppBridgeWireAdapter.EncodeResponse" in server
 
 
 def test_the_bridge_run_block_is_word_for_word_the_recorded_run_block() -> None:
@@ -645,5 +649,3 @@ def test_the_bridge_relic_row_reads_the_counter_the_way_the_other_projections_re
     )
     assert "x.ShowCounter ? x.DisplayAmount : (int?)null" in trace, "this test no longer reads the trace exporter"
     assert 'ReflectionTools.Get(x!, "ShowCounter")' in ENVIRONMENT.read_text(encoding="utf-8")
-
-

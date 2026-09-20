@@ -7,4 +7,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Sts2.NativeSim.Core\Sts2.NativeSim.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Sts2.NativeSim.Host\HeadlessLegalActionConverter.cs" Link="HeadlessLegalActionConverter.cs" />
+    <Compile Include="..\Sts2.NativeSim.Host\HeadlessWireAdapter.cs" Link="HeadlessWireAdapter.cs" />
+  </ItemGroup>
 </Project>

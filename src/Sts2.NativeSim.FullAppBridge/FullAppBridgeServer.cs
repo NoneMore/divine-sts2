@@ -5,6 +5,7 @@ using System.Text.Json;
 using MegaCrit.Sts2.Core.AutoSlay;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
+using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
@@ -38,7 +39,7 @@ public static class FullAppBridgeServer
 
     public static int BoundPort { get; private set; }
     public static ObservationDto? CurrentObservation { get; set; }
-    public static List<LegalActionDto> CurrentLegalActions { get; set; } = new();
+    public static List<LegalAction> CurrentLegalActions { get; set; } = new();
     public static List<string> ActionHistory { get; } = new();
     public static List<string> StateHashHistory { get; } = new();
 
@@ -122,28 +123,23 @@ public static class FullAppBridgeServer
                 if (line is null) break;
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
+                RpcRequest? request = null;
                 try
                 {
-                    RpcRequest? request = JsonSerializer.Deserialize<RpcRequest>(line);
-                    if (request is null) continue;
+                    request = FullAppBridgeWireAdapter.DecodeRequest(line);
 
-                    object? result = await DispatchRequestAsync(request.Method, request.Params);
-                    var response = new RpcResponse
-                    {
-                        Id = request.Id,
-                        Result = result,
-                    };
-                    string responseJson = JsonSerializer.Serialize(response, BridgeJson.Options);
+                    object? result = await DispatchRequestAsync(request.Method, request.Parameters);
+                    RpcResponse response = new(request.Id, true, result);
+                    string responseJson = FullAppBridgeWireAdapter.EncodeResponse(response);
                     await writer.WriteLineAsync(responseJson);
                 }
                 catch (Exception ex)
                 {
-                    var errorResponse = new RpcResponse
-                    {
-                        Id = 0,
-                        Error = ex.Message,
-                    };
-                    await writer.WriteLineAsync(JsonSerializer.Serialize(errorResponse, BridgeJson.Options));
+                    RpcResponse errorResponse = new(
+                        request?.Id ?? "0",
+                        false,
+                        Error: new ProtocolError("bridge_error", ex.Message));
+                    await writer.WriteLineAsync(FullAppBridgeWireAdapter.EncodeResponse(errorResponse));
                 }
             }
         }
@@ -165,7 +161,7 @@ public static class FullAppBridgeServer
         }
     }
 
-    private static async Task<object?> DispatchRequestAsync(string method, Dictionary<string, object?>? parameters)
+    private static async Task<object?> DispatchRequestAsync(string method, JsonElement parameters)
     {
         switch (method.ToLowerInvariant())
         {
@@ -185,15 +181,12 @@ public static class FullAppBridgeServer
                 };
 
             case "start_run":
-                if (parameters is not null)
-                {
-                    if (parameters.TryGetValue("seed", out var s) && s is not null)
-                        RequestedSeed = s.ToString()!;
-                    if (parameters.TryGetValue("character", out var c) && c is not null)
-                        RequestedCharacter = c.ToString()!;
-                    if (parameters.TryGetValue("ascension", out var a) && a is not null && int.TryParse(a.ToString(), out int asc))
-                        RequestedAscension = asc;
-                }
+                if (parameters.TryGetProperty("seed", out JsonElement seed))
+                    RequestedSeed = seed.ToString();
+                if (parameters.TryGetProperty("character", out JsonElement character))
+                    RequestedCharacter = character.ToString();
+                if (FullAppBridgeWireAdapter.TryReadInt32Parameter(parameters, "ascension", out int asc))
+                    RequestedAscension = asc;
 
                 if (RequestedAscension is < 0 or > 10)
                     throw new ArgumentOutOfRangeException("ascension", RequestedAscension, "Ascension must be between 0 and 10.");
@@ -222,7 +215,9 @@ public static class FullAppBridgeServer
                 return CurrentLegalActions;
 
             case "step":
-                string actionId = parameters?["action_id"]?.ToString() ?? "";
+                string actionId = parameters.TryGetProperty("action_id", out JsonElement action)
+                    ? action.ToString()
+                    : "";
                 if (string.IsNullOrWhiteSpace(actionId))
                     throw new ArgumentException("step requires action_id");
 

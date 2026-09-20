@@ -17,6 +17,7 @@ using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.MonsterMoves.MonsterMoveStateMachine;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves.Runs;
+using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
@@ -30,7 +31,7 @@ public static class FullAppStateTracker
     /// </summary>
     private static readonly CardIdentityRegistry CardIdentities = new();
 
-    public static (ObservationDto Observation, List<LegalActionDto> LegalActions) CreateStateSnapshot(
+    public static (ObservationDto Observation, List<LegalAction> LegalActions) CreateStateSnapshot(
         string phase,
         bool isTerminal,
         bool isVictory,
@@ -81,7 +82,7 @@ public static class FullAppStateTracker
             obs.Inventory = InventoryObservation(player);
         }
 
-        var legalActions = new List<LegalActionDto>();
+        var legalActions = new List<LegalAction>();
 
         if (phase == "combat" && combatManager is not null && combatManager.IsInProgress && player is not null)
         {
@@ -135,23 +136,23 @@ public static class FullAppStateTracker
                         foreach (var enemy in hittable)
                         {
                             ulong enemyId = enemy.CombatId ?? 0;
-                            legalActions.Add(new LegalActionDto
+                            legalActions.Add(new LegalAction
                             {
                                 ActionId = $"play_card:{i}:target:{enemyId}",
-                                ActionType = "play_card",
+                                Kind = "play_card",
                                 Description = $"Play {card.Id.Entry} targeting enemy {enemyId} ({enemy.CurrentHp}/{enemy.MaxHp})",
-                                Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["target_id"] = enemyId, ["card_id"] = card.Id.Entry }
+                                Parameters = new Dictionary<string, object?> { ["card_index"] = i, ["target_id"] = enemyId, ["card_id"] = card.Id.Entry }
                             });
                         }
                     }
                     else
                     {
-                        legalActions.Add(new LegalActionDto
+                        legalActions.Add(new LegalAction
                         {
                             ActionId = $"play_card:{i}",
-                            ActionType = "play_card",
+                            Kind = "play_card",
                             Description = $"Play {card.Id.Entry}",
-                            Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
+                            Parameters = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
                         });
                     }
                 }
@@ -167,42 +168,42 @@ public static class FullAppStateTracker
                     foreach (var enemy in hittable)
                     {
                         ulong enemyId = enemy.CombatId ?? 0;
-                        legalActions.Add(new LegalActionDto
+                        legalActions.Add(new LegalAction
                         {
                             ActionId = $"use_potion:{slot}:target:{enemyId}",
-                            ActionType = "use_potion",
+                            Kind = "use_potion",
                             Description = $"Use potion {potion.Id.Entry} on enemy {enemyId}",
-                            Metadata = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry, ["target_id"] = enemyId }
+                            Parameters = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry, ["target_id"] = enemyId }
                         });
                     }
                 }
                 else if (potion.TargetType is TargetType.AnyAlly or TargetType.AnyPlayer or TargetType.Self)
                 {
                     ulong playerId = player.Creature.CombatId ?? 0;
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"use_potion:{slot}:target:{playerId}",
-                        ActionType = "use_potion",
+                        Kind = "use_potion",
                         Description = $"Use potion {potion.Id.Entry} on player {playerId}",
-                        Metadata = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry, ["target_id"] = playerId }
+                        Parameters = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry, ["target_id"] = playerId }
                     });
                 }
                 else
                 {
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"use_potion:{slot}",
-                        ActionType = "use_potion",
+                        Kind = "use_potion",
                         Description = $"Use potion {potion.Id.Entry}",
-                        Metadata = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry }
+                        Parameters = new Dictionary<string, object?> { ["potion_index"] = slot, ["potion_id"] = potion.Id.Entry }
                     });
                 }
             }
 
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "end_turn",
-                ActionType = "end_turn",
+                Kind = "end_turn",
                 Description = "End player turn",
             });
 
@@ -219,12 +220,12 @@ public static class FullAppStateTracker
                     string typeName = point.PointType.ToString();
                     int branch1Indexed = i + 1;
                     roomObs.Options.Add($"{branch1Indexed}:{typeName}");
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_map:{branch1Indexed}:{typeName}",
-                        ActionType = "choose_map",
+                        Kind = "choose_map",
                         Description = $"{branch1Indexed} ({typeName})",
-                        Metadata = new Dictionary<string, object?> { ["branch_choice"] = branch1Indexed, ["node_index"] = i, ["room_type"] = typeName }
+                        Parameters = new Dictionary<string, object?> { ["branch_choice"] = branch1Indexed, ["node_index"] = i, ["room_type"] = typeName }
                     });
                 }
             }
@@ -239,18 +240,18 @@ public static class FullAppStateTracker
                 {
                     CardModel card = cardOptions[i];
                     roomObs.Options.Add(card.Id.Entry);
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_card:{i}:{card.Id.Entry}",
-                        ActionType = "choose_card",
+                        Kind = "choose_card",
                         Description = $"Choose card reward {card.Id.Entry} (Cost: {card.EnergyCost.Canonical})",
-                        Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry, ["upgrades"] = card.CurrentUpgradeLevel }
+                        Parameters = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry, ["upgrades"] = card.CurrentUpgradeLevel }
                     });
                 }
-                legalActions.Add(new LegalActionDto
+                legalActions.Add(new LegalAction
                 {
                     ActionId = "skip_card",
-                    ActionType = "skip_card",
+                    Kind = "skip_card",
                     Description = "Skip card reward selection",
                 });
             }
@@ -266,22 +267,22 @@ public static class FullAppStateTracker
                 {
                     string rewardType = r.GetType().Name.Replace("Reward", "");
                     roomObs.Options.Add($"{idx}:{rewardType}");
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_reward:{idx}:{rewardType}",
-                        ActionType = "choose_reward",
+                        Kind = "choose_reward",
                         Description = $"Claim {rewardType} reward",
-                        Metadata = new Dictionary<string, object?> { ["reward_index"] = idx, ["reward_type"] = rewardType }
+                        Parameters = new Dictionary<string, object?> { ["reward_index"] = idx, ["reward_type"] = rewardType }
                     });
                     idx++;
                 }
 
             }
 
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "proceed",
-                ActionType = "proceed",
+                Kind = "proceed",
                 Description = "Proceed to next screen / room",
             });
             obs.Room = roomObs;
@@ -296,12 +297,12 @@ public static class FullAppStateTracker
                     RestSiteOption opt = restOptions[i];
                     string key = opt.OptionId;
                     roomObs.Options.Add(key);
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_rest:{key}",
-                        ActionType = "choose_rest",
+                        Kind = "choose_rest",
                         Description = $"Rest Site Option: {key}",
-                        Metadata = new Dictionary<string, object?> { ["option_key"] = key }
+                        Parameters = new Dictionary<string, object?> { ["option_key"] = key }
                     });
                 }
             }
@@ -316,12 +317,12 @@ public static class FullAppStateTracker
                 {
                     CardModel card = upgradableCards[i];
                     roomObs.Options.Add(card.Id.Entry);
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_upgrade:{i}:{card.Id.Entry}",
-                        ActionType = "choose_upgrade",
+                        Kind = "choose_upgrade",
                         Description = $"Upgrade {card.Id.Entry}",
-                        Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
+                        Parameters = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
                     });
                 }
             }
@@ -350,12 +351,12 @@ public static class FullAppStateTracker
                 // prompt whose minimum is zero, which is how a skippable one is skipped.
                 if (prompt.Selected.Count >= prompt.MinSelect && prompt.Selected.Count < prompt.MaxSelect)
                 {
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = CardSelectPrompt.FinishActionId,
-                        ActionType = CardSelectPrompt.FinishActionId,
+                        Kind = CardSelectPrompt.FinishActionId,
                         Description = $"Finish selecting ({prompt.Selected.Count} chosen)",
-                        Metadata = new Dictionary<string, object?> { ["selected_count"] = prompt.Selected.Count }
+                        Parameters = new Dictionary<string, object?> { ["selected_count"] = prompt.Selected.Count }
                     });
                 }
 
@@ -387,12 +388,12 @@ public static class FullAppStateTracker
                     bool affordable = entry is not MerchantEntry pricedEntry || pricedEntry.EnoughGold;
                     bool stocked = entry is not MerchantEntry stockEntry || stockEntry.IsStocked;
                     roomObs.Options.Add($"{idx}:{entryType}:{itemId}:{price}");
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"shop_buy:{idx}:{entryType}",
-                        ActionType = "shop_buy",
+                        Kind = "shop_buy",
                         Description = $"Buy {itemId} ({entryType}) for {price} gold",
-                        Metadata = new Dictionary<string, object?>
+                        Parameters = new Dictionary<string, object?>
                         {
                             ["slot_index"] = idx,
                             ["entry_type"] = entryType,
@@ -406,10 +407,10 @@ public static class FullAppStateTracker
                 }
             }
 
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "shop_leave",
-                ActionType = "shop_leave",
+                Kind = "shop_leave",
                 Description = "Leave merchant shop",
             });
             obs.Room = roomObs;
@@ -423,21 +424,21 @@ public static class FullAppStateTracker
                 foreach (var opt in eventOptions)
                 {
                     roomObs.Options.Add(idx.ToString());
-                    legalActions.Add(new LegalActionDto
+                    legalActions.Add(new LegalAction
                     {
                         ActionId = $"choose_event:{idx}",
-                        ActionType = "choose_event",
+                        Kind = "choose_event",
                         Description = $"Choose event option {idx}",
-                        Metadata = new Dictionary<string, object?> { ["option_index"] = idx }
+                        Parameters = new Dictionary<string, object?> { ["option_index"] = idx }
                     });
                     idx++;
                 }
             }
 
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "proceed",
-                ActionType = "proceed",
+                Kind = "proceed",
                 Description = "Proceed with event",
             });
             obs.Room = roomObs;
@@ -445,10 +446,10 @@ public static class FullAppStateTracker
         else if (phase == "treasure")
         {
             var roomObs = new RoomObservationDto { RoomType = "Treasure" };
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "proceed",
-                ActionType = "proceed",
+                Kind = "proceed",
                 Description = "Open chest, collect relics and proceed",
             });
             obs.Room = roomObs;
@@ -456,10 +457,10 @@ public static class FullAppStateTracker
         else if (phase == "victory" || phase == "game_over")
         {
             var roomObs = new RoomObservationDto { RoomType = phase == "victory" ? "Victory" : "GameOver" };
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = "proceed",
-                ActionType = "proceed",
+                Kind = "proceed",
                 Description = phase == "victory" ? "Victory! Proceed to next Act" : "Game Over",
             });
             obs.Room = roomObs;
@@ -477,19 +478,19 @@ public static class FullAppStateTracker
     /// </summary>
     private static void AddCardSelectActions(
         RoomObservationDto roomObs,
-        List<LegalActionDto> legalActions,
+        List<LegalAction> legalActions,
         IReadOnlyList<CardModel> offered)
     {
         for (int i = 0; i < offered.Count; i++)
         {
             CardModel card = offered[i];
             roomObs.Options.Add(card.Id.Entry);
-            legalActions.Add(new LegalActionDto
+            legalActions.Add(new LegalAction
             {
                 ActionId = $"choose_card_select:{i}:{card.Id.Entry}",
-                ActionType = "choose_card_select",
+                Kind = "choose_card_select",
                 Description = $"Select {card.Id.Entry}",
-                Metadata = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
+                Parameters = new Dictionary<string, object?> { ["card_index"] = i, ["card_id"] = card.Id.Entry }
             });
         }
     }

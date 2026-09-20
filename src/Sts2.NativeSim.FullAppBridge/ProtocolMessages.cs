@@ -2,45 +2,6 @@ using System.Text.Json.Serialization;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
-public sealed class RpcRequest
-{
-    [JsonPropertyName("id")]
-    public int Id { get; set; }
-
-    [JsonPropertyName("method")]
-    public string Method { get; set; } = "";
-
-    [JsonPropertyName("params")]
-    public Dictionary<string, object?>? Params { get; set; }
-}
-
-public sealed class RpcResponse
-{
-    [JsonPropertyName("id")]
-    public int Id { get; set; }
-
-    [JsonPropertyName("result")]
-    public object? Result { get; set; }
-
-    [JsonPropertyName("error")]
-    public string? Error { get; set; }
-}
-
-public sealed class LegalActionDto
-{
-    [JsonPropertyName("action_id")]
-    public string ActionId { get; set; } = "";
-
-    [JsonPropertyName("action_type")]
-    public string ActionType { get; set; } = "";
-
-    [JsonPropertyName("description")]
-    public string Description { get; set; } = "";
-
-    [JsonPropertyName("metadata")]
-    public Dictionary<string, object?>? Metadata { get; set; }
-}
-
 public sealed class ObservationDto
 {
     // The bridge's own observation version, not the simulator's: the two observations are

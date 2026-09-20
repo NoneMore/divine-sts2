@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Runtime.InteropServices;
 using Sts2.NativeSim.Core;
+using Sts2.NativeSim.Host;
 using Sts2.NativeSim.Protocol;
 
 const uint ErrorMode = 0x0001 | 0x0002 | 0x8000;
@@ -204,7 +205,7 @@ async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment, Native
         RpcRequest? request = null; RpcResponse response;
         try
         {
-            request = JsonSerializer.Deserialize<RpcRequest>(line, Json) ?? throw new ProtocolException("invalid_request", "Empty request.");
+            request = HeadlessWireAdapter.DecodeRequest(line);
             object? result = request.Method switch
             {
                 "hello" => environment.Hello(),
@@ -247,7 +248,7 @@ async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment, Native
             response = error is ProtocolException protocol ? new(request?.Id ?? "", false, Error: new(protocol.Code, protocol.Message, protocol.Details)) : new(request?.Id ?? "", false, Error: new("internal_error", error.Message, new { type = error.GetType().FullName, stack = error.ToString() }));
             Console.Error.WriteLine(error);
         }
-        Console.WriteLine(JsonSerializer.Serialize(response, Json)); Console.Out.Flush();
+        Console.WriteLine(HeadlessWireAdapter.EncodeResponse(response)); Console.Out.Flush();
         if (request?.Method == "close" && response.Ok) return 0;
     }
     return 0;

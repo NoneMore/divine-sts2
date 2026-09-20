@@ -15,5 +15,6 @@ public static class BridgeJson
     {
         WriteIndented = false,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new FullAppBridgeLegalActionConverter() },
     };
 }
