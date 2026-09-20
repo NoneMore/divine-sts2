@@ -70,6 +70,7 @@ async Task<int> RunOptionChoiceAcceptanceAsync(string assemblyPath, string pckPa
     Type environmentType = typeof(PersistentNativeCombatEnvironment);
     MethodInfo mutable = environmentType.GetMethod("Mutable", BindingFlags.NonPublic | BindingFlags.Instance)!;
     MethodInfo startTransition = environmentType.GetMethod("StartTransitionAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+    MethodInfo resumeChoice = environmentType.GetMethod("ResumeChoiceAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
     async Task<(EnvironmentResult Pending, object Player)> BeginChoiceAsync()
     {
         object currentPlayer = environmentType.GetField("_player", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(environment)!;
@@ -88,7 +89,8 @@ async Task<int> RunOptionChoiceAcceptanceAsync(string assemblyPath, string pckPa
     if (choice.GetProperty("kind").GetString() != "choose_option" || choice.GetProperty("options").GetArrayLength() != 2)
         throw new InvalidOperationException("Native option choice snapshot was incomplete.");
 
-    EnvironmentResult resolved = await environment.StepAsync(options[0].ActionId);
+    await (Task)resumeChoice.Invoke(environment, [(string[])options[0].Parameters["option_ids"]!])!;
+    EnvironmentResult resolved = environment.Observe();
     object runDeck = player.GetType().GetProperty("Deck")!.GetValue(player)!;
     int finalDeckCount = ((IEnumerable)runDeck.GetType().GetProperty("Cards")!.GetValue(runDeck)!).Cast<object>().Count();
     if (resolved.LegalActions.Any(action => action.Kind == "choose_option") || finalDeckCount != 13)
@@ -99,7 +101,8 @@ async Task<int> RunOptionChoiceAcceptanceAsync(string assemblyPath, string pckPa
     string[] reconstructedOptions = reconstructedPending.LegalActions.Where(action => action.Kind == "choose_option").Select(action => action.ActionId).ToArray();
     if (!options.Select(action => action.ActionId).SequenceEqual(reconstructedOptions, StringComparer.Ordinal))
         throw new InvalidOperationException("Native option actions changed after reconstructing the owning run.");
-    await environment.StepAsync(reconstructedOptions[0]);
+    LegalAction reconstructedOption = reconstructedPending.LegalActions.Single(action => action.ActionId == reconstructedOptions[0]);
+    await (Task)resumeChoice.Invoke(environment, [(string[])reconstructedOption.Parameters["option_ids"]!])!;
     object reconstructedDeck = reconstructedPlayer.GetType().GetProperty("Deck")!.GetValue(reconstructedPlayer)!;
     int reconstructedDeckCount = ((IEnumerable)reconstructedDeck.GetType().GetProperty("Cards")!.GetValue(reconstructedDeck)!).Cast<object>().Count();
     if (reconstructedDeckCount != 13) throw new InvalidOperationException("Reconstructed native option continuation did not resume against its owning run.");
@@ -125,7 +128,7 @@ async Task<int> RunOptionChoiceAcceptanceAsync(string assemblyPath, string pckPa
     LegalAction[] relicActions = relicPending.LegalActions.Where(action => action.Kind == "choose_option").ToArray();
     if (relicActions.Length != 3) throw new InvalidOperationException($"Expected two native relic options plus Skip, obtained {relicActions.Length} actions.");
     LegalAction firstRelic = relicActions.Single(action => ((string[])action.Parameters["option_ids"]!).SingleOrDefault()?.EndsWith("-option-0", StringComparison.Ordinal) == true);
-    await environment.StepAsync(firstRelic.ActionId);
+    await (Task)resumeChoice.Invoke(environment, [(string[])firstRelic.Parameters["option_ids"]!])!;
     if (selectedRelicIndex != 0) throw new InvalidOperationException("Native relic-option continuation did not receive the selected shipped relic instance.");
     Console.WriteLine(JsonSerializer.Serialize(new { success = true, bundle_choices = options.Length, relic_actions = relicActions.Length, final_card_count = finalDeckCount, reconstructed_card_count = reconstructedDeckCount }, Json));
     return 0;
@@ -206,7 +209,7 @@ async Task<int> ServeAsync(PersistentNativeCombatEnvironment environment, Native
             {
                 "hello" => environment.Hello(),
                 "catalog" => environment.Catalog(),
-                "reset" => environment.Reset(Read<ResetRequest>(request.Parameters)),
+                "reset" => runCoordinator.CombatReset(Read<ResetRequest>(request.Parameters)),
                 "run_reset" => runCoordinator.RunReset(Read<ResetRequest>(request.Parameters)),
                 "map_reset" => runCoordinator.MapReset(Read<ResetRequest>(request.Parameters)),
                 "reward_reset" => runCoordinator.RewardReset(Read<ResetRequest>(request.Parameters)),

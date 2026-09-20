@@ -428,7 +428,7 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
-    public async Task Standalone_reward_option_pick_temporarily_replaces_the_reward_state()
+    public async Task Standalone_reward_option_pick_temporarily_replaces_the_reward_state_with_a_typed_prompt()
     {
         LegalAction take = Action("choose_reward:0:SCROLL_BOXES", "choose_reward", ("option_index", 0));
         LegalAction option = Action("choose_option:bundle-0", "choose_option",
@@ -447,7 +447,7 @@ public sealed class NativeRunCoordinatorTests
 
         Assert.Same(option, Assert.Single(prompt.LegalActions));
         Assert.Empty(complete.LegalActions);
-        Assert.Equal(1, adapter.GenericApplyCount);
+        Assert.Equal(0, adapter.GenericApplyCount);
     }
 
     [Fact]
@@ -838,10 +838,10 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
-    public void Reflection_adapter_and_scripted_adapter_share_the_compatibility_port()
+    public void Production_and_scripted_adapters_share_the_native_run_port()
     {
-        Assert.True(typeof(IRunSessionCompatibilityAdapter).IsAssignableFrom(typeof(LegacyRunSessionAdapter)));
-        Assert.True(typeof(IRunSessionCompatibilityAdapter).IsAssignableFrom(typeof(ScriptedNativeRunAdapter)));
+        Assert.True(typeof(INativeRunAdapter).IsAssignableFrom(typeof(NativeRunAdapter)));
+        Assert.True(typeof(INativeRunAdapter).IsAssignableFrom(typeof(ScriptedNativeRunAdapter)));
     }
 
     private static ScriptedNativeRunAdapter ScenarioScript() => ScenarioScript(LoadRecordedScenarioCapture());

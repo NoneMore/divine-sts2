@@ -11,8 +11,8 @@ public sealed class ActiveRunSessionTests
     public void Current_frame_is_one_atomic_projection()
     {
         DecisionFrame expected = Frame(Action("continue"));
-        RecordingCompatibilityAdapter adapter = new(expected);
-        CompatibilityActiveRunSession session = new(adapter, new(expected));
+        RecordingNativeRunAdapter adapter = new(expected);
+        ActiveRunSession session = new(adapter, new(expected));
 
         DecisionFrame current = session.Current;
 
@@ -26,8 +26,8 @@ public sealed class ActiveRunSessionTests
     [Fact]
     public async Task Apply_is_serial_and_validates_each_action_before_native_mutation()
     {
-        RecordingCompatibilityAdapter adapter = new(Frame(Action("continue"))) { ApplyDelay = TimeSpan.FromMilliseconds(40) };
-        CompatibilityActiveRunSession session = new(adapter, new(Frame(Action("continue"))));
+        RecordingNativeRunAdapter adapter = new(Frame(Action("continue"))) { ApplyDelay = TimeSpan.FromMilliseconds(40) };
+        ActiveRunSession session = new(adapter, new(Frame(Action("continue"))));
 
         await Task.WhenAll(session.ApplyAsync("continue"), session.ApplyAsync("continue"));
         ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(() => session.ApplyAsync("missing"));
@@ -40,12 +40,12 @@ public sealed class ActiveRunSessionTests
     [Fact]
     public async Task Failed_recovery_poisons_the_session_deterministically()
     {
-        RecordingCompatibilityAdapter adapter = new(Frame(Action("break")))
+        RecordingNativeRunAdapter adapter = new(Frame(Action("break")))
         {
             ApplyFailure = new InvalidOperationException("native mutation failed"),
             RestoreFailure = new InvalidOperationException("native recovery failed")
         };
-        CompatibilityActiveRunSession session = new(adapter, new(Frame(Action("break"))));
+        ActiveRunSession session = new(adapter, new(Frame(Action("break"))));
 
         ProtocolException first = await Assert.ThrowsAsync<ProtocolException>(() => session.ApplyAsync("break"));
         ProtocolException current = Assert.Throws<ProtocolException>(() => _ = session.Current);
@@ -71,7 +71,7 @@ public sealed class ActiveRunSessionTests
 
     private static LegalAction Action(string id) => new(id, "choose_event", new Dictionary<string, object?>());
 
-    private sealed class RecordingCompatibilityAdapter(DecisionFrame initial) : IRunSessionCompatibilityAdapter
+    private sealed class RecordingNativeRunAdapter(DecisionFrame initial) : INativeRunAdapter
     {
         private DecisionFrame _current = initial;
         private int _concurrentMutations;
@@ -82,18 +82,19 @@ public sealed class ActiveRunSessionTests
         public int MutationCount { get; private set; }
         public int MaximumConcurrentMutations { get; private set; }
 
-        public CompatibilityCapture Reset(ResetRequest request) => new(_current);
-        public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
-        public CompatibilityCapture ResetReward(ResetRequest request) => Reset(request);
-        public CompatibilityCapture ResetItemReward(ItemRewardResetRequest request) => Reset(request.State);
-        public Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
-            Task.FromResult(Reset(request.State));
-        public CompatibilityCapture ResetRest(ResetRequest request) => Reset(request);
-        public Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
-            Task.FromResult(Reset(request.State));
+        public NativeDecisionCapture ResetCombat(ResetRequest request) => new(_current);
+        public NativeDecisionCapture ResetRun(ResetRequest request) => new(_current);
+        public NativeDecisionCapture ResetMap(ResetRequest request) => ResetRun(request);
+        public NativeDecisionCapture ResetReward(ResetRequest request) => ResetRun(request);
+        public NativeDecisionCapture ResetItemReward(ItemRewardResetRequest request) => ResetRun(request.State);
+        public Task<NativeDecisionCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
+            Task.FromResult(ResetRun(request.State));
+        public NativeDecisionCapture ResetRest(ResetRequest request) => ResetRun(request);
+        public Task<NativeDecisionCapture> ResetEventAsync(EventResetRequest request) =>
+            Task.FromResult(ResetRun(request.State));
         public object CaptureCheckpoint() => "checkpoint";
 
-        public async Task<CompatibilityCapture> ApplyAsync(string actionId)
+        public async Task<NativeDecisionCapture> ApplyAsync(string actionId)
         {
             int concurrent = Interlocked.Increment(ref _concurrentMutations);
             MaximumConcurrentMutations = Math.Max(MaximumConcurrentMutations, concurrent);
@@ -110,54 +111,59 @@ public sealed class ActiveRunSessionTests
             }
         }
 
-        public Task<CompatibilityCapture> ResumeCardSelectAsync(
+        public Task<NativeDecisionCapture> ResumeCardSelectAsync(
             PromptResumeToken parent,
             CardSelection selection) =>
             ApplyAsync(selection.ActionId);
 
-        public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
+        public Task<NativeDecisionCapture> ResumeOptionPickAsync(
+            PromptResumeToken parent,
+            OptionSelection selection) =>
+            ApplyAsync(selection.ActionId);
+
+        public Task<NativeDecisionCapture> EnterMapPointAsync(MapPointSelection selection) =>
             ApplyAsync($"choose_map:{selection.Col}:{selection.Row}");
 
-        public Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection) =>
+        public Task<NativeDecisionCapture> ChooseRestAsync(RestSelection selection) =>
             ApplyAsync($"choose_rest:{selection.OptionId}");
 
-        public Task<CompatibilityCapture> OpenTreasureAsync() => ApplyAsync("open_treasure");
+        public Task<NativeDecisionCapture> OpenTreasureAsync() => ApplyAsync("open_treasure");
 
-        public Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection) =>
+        public Task<NativeDecisionCapture> ChooseTreasureAsync(TreasureSelection selection) =>
             ApplyAsync(selection.OptionIndex is { } index ? $"choose_treasure:{index}" : "skip_treasure");
 
-        public Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection) =>
+        public Task<NativeDecisionCapture> BuyShopEntryAsync(ShopSelection selection) =>
             ApplyAsync($"buy_shop:{selection.EntryIndex}");
 
-        public Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
+        public Task<NativeDecisionCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
             ApplyAsync($"leave_{room.ToString().ToLowerInvariant()}");
 
-        public Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection) =>
+        public Task<NativeDecisionCapture> ChooseEventAsync(EventSelection selection) =>
             ApplyAsync($"choose_event:{selection.OptionIndex}");
 
-        public Task<CompatibilityCapture> LeaveEventAsync() => ApplyAsync("leave_event");
+        public Task<NativeDecisionCapture> LeaveEventAsync() => ApplyAsync("leave_event");
 
-        public Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
+        public Task<NativeDecisionCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
             ApplyAsync($"choose_reward:{selection.OptionIndex}");
 
-        public Task<CompatibilityCapture> GenerateRoomRewardsAsync() => ApplyAsync("generate_room_rewards");
+        public Task<NativeDecisionCapture> GenerateRoomRewardsAsync() => ApplyAsync("generate_room_rewards");
 
-        public Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
+        public Task<NativeDecisionCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
             ApplyAsync($"choose_room_reward:{selection.RewardIndex}:{selection.OptionIndex}");
 
-        public Task<CompatibilityCapture> LeaveRoomRewardsAsync() => ApplyAsync("leave_room_rewards");
+        public Task<NativeDecisionCapture> LeaveRoomRewardsAsync() => ApplyAsync("leave_room_rewards");
 
-        public Task<CompatibilityCapture> AdvanceActAsync() => ApplyAsync("advance_act");
+        public Task<NativeDecisionCapture> AdvanceActAsync() => ApplyAsync("advance_act");
 
-        public Task<CompatibilityCapture> ResumeRewardAsync(
+        public Task<NativeDecisionCapture> ResumeRewardAsync(
             PromptResumeToken parent,
             RewardSelection selection) =>
             ApplyAsync(selection.ActionId);
 
-        public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
+        public Task<NativeDecisionCapture> RestoreAsync(object checkpoint)
         {
             if (RestoreFailure is not null) throw RestoreFailure;
-            return Task.FromResult(new CompatibilityCapture(_current));
+            return Task.FromResult(new NativeDecisionCapture(_current));
         }
     }
 }

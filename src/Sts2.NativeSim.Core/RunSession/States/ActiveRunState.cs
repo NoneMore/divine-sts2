@@ -50,8 +50,8 @@ internal sealed class RunContinuation<T>(
     public Task<ActiveRunState> ResumeAsync(T value) => resume(parent, value);
 }
 
-/// <summary>A non-prompt decision, including compatibility states and terminal states.</summary>
-internal sealed class NativeDecisionState(
+/// <summary>The explicit legacy state retained for combat actions until combat migration.</summary>
+internal sealed class LegacyCombatState(
     DecisionFrame frame,
     Func<string, Task<ActiveRunState>> apply) : ActiveRunState(frame)
 {
@@ -311,14 +311,21 @@ internal sealed class CardSelectPromptState(
         LegalAction action = RequireAction(actionId);
         if (!PromptActionKind.IsCard(action.Kind))
             throw new ProtocolException("invalid_choice", $"Card-select prompt cannot apply '{action.Kind}'.");
-        return continuation.ResumeAsync(new(action.ActionId, StringValues(action, "option_ids")));
+        return continuation.ResumeAsync(new(action.ActionId, PromptActionValues.OptionIds(action)));
     }
+}
 
-    private static IReadOnlyList<string> StringValues(LegalAction action, string key)
+/// <summary>The sole active state while the shipped game is waiting for an option bundle.</summary>
+internal sealed class OptionPickPromptState(
+    DecisionFrame frame,
+    RunContinuation<OptionSelection> continuation) : ActiveRunState(frame)
+{
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
     {
-        if (!action.Parameters.TryGetValue(key, out object? value) || value is not IEnumerable<string> values)
-            throw new ProtocolException("invalid_choice", $"Card-select action '{action.ActionId}' has no {key}.");
-        return values.ToArray();
+        LegalAction action = RequireAction(actionId);
+        if (!PromptActionKind.IsOption(action.Kind))
+            throw new ProtocolException("invalid_choice", $"Option-pick prompt cannot apply '{action.Kind}'.");
+        return continuation.ResumeAsync(new(action.ActionId, PromptActionValues.OptionIds(action)));
     }
 }
 
@@ -349,9 +356,9 @@ internal sealed class RewardPromptState(
 }
 
 /// <summary>Turns semantic adapter captures into exactly one active state.</summary>
-internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adapter)
+internal sealed class ActiveRunStateFactory(INativeRunAdapter adapter)
 {
-    public ActiveRunState Create(CompatibilityCapture capture)
+    public ActiveRunState Create(NativeDecisionCapture capture)
     {
         DecisionFrame frame = capture.Frame;
         if (frame.Terminated)
@@ -378,6 +385,13 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
                 frame,
                 new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
         }
+        if (IsOptionPrompt(frame))
+        {
+            SuspendedNativeDecision parent = Parent(capture);
+            return new OptionPickPromptState(
+                frame,
+                new(parent, static (suspended, selection) => suspended.ResumeAsync(selection)));
+        }
         if (IsRewardPrompt(frame))
         {
             SuspendedNativeDecision parent = Parent(capture);
@@ -397,7 +411,7 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
                 LeaveRoomRewardsAsync);
         if (capture.ActTransition)
             return new ActTransitionDecisionState(frame, AdvanceActAsync);
-        return new NativeDecisionState(frame, ContinueAsync);
+        return new LegacyCombatState(frame, ContinueAsync);
     }
 
     private async Task<ActiveRunState> ContinueAsync(string actionId) =>
@@ -450,7 +464,11 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
         frame.LegalActions.Count > 0
         && frame.LegalActions.All(action => PromptActionKind.IsReward(action.Kind));
 
-    private SuspendedNativeDecision Parent(CompatibilityCapture capture) => new(
+    private static bool IsOptionPrompt(DecisionFrame frame) =>
+        frame.LegalActions.Count > 0
+        && frame.LegalActions.All(action => PromptActionKind.IsOption(action.Kind));
+
+    private SuspendedNativeDecision Parent(NativeDecisionCapture capture) => new(
         adapter,
         this,
         capture.PromptParent
@@ -464,12 +482,15 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 /// native task/completion source; this object owns only the semantic way to resume it.
 /// </summary>
 internal sealed class SuspendedNativeDecision(
-    IRunSessionCompatibilityAdapter adapter,
+    INativeRunAdapter adapter,
     ActiveRunStateFactory states,
     PromptResumeToken parent)
 {
     public async Task<ActiveRunState> ResumeAsync(CardSelection selection) =>
         states.Create(await adapter.ResumeCardSelectAsync(parent, selection).ConfigureAwait(false));
+
+    public async Task<ActiveRunState> ResumeAsync(OptionSelection selection) =>
+        states.Create(await adapter.ResumeOptionPickAsync(parent, selection).ConfigureAwait(false));
 
     public async Task<ActiveRunState> ResumeAsync(RewardSelection selection) =>
         states.Create(await adapter.ResumeRewardAsync(parent, selection).ConfigureAwait(false));
@@ -478,5 +499,16 @@ internal sealed class SuspendedNativeDecision(
 internal static class PromptActionKind
 {
     public static bool IsCard(string kind) => kind == "choose_cards";
+    public static bool IsOption(string kind) => kind == "choose_option";
     public static bool IsReward(string kind) => kind is "choose_custom_reward" or "skip_custom_rewards";
+}
+
+internal static class PromptActionValues
+{
+    public static IReadOnlyList<string> OptionIds(LegalAction action)
+    {
+        if (!action.Parameters.TryGetValue("option_ids", out object? value) || value is not IEnumerable<string> values)
+            throw new ProtocolException("invalid_choice", $"Prompt action '{action.ActionId}' has no option_ids.");
+        return values.ToArray();
+    }
 }

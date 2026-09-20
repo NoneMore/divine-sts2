@@ -12,6 +12,9 @@ internal sealed class PromptResumeToken(object marker)
 /// <summary>The semantic result of resolving one Card-select prompt.</summary>
 internal sealed record CardSelection(string ActionId, IReadOnlyList<string> OptionIds);
 
+/// <summary>The semantic result of resolving a bundle or relic option pick.</summary>
+internal sealed record OptionSelection(string ActionId, IReadOnlyList<string> OptionIds);
+
 /// <summary>The semantic result of taking or skipping one entry in a reward prompt.</summary>
 internal sealed record RewardSelection(
     string ActionId,

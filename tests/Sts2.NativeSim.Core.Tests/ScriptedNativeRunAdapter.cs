@@ -5,7 +5,7 @@ using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core.Tests;
 
-internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
+internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
 {
     private readonly Dictionary<string, ScriptedFrame> _frames = new(StringComparer.Ordinal);
     private readonly Dictionary<(string Frame, string Action), string> _transitions = new();
@@ -338,52 +338,58 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return this;
     }
 
-    public CompatibilityCapture Reset(ResetRequest request)
-    {
-        ValidateResetMode(request, ResetModes.Run);
-        return Reset();
-    }
-
-    public CompatibilityCapture ResetMap(ResetRequest request)
+    public NativeDecisionCapture ResetCombat(ResetRequest request)
     {
         ValidateResetMode(request, ResetModes.Combat);
         return Reset();
     }
 
-    public CompatibilityCapture ResetReward(ResetRequest request)
+    public NativeDecisionCapture ResetRun(ResetRequest request)
+    {
+        ValidateResetMode(request, ResetModes.Run);
+        return Reset();
+    }
+
+    public NativeDecisionCapture ResetMap(ResetRequest request)
+    {
+        ValidateResetMode(request, ResetModes.Combat);
+        return Reset();
+    }
+
+    public NativeDecisionCapture ResetReward(ResetRequest request)
     {
         ValidateResetMode(request, ResetModes.Combat);
         RewardResetCount++;
         return Reset();
     }
 
-    public CompatibilityCapture ResetItemReward(ItemRewardResetRequest request)
+    public NativeDecisionCapture ResetItemReward(ItemRewardResetRequest request)
     {
         ValidateResetMode(request.State, ResetModes.Combat);
         ItemRewardResetCount++;
         return Reset();
     }
 
-    public Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request)
+    public Task<NativeDecisionCapture> ResetCustomRewardAsync(CustomRewardResetRequest request)
     {
         ValidateResetMode(request.State, ResetModes.Combat);
         CustomRewardResetCount++;
         return Task.FromResult(Reset());
     }
 
-    public CompatibilityCapture ResetRest(ResetRequest request)
+    public NativeDecisionCapture ResetRest(ResetRequest request)
     {
         ValidateResetMode(request, ResetModes.Combat);
         return Reset();
     }
 
-    public Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request)
+    public Task<NativeDecisionCapture> ResetEventAsync(EventResetRequest request)
     {
         ValidateResetMode(request.State, ResetModes.Combat);
         return Task.FromResult(Reset());
     }
 
-    private CompatibilityCapture Reset()
+    private NativeDecisionCapture Reset()
     {
         _currentFrame = _resetFrame;
         _promptMarker = new();
@@ -399,20 +405,20 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
                 $"A '{expected}' reset was asked for with reset_mode '{request.ResetMode}'.");
     }
 
-    public CompatibilityCapture Capture()
+    public NativeDecisionCapture Capture()
     {
         ScriptedFrame frame = _frames[_currentFrame];
         return Result(frame);
     }
 
-    public async Task<CompatibilityCapture> ApplyAsync(string actionId)
+    public async Task<NativeDecisionCapture> ApplyAsync(string actionId)
     {
         GenericApplyCount++;
         string nextFrame = _transitions[(_currentFrame, actionId)];
         return await ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection)
+    public Task<NativeDecisionCapture> EnterMapPointAsync(MapPointSelection selection)
     {
         EnteredMapPoints.Add((selection.Col, selection.Row));
         string nextFrame = _mapTransitions[
@@ -424,7 +430,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
             nextFrame);
     }
 
-    public Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection)
+    public Task<NativeDecisionCapture> ChooseRestAsync(RestSelection selection)
     {
         RestSelections.Add(selection);
         string nextFrame = _restTransitions[(_currentFrame, selection.OptionId)];
@@ -435,13 +441,13 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
             nextFrame);
     }
 
-    public Task<CompatibilityCapture> OpenTreasureAsync()
+    public Task<NativeDecisionCapture> OpenTreasureAsync()
     {
         OpenTreasureCount++;
         return ApplyTransitionAsync("open_treasure", _openTreasureTransitions[_currentFrame]);
     }
 
-    public Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection)
+    public Task<NativeDecisionCapture> ChooseTreasureAsync(TreasureSelection selection)
     {
         TreasureSelections.Add(selection);
         string nextFrame = _treasureTransitions[(_currentFrame, selection.OptionIndex)];
@@ -453,7 +459,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection)
+    public Task<NativeDecisionCapture> BuyShopEntryAsync(ShopSelection selection)
     {
         ShopSelections.Add(selection);
         string nextFrame = _shopTransitions[(_currentFrame, selection.EntryIndex)];
@@ -463,14 +469,14 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room)
+    public Task<NativeDecisionCapture> LeaveSimpleRoomAsync(SimpleRoomKind room)
     {
         LeftSimpleRooms.Add(room);
         string nextFrame = _leaveSimpleRoomTransitions[(_currentFrame, room)];
         return ApplyTransitionAsync($"leave_{room.ToString().ToLowerInvariant()}", nextFrame);
     }
 
-    public Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection)
+    public Task<NativeDecisionCapture> ChooseEventAsync(EventSelection selection)
     {
         EventSelections.Add(selection);
         string nextFrame = _eventTransitions[(_currentFrame, selection.OptionIndex)];
@@ -480,13 +486,13 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> LeaveEventAsync()
+    public Task<NativeDecisionCapture> LeaveEventAsync()
     {
         LeaveEventCount++;
         return ApplyTransitionAsync("leave_event", _leaveEventTransitions[_currentFrame]);
     }
 
-    public Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection)
+    public Task<NativeDecisionCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection)
     {
         StandaloneRewardSelections.Add(selection);
         string nextFrame = _standaloneRewardTransitions[(_currentFrame, selection.OptionIndex)];
@@ -496,13 +502,13 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> GenerateRoomRewardsAsync()
+    public Task<NativeDecisionCapture> GenerateRoomRewardsAsync()
     {
         GenerateRoomRewardsCount++;
         return ApplyTransitionAsync("generate_room_rewards", _generateRoomRewardTransitions[_currentFrame]);
     }
 
-    public Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection)
+    public Task<NativeDecisionCapture> ChooseRoomRewardAsync(RoomRewardSelection selection)
     {
         RoomRewardSelections.Add(selection);
         string nextFrame = _roomRewardTransitions[(_currentFrame, selection.RewardIndex, selection.OptionIndex)];
@@ -513,19 +519,19 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(actionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> LeaveRoomRewardsAsync()
+    public Task<NativeDecisionCapture> LeaveRoomRewardsAsync()
     {
         LeaveRoomRewardsCount++;
         return ApplyTransitionAsync("leave_room_rewards", _leaveRoomRewardTransitions[_currentFrame]);
     }
 
-    public Task<CompatibilityCapture> AdvanceActAsync()
+    public Task<NativeDecisionCapture> AdvanceActAsync()
     {
         AdvanceActCount++;
         return ApplyTransitionAsync("advance_act", _advanceActTransitions[_currentFrame]);
     }
 
-    public Task<CompatibilityCapture> ResumeCardSelectAsync(
+    public Task<NativeDecisionCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection)
     {
@@ -536,7 +542,16 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(selection.ActionId, nextFrame);
     }
 
-    public Task<CompatibilityCapture> ResumeRewardAsync(
+    public Task<NativeDecisionCapture> ResumeOptionPickAsync(
+        PromptResumeToken parent,
+        OptionSelection selection)
+    {
+        ValidateParent(parent);
+        string nextFrame = _transitions[(_currentFrame, selection.ActionId)];
+        return ApplyTransitionAsync(selection.ActionId, nextFrame);
+    }
+
+    public Task<NativeDecisionCapture> ResumeRewardAsync(
         PromptResumeToken parent,
         RewardSelection selection)
     {
@@ -557,7 +572,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return ApplyTransitionAsync(selection.ActionId, transition.Frame, nextParent);
     }
 
-    private async Task<CompatibilityCapture> ApplyTransitionAsync(
+    private async Task<NativeDecisionCapture> ApplyTransitionAsync(
         string actionId,
         string nextFrame,
         object? nextPromptMarker = null)
@@ -567,7 +582,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         string previousFrame = _currentFrame;
         _currentFrame = nextFrame;
         _promptMarker = nextPromptMarker ?? new();
-        CompatibilityCapture result = Result(next);
+        NativeDecisionCapture result = Result(next);
         MutationCount++;
         if (_errorsAfterMutation.TryGetValue((previousFrame, actionId), out string? code))
             throw new ProtocolException(code, "The scripted native adapter failed after mutation.");
@@ -581,7 +596,7 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return checkpoint;
     }
 
-    public Task<CompatibilityCapture> RestoreAsync(object checkpoint)
+    public Task<NativeDecisionCapture> RestoreAsync(object checkpoint)
     {
         ScriptedCheckpoint restored = _branches[(string)checkpoint];
         _currentFrame = restored.Frame;
@@ -592,10 +607,10 @@ internal sealed class ScriptedNativeRunAdapter : IRunSessionCompatibilityAdapter
         return Task.FromResult(Capture());
     }
 
-    private CompatibilityCapture Result(ScriptedFrame frame)
+    private NativeDecisionCapture Result(ScriptedFrame frame)
     {
         bool prompt = frame.Actions.Count > 0 && frame.Actions.All(action =>
-            action.Kind == "choose_cards"
+            action.Kind is "choose_cards" or "choose_option"
             || action.Kind is "choose_custom_reward" or "skip_custom_rewards");
         return new(
             new(frame.Observation, frame.Actions, frame.Terminated, frame.Victory, frame.KernelProjection, null),

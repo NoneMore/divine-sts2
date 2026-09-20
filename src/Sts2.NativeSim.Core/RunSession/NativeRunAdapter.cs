@@ -3,66 +3,71 @@ using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core.RunSession;
 
-/// <summary>The sole temporary route from the active-session module to legacy run states.</summary>
-internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
+/// <summary>The shipped-game implementation of the semantic run command/query port.</summary>
+internal sealed class NativeRunAdapter : INativeRunAdapter
 {
     private readonly PersistentNativeCombatEnvironment _environment;
 
-    public LegacyRunSessionAdapter(PersistentNativeCombatEnvironment environment) => _environment = environment;
+    public NativeRunAdapter(PersistentNativeCombatEnvironment environment) => _environment = environment;
 
-    public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
-    public CompatibilityCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
-    public CompatibilityCapture ResetReward(ResetRequest request) => Capture(_environment.RewardReset(request));
-    public CompatibilityCapture ResetItemReward(ItemRewardResetRequest request) =>
+    public NativeDecisionCapture ResetCombat(ResetRequest request) => Capture(_environment.Reset(request));
+    public NativeDecisionCapture ResetRun(ResetRequest request) => Capture(_environment.RunReset(request));
+    public NativeDecisionCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
+    public NativeDecisionCapture ResetReward(ResetRequest request) => Capture(_environment.RewardReset(request));
+    public NativeDecisionCapture ResetItemReward(ItemRewardResetRequest request) =>
         Capture(_environment.ItemRewardReset(request));
-    public async Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
+    public async Task<NativeDecisionCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
         Capture(await _environment.CustomRewardResetAsync(request).ConfigureAwait(false));
-    public CompatibilityCapture ResetRest(ResetRequest request) => Capture(_environment.RestReset(request));
-    public async Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
+    public NativeDecisionCapture ResetRest(ResetRequest request) => Capture(_environment.RestReset(request));
+    public async Task<NativeDecisionCapture> ResetEventAsync(EventResetRequest request) =>
         Capture(await _environment.EventResetAsync(request).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ApplyAsync(string actionId) =>
+    public async Task<NativeDecisionCapture> ApplyAsync(string actionId) =>
         Capture(await _environment.StepAsync(actionId).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> EnterMapPointAsync(MapPointSelection selection) =>
+    public async Task<NativeDecisionCapture> EnterMapPointAsync(MapPointSelection selection) =>
         Capture(await _environment.EnterMapPointAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ChooseRestAsync(RestSelection selection) =>
+    public async Task<NativeDecisionCapture> ChooseRestAsync(RestSelection selection) =>
         Capture(await _environment.ChooseRestOptionAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> OpenTreasureAsync() =>
+    public async Task<NativeDecisionCapture> OpenTreasureAsync() =>
         Capture(await _environment.OpenTreasureRoomAsync().ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ChooseTreasureAsync(TreasureSelection selection) =>
+    public async Task<NativeDecisionCapture> ChooseTreasureAsync(TreasureSelection selection) =>
         Capture(await _environment.ChooseTreasureRelicAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> BuyShopEntryAsync(ShopSelection selection) =>
+    public async Task<NativeDecisionCapture> BuyShopEntryAsync(ShopSelection selection) =>
         Capture(await _environment.BuyShopEntryAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
+    public async Task<NativeDecisionCapture> LeaveSimpleRoomAsync(SimpleRoomKind room) =>
         Capture(await _environment.LeaveSimpleRoomAsync(room).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection) =>
+    public async Task<NativeDecisionCapture> ChooseEventAsync(EventSelection selection) =>
         Capture(await _environment.ChooseEventOptionAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> LeaveEventAsync() =>
+    public async Task<NativeDecisionCapture> LeaveEventAsync() =>
         Capture(await _environment.LeaveEventAsync().ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
+    public async Task<NativeDecisionCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
         Capture(await _environment.ChooseStandaloneRewardAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> GenerateRoomRewardsAsync() =>
+    public async Task<NativeDecisionCapture> GenerateRoomRewardsAsync() =>
         Capture(await _environment.GenerateActiveRoomRewardsAsync().ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
+    public async Task<NativeDecisionCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
         Capture(await _environment.ChooseActiveRoomRewardAsync(selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> LeaveRoomRewardsAsync() =>
+    public async Task<NativeDecisionCapture> LeaveRoomRewardsAsync() =>
         Capture(await _environment.LeaveActiveRoomRewardsAsync().ConfigureAwait(false));
-    public async Task<CompatibilityCapture> AdvanceActAsync() =>
+    public async Task<NativeDecisionCapture> AdvanceActAsync() =>
         Capture(await _environment.AdvanceActiveActAsync().ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ResumeCardSelectAsync(
+    public async Task<NativeDecisionCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection) =>
         Capture(await _environment.ResumeCardSelectAsync(parent, selection).ConfigureAwait(false));
-    public async Task<CompatibilityCapture> ResumeRewardAsync(
+    public async Task<NativeDecisionCapture> ResumeOptionPickAsync(
+        PromptResumeToken parent,
+        OptionSelection selection) =>
+        Capture(await _environment.ResumeOptionPickAsync(parent, selection).ConfigureAwait(false));
+    public async Task<NativeDecisionCapture> ResumeRewardAsync(
         PromptResumeToken parent,
         RewardSelection selection) =>
         Capture(await _environment.ResumeRewardAsync(parent, selection).ConfigureAwait(false));
     public object CaptureCheckpoint() => _environment.Fork();
-    public async Task<CompatibilityCapture> RestoreAsync(object checkpoint) =>
+    public async Task<NativeDecisionCapture> RestoreAsync(object checkpoint) =>
         Capture(
             await _environment.RestoreAsync((string)checkpoint).ConfigureAwait(false),
             includeRestore: true);
 
-    private CompatibilityCapture Capture(EnvironmentResult result, bool includeRestore = false)
+    private NativeDecisionCapture Capture(EnvironmentResult result, bool includeRestore = false)
     {
         DecisionFrame frame = new(
             result.Observation,
@@ -106,7 +111,7 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
         return result;
     }
 
-    private static CompatibilityRestore RestoreProjection(object? transition)
+    private static NativeRestore RestoreProjection(object? transition)
     {
         JsonElement value = JsonSerializer.SerializeToElement(transition);
         return new(

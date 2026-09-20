@@ -16,33 +16,38 @@ public sealed class NativeRunCoordinator
         System.Environment.GetEnvironmentVariable("STS2_BRANCH_CAPACITY"),
         out int capacity) && capacity > 0 ? capacity : 8192;
 
-    private readonly IRunSessionCompatibilityAdapter _adapter;
+    private readonly INativeRunAdapter _adapter;
     private readonly Dictionary<string, CoordinatorBranch> _branches = new(StringComparer.Ordinal);
     private readonly LinkedList<string> _branchOrder = [];
     private readonly List<string> _history = [];
     private readonly SemaphoreSlim _serial = new(1, 1);
-    private CompatibilityActiveRunSession? _session;
+    private ActiveRunSession? _session;
     private ResetRequest? _reset;
     private string? _currentBranchHandle;
 
-    internal NativeRunCoordinator(IRunSessionCompatibilityAdapter adapter) => _adapter = adapter;
+    internal NativeRunCoordinator(INativeRunAdapter adapter) => _adapter = adapter;
 
     public NativeRunCoordinator(PersistentNativeCombatEnvironment environment)
-        : this(new LegacyRunSessionAdapter(environment)) { }
+        : this(new NativeRunAdapter(environment)) { }
+
+    public EnvironmentResult CombatReset(ResetRequest request)
+    {
+        return ResetDecision(request, _adapter.ResetCombat, ResetModes.Combat, "reset");
+    }
 
     public EnvironmentResult RunReset(ResetRequest request)
     {
-        return Reset(request, _adapter.Reset, ResetModes.Run, "run_reset");
+        return ResetDecision(request, _adapter.ResetRun, ResetModes.Run, "run_reset");
     }
 
     public EnvironmentResult MapReset(ResetRequest request)
     {
-        return Reset(request, _adapter.ResetMap, ResetModes.Combat, "map_reset");
+        return ResetDecision(request, _adapter.ResetMap, ResetModes.Combat, "map_reset");
     }
 
     public EnvironmentResult RewardReset(ResetRequest request)
     {
-        return Reset(request, _adapter.ResetReward, ResetModes.Combat, "reward_reset");
+        return ResetDecision(request, _adapter.ResetReward, ResetModes.Combat, "reward_reset");
     }
 
     public EnvironmentResult ItemRewardReset(ItemRewardResetRequest request)
@@ -50,7 +55,7 @@ public sealed class NativeRunCoordinator
         _serial.Wait();
         try
         {
-            CompatibilityCapture initial = _adapter.ResetItemReward(request);
+            NativeDecisionCapture initial = _adapter.ResetItemReward(request);
             InitializeSession(request.State, initial);
             return Project(initial.Frame, new
             {
@@ -71,7 +76,7 @@ public sealed class NativeRunCoordinator
         await _serial.WaitAsync().ConfigureAwait(false);
         try
         {
-            CompatibilityCapture initial = await _adapter.ResetCustomRewardAsync(request).ConfigureAwait(false);
+            NativeDecisionCapture initial = await _adapter.ResetCustomRewardAsync(request).ConfigureAwait(false);
             InitializeSession(request.State, initial);
             return Project(initial.Frame, new
             {
@@ -88,7 +93,7 @@ public sealed class NativeRunCoordinator
 
     public EnvironmentResult RestReset(ResetRequest request)
     {
-        return Reset(request, _adapter.ResetRest, ResetModes.Combat, "rest_reset");
+        return ResetDecision(request, _adapter.ResetRest, ResetModes.Combat, "rest_reset");
     }
 
     public async Task<EnvironmentResult> EventResetAsync(EventResetRequest request)
@@ -96,7 +101,7 @@ public sealed class NativeRunCoordinator
         await _serial.WaitAsync().ConfigureAwait(false);
         try
         {
-            CompatibilityCapture initial = await _adapter.ResetEventAsync(request).ConfigureAwait(false);
+            NativeDecisionCapture initial = await _adapter.ResetEventAsync(request).ConfigureAwait(false);
             InitializeSession(request.State, initial);
             return Project(initial.Frame, new
             {
@@ -111,16 +116,16 @@ public sealed class NativeRunCoordinator
         }
     }
 
-    private EnvironmentResult Reset(
+    private EnvironmentResult ResetDecision(
         ResetRequest request,
-        Func<ResetRequest, CompatibilityCapture> reset,
+        Func<ResetRequest, NativeDecisionCapture> reset,
         string resetMode,
         string transitionKind)
     {
         _serial.Wait();
         try
         {
-            CompatibilityCapture initial = reset(request);
+            NativeDecisionCapture initial = reset(request);
             InitializeSession(request with { ResetMode = resetMode }, initial);
             return Project(initial.Frame, new { kind = transitionKind, replayed_actions = 0 });
         }
@@ -130,7 +135,7 @@ public sealed class NativeRunCoordinator
         }
     }
 
-    private void InitializeSession(ResetRequest request, CompatibilityCapture initial)
+    private void InitializeSession(ResetRequest request, NativeDecisionCapture initial)
     {
         _session = new(_adapter, initial);
         _reset = request with { ResetMode = request.ResetMode ?? ResetModes.Combat };
@@ -225,7 +230,7 @@ public sealed class NativeRunCoordinator
                 throw new ProtocolException("unknown_state_handle", stateHandle);
 
             Stopwatch timer = Stopwatch.StartNew();
-            CompatibilityCapture restored = await Session.RestoreAsync(branch.Checkpoint).ConfigureAwait(false);
+            NativeDecisionCapture restored = await Session.RestoreAsync(branch.Checkpoint).ConfigureAwait(false);
             string actualHash = ComputeStateHash(restored.Frame);
             if (!StringComparer.Ordinal.Equals(branch.ExpectedHash, actualHash))
                 throw new ProtocolException(
@@ -237,7 +242,7 @@ public sealed class NativeRunCoordinator
             _history.AddRange(branch.History);
             _currentBranchHandle = stateHandle;
             timer.Stop();
-            CompatibilityRestore metadata = restored.Restore
+            NativeRestore metadata = restored.Restore
                 ?? new("restore", branch.History.Count);
             Dictionary<string, object?> transition = new(StringComparer.Ordinal)
             {
@@ -257,7 +262,7 @@ public sealed class NativeRunCoordinator
         }
     }
 
-    private CompatibilityActiveRunSession Session =>
+    private ActiveRunSession Session =>
         _session ?? throw new ProtocolException("invalid_state", "The run session has not been reset.");
 
     private EnvironmentResult Project(DecisionFrame frame, object? transition, string? actionId = null)
