@@ -56,6 +56,7 @@ from sts2_native_sim.scenarios import (
     generate_rows,
     materialize_scenario,
     read_corpus,
+    read_scenario_corpus,
     summarize_rows,
 )
 from sts2_native_sim.schema import validate_observation
@@ -1448,6 +1449,14 @@ def test_the_written_corpus_reads_back_through_the_repositorys_corpus_convention
     assert [shard["file"] for shard in summary["shards"]] == [
         path.name for path in sorted(corpus_root.glob("*.jsonl.gz"))
     ]
+
+
+def test_the_scenario_corpus_reader_names_the_format_and_keeps_the_old_alias(corpus_root: Path) -> None:
+    request = _four_element_request()
+    generate_corpus(request, 2, corpus_root, worker_factory=_fresh_worker)
+
+    assert list(read_scenario_corpus(corpus_root)) == generate_rows(request, FakeRunWorker())
+    assert read_corpus is read_scenario_corpus
 
 
 def test_two_runs_of_one_request_write_a_byte_identical_corpus(
