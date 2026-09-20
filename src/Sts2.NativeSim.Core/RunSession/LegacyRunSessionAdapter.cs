@@ -12,6 +12,11 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
 
     public CompatibilityCapture Reset(ResetRequest request) => Capture(_environment.RunReset(request));
     public CompatibilityCapture ResetMap(ResetRequest request) => Capture(_environment.MapReset(request));
+    public CompatibilityCapture ResetReward(ResetRequest request) => Capture(_environment.RewardReset(request));
+    public CompatibilityCapture ResetItemReward(ItemRewardResetRequest request) =>
+        Capture(_environment.ItemRewardReset(request));
+    public async Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
+        Capture(await _environment.CustomRewardResetAsync(request).ConfigureAwait(false));
     public CompatibilityCapture ResetRest(ResetRequest request) => Capture(_environment.RestReset(request));
     public async Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
         Capture(await _environment.EventResetAsync(request).ConfigureAwait(false));
@@ -33,6 +38,16 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
         Capture(await _environment.ChooseEventOptionAsync(selection).ConfigureAwait(false));
     public async Task<CompatibilityCapture> LeaveEventAsync() =>
         Capture(await _environment.LeaveEventAsync().ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
+        Capture(await _environment.ChooseStandaloneRewardAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> GenerateRoomRewardsAsync() =>
+        Capture(await _environment.GenerateActiveRoomRewardsAsync().ConfigureAwait(false));
+    public async Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
+        Capture(await _environment.ChooseActiveRoomRewardAsync(selection).ConfigureAwait(false));
+    public async Task<CompatibilityCapture> LeaveRoomRewardsAsync() =>
+        Capture(await _environment.LeaveActiveRoomRewardsAsync().ConfigureAwait(false));
+    public async Task<CompatibilityCapture> AdvanceActAsync() =>
+        Capture(await _environment.AdvanceActiveActAsync().ConfigureAwait(false));
     public async Task<CompatibilityCapture> ResumeCardSelectAsync(
         PromptResumeToken parent,
         CardSelection selection) =>
@@ -67,7 +82,9 @@ internal sealed class LegacyRunSessionAdapter : IRunSessionCompatibilityAdapter
             _environment.ActivePromptParent(),
             _environment.HasActiveMapDecision ? MapActions(frame.LegalActions) : null,
             SimpleRoom(frame.LegalActions),
-            Event: EventDecision(frame.LegalActions));
+            Event: EventDecision(frame.LegalActions),
+            Reward: _environment.ActiveRewardDecision.ForActions(frame.LegalActions),
+            ActTransition: _environment.HasActiveActTransition);
     }
 
     private EventDecisionMetadata? EventDecision(IReadOnlyList<LegalAction> actions)

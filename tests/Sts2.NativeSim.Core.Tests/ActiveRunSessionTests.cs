@@ -84,6 +84,10 @@ public sealed class ActiveRunSessionTests
 
         public CompatibilityCapture Reset(ResetRequest request) => new(_current);
         public CompatibilityCapture ResetMap(ResetRequest request) => Reset(request);
+        public CompatibilityCapture ResetReward(ResetRequest request) => Reset(request);
+        public CompatibilityCapture ResetItemReward(ItemRewardResetRequest request) => Reset(request.State);
+        public Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request) =>
+            Task.FromResult(Reset(request.State));
         public CompatibilityCapture ResetRest(ResetRequest request) => Reset(request);
         public Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request) =>
             Task.FromResult(Reset(request.State));
@@ -132,6 +136,18 @@ public sealed class ActiveRunSessionTests
             ApplyAsync($"choose_event:{selection.OptionIndex}");
 
         public Task<CompatibilityCapture> LeaveEventAsync() => ApplyAsync("leave_event");
+
+        public Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
+            ApplyAsync($"choose_reward:{selection.OptionIndex}");
+
+        public Task<CompatibilityCapture> GenerateRoomRewardsAsync() => ApplyAsync("generate_room_rewards");
+
+        public Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
+            ApplyAsync($"choose_room_reward:{selection.RewardIndex}:{selection.OptionIndex}");
+
+        public Task<CompatibilityCapture> LeaveRoomRewardsAsync() => ApplyAsync("leave_room_rewards");
+
+        public Task<CompatibilityCapture> AdvanceActAsync() => ApplyAsync("advance_act");
 
         public Task<CompatibilityCapture> ResumeRewardAsync(
             PromptResumeToken parent,

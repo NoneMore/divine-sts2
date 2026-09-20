@@ -11,6 +11,9 @@ internal interface IRunSessionCompatibilityAdapter
 {
     CompatibilityCapture Reset(ResetRequest request);
     CompatibilityCapture ResetMap(ResetRequest request);
+    CompatibilityCapture ResetReward(ResetRequest request);
+    CompatibilityCapture ResetItemReward(ItemRewardResetRequest request);
+    Task<CompatibilityCapture> ResetCustomRewardAsync(CustomRewardResetRequest request);
     CompatibilityCapture ResetRest(ResetRequest request);
     Task<CompatibilityCapture> ResetEventAsync(EventResetRequest request);
     Task<CompatibilityCapture> ApplyAsync(string actionId);
@@ -22,6 +25,11 @@ internal interface IRunSessionCompatibilityAdapter
     Task<CompatibilityCapture> LeaveSimpleRoomAsync(SimpleRoomKind room);
     Task<CompatibilityCapture> ChooseEventAsync(EventSelection selection);
     Task<CompatibilityCapture> LeaveEventAsync();
+    Task<CompatibilityCapture> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection);
+    Task<CompatibilityCapture> GenerateRoomRewardsAsync();
+    Task<CompatibilityCapture> ChooseRoomRewardAsync(RoomRewardSelection selection);
+    Task<CompatibilityCapture> LeaveRoomRewardsAsync();
+    Task<CompatibilityCapture> AdvanceActAsync();
     Task<CompatibilityCapture> ResumeCardSelectAsync(PromptResumeToken parent, CardSelection selection);
     Task<CompatibilityCapture> ResumeRewardAsync(PromptResumeToken parent, RewardSelection selection);
     object CaptureCheckpoint();
@@ -34,7 +42,9 @@ internal sealed record CompatibilityCapture(
     PromptResumeToken? PromptParent = null,
     IReadOnlyDictionary<string, MapPointSelection>? MapActions = null,
     SimpleRoomKind? SimpleRoom = null,
-    EventDecisionMetadata? Event = null);
+    EventDecisionMetadata? Event = null,
+    RewardDecisionKind? Reward = null,
+    bool ActTransition = false);
 
 internal sealed record CompatibilityRestore(
     string Kind,

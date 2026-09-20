@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.Core.RunSession.States;
@@ -214,6 +215,92 @@ internal sealed class EventDecisionState : ActiveRunState
     }
 }
 
+/// <summary>A standalone card, relic, or potion reward paired with its semantic selection.</summary>
+internal sealed class StandaloneRewardDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public StandaloneRewardDecisionState(
+        DecisionFrame frame,
+        Func<StandaloneRewardSelection, Task<ActiveRunState>> choose) : base(frame)
+    {
+        _executors = frame.LegalActions.ToDictionary(
+            action => action.ActionId,
+            action => action.Kind == "choose_reward"
+                ? (Func<Task<ActiveRunState>>)(() => choose(new(Convert.ToInt32(action.Parameters["option_index"]))))
+                : throw new ProtocolException(
+                    "protocol_desync",
+                    $"Standalone reward projection advertised non-reward action '{action.Kind}'."),
+            StringComparer.Ordinal);
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
+/// <summary>A combat room's reward flow, including generation, choices, and leaving.</summary>
+internal sealed class RoomRewardDecisionState : ActiveRunState
+{
+    private readonly IReadOnlyDictionary<string, Func<Task<ActiveRunState>>> _executors;
+
+    public RoomRewardDecisionState(
+        DecisionFrame frame,
+        Func<Task<ActiveRunState>> generate,
+        Func<RoomRewardSelection, Task<ActiveRunState>> choose,
+        Func<Task<ActiveRunState>> leave) : base(frame)
+    {
+        _executors = frame.LegalActions.ToDictionary(
+            action => action.ActionId,
+            action => action.Kind switch
+            {
+                "generate_room_rewards" => generate,
+                "choose_room_reward" => () => choose(new(
+                    Convert.ToInt32(action.Parameters["reward_index"]),
+                    Convert.ToInt32(action.Parameters["option_index"]))),
+                "leave_room_rewards" => leave,
+                _ => throw new ProtocolException(
+                    "protocol_desync",
+                    $"Room reward projection advertised non-reward action '{action.Kind}'.")
+            },
+            StringComparer.Ordinal);
+    }
+
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        return _executors[actionId]();
+    }
+}
+
+/// <summary>The one legal transition between acts.</summary>
+internal sealed class ActTransitionDecisionState(
+    DecisionFrame frame,
+    Func<Task<ActiveRunState>> advance) : ActiveRunState(frame)
+{
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        LegalAction action = RequireAction(actionId);
+        if (action.Kind != "advance_act")
+            throw new ProtocolException(
+                "protocol_desync",
+                $"Act transition projection advertised non-transition action '{action.Kind}'.");
+        return advance();
+    }
+}
+
+/// <summary>A completed run. It has no executor and cannot mutate native state.</summary>
+internal sealed class TerminalRunState(DecisionFrame frame) : ActiveRunState(frame)
+{
+    public override Task<ActiveRunState> ApplyAsync(string actionId)
+    {
+        _ = RequireAction(actionId);
+        throw new UnreachableException();
+    }
+}
+
 /// <summary>The sole active state while the shipped game is waiting for cards.</summary>
 internal sealed class CardSelectPromptState(
     DecisionFrame frame,
@@ -267,6 +354,8 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
     public ActiveRunState Create(CompatibilityCapture capture)
     {
         DecisionFrame frame = capture.Frame;
+        if (frame.Terminated)
+            return new TerminalRunState(frame);
         if (capture.MapActions is { } mapActions)
             return new MapDecisionState(frame, mapActions, EnterMapPointAsync);
         if (capture.SimpleRoom is SimpleRoomKind.Rest)
@@ -298,6 +387,16 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
         }
         if (capture.Event is not null)
             return new EventDecisionState(frame, ChooseEventAsync, LeaveEventAsync);
+        if (capture.Reward is RewardDecisionKind.Standalone)
+            return new StandaloneRewardDecisionState(frame, ChooseStandaloneRewardAsync);
+        if (capture.Reward is RewardDecisionKind.Room)
+            return new RoomRewardDecisionState(
+                frame,
+                GenerateRoomRewardsAsync,
+                ChooseRoomRewardAsync,
+                LeaveRoomRewardsAsync);
+        if (capture.ActTransition)
+            return new ActTransitionDecisionState(frame, AdvanceActAsync);
         return new NativeDecisionState(frame, ContinueAsync);
     }
 
@@ -327,6 +426,21 @@ internal sealed class ActiveRunStateFactory(IRunSessionCompatibilityAdapter adap
 
     private async Task<ActiveRunState> LeaveEventAsync() =>
         Create(await adapter.LeaveEventAsync().ConfigureAwait(false));
+
+    private async Task<ActiveRunState> ChooseStandaloneRewardAsync(StandaloneRewardSelection selection) =>
+        Create(await adapter.ChooseStandaloneRewardAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> GenerateRoomRewardsAsync() =>
+        Create(await adapter.GenerateRoomRewardsAsync().ConfigureAwait(false));
+
+    private async Task<ActiveRunState> ChooseRoomRewardAsync(RoomRewardSelection selection) =>
+        Create(await adapter.ChooseRoomRewardAsync(selection).ConfigureAwait(false));
+
+    private async Task<ActiveRunState> LeaveRoomRewardsAsync() =>
+        Create(await adapter.LeaveRoomRewardsAsync().ConfigureAwait(false));
+
+    private async Task<ActiveRunState> AdvanceActAsync() =>
+        Create(await adapter.AdvanceActAsync().ConfigureAwait(false));
 
     private static bool IsCardPrompt(DecisionFrame frame) =>
         frame.LegalActions.Count > 0

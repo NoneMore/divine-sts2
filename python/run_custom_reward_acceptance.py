@@ -32,6 +32,8 @@ def main() -> None:
         potion_actions = [next(a["action_id"] for a in state["legal_actions"] if a["kind"] == "choose_custom_reward") for state in ordinary_offer]
         ordinary_done = step_all(pool, potion_actions, event=True)
         assert ordinary_done[0]["observation"]["event"]["finished"]
+        worker = pool.workers[0]
+        assert worker.restore(ordinary_handle)["state_hash"] == ordinary_offer[0]["state_hash"]
 
         trial_state = copy.deepcopy(SCENARIO)
         trial_state["seed"] = "TRIAL-CUSTOM-1"
@@ -47,6 +49,7 @@ def main() -> None:
         trial_done = step_all(pool, second_cards, event=True)
         assert trial_done[0]["observation"]["event"]["finished"]
         assert len(trial_done[0]["observation"]["run"]["deck"]) == 13
+        assert worker.restore(trial_half_handle)["state_hash"] == trial_half[0]["state_hash"]
 
         linked = pool.map(lambda worker, state: worker.custom_reward_reset(state, ["card_removal", "potion"], True), [copy.deepcopy(SCENARIO) for _ in range(4)])
         linked_initial_hash = linked[0]["state_hash"]
@@ -60,9 +63,6 @@ def main() -> None:
         assert linked_done[0]["observation"]["decision"]["kind"] == "custom_reward_complete"
         assert len(linked_done[0]["observation"]["run"]["deck"]) == 9
 
-        worker = pool.workers[0]
-        assert worker.restore(ordinary_handle)["state_hash"] == ordinary_offer[0]["state_hash"]
-        assert worker.restore(trial_half_handle)["state_hash"] == trial_half[0]["state_hash"]
         assert worker.restore(linked_choice_handle)["state_hash"] == linked_choices[0]["state_hash"]
         restored_linked = worker.restore(linked_handle)
         assert restored_linked["state_hash"] == linked_initial_hash

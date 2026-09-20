@@ -40,6 +40,52 @@ public sealed class NativeRunCoordinator
         return Reset(request, _adapter.ResetMap, ResetModes.Combat, "map_reset");
     }
 
+    public EnvironmentResult RewardReset(ResetRequest request)
+    {
+        return Reset(request, _adapter.ResetReward, ResetModes.Combat, "reward_reset");
+    }
+
+    public EnvironmentResult ItemRewardReset(ItemRewardResetRequest request)
+    {
+        _serial.Wait();
+        try
+        {
+            CompatibilityCapture initial = _adapter.ResetItemReward(request);
+            InitializeSession(request.State, initial);
+            return Project(initial.Frame, new
+            {
+                kind = "item_reward_reset",
+                reward_kind = request.RewardKind,
+                model_id = request.ModelId,
+                replayed_actions = 0
+            });
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
+
+    public async Task<EnvironmentResult> CustomRewardResetAsync(CustomRewardResetRequest request)
+    {
+        await _serial.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            CompatibilityCapture initial = await _adapter.ResetCustomRewardAsync(request).ConfigureAwait(false);
+            InitializeSession(request.State, initial);
+            return Project(initial.Frame, new
+            {
+                kind = "custom_reward_reset",
+                linked = request.Linked,
+                replayed_actions = 0
+            });
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
+
     public EnvironmentResult RestReset(ResetRequest request)
     {
         return Reset(request, _adapter.ResetRest, ResetModes.Combat, "rest_reset");
@@ -51,12 +97,7 @@ public sealed class NativeRunCoordinator
         try
         {
             CompatibilityCapture initial = await _adapter.ResetEventAsync(request).ConfigureAwait(false);
-            _session = new(_adapter, initial);
-            _reset = request.State with { ResetMode = ResetModes.Combat };
-            _branches.Clear();
-            _branchOrder.Clear();
-            _history.Clear();
-            _currentBranchHandle = null;
+            InitializeSession(request.State, initial);
             return Project(initial.Frame, new
             {
                 kind = "event_reset",
@@ -80,18 +121,23 @@ public sealed class NativeRunCoordinator
         try
         {
             CompatibilityCapture initial = reset(request);
-            _session = new(_adapter, initial);
-            _reset = request with { ResetMode = resetMode };
-            _branches.Clear();
-            _branchOrder.Clear();
-            _history.Clear();
-            _currentBranchHandle = null;
+            InitializeSession(request with { ResetMode = resetMode }, initial);
             return Project(initial.Frame, new { kind = transitionKind, replayed_actions = 0 });
         }
         finally
         {
             _serial.Release();
         }
+    }
+
+    private void InitializeSession(ResetRequest request, CompatibilityCapture initial)
+    {
+        _session = new(_adapter, initial);
+        _reset = request with { ResetMode = request.ResetMode ?? ResetModes.Combat };
+        _branches.Clear();
+        _branchOrder.Clear();
+        _history.Clear();
+        _currentBranchHandle = null;
     }
 
     public EnvironmentResult Observe()

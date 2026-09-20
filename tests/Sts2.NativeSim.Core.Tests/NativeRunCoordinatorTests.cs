@@ -371,20 +371,214 @@ public sealed class NativeRunCoordinatorTests
         ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("combat")
             .Frame("combat", """{"schema_version":3,"decision":{"kind":"combat"}}""",
                 Action("finish-combat", "end_turn"))
-            .Frame("reward", """{"schema_version":3,"decision":{"kind":"card_reward"}}""",
+            .StandaloneRewardFrame("reward", """{"schema_version":3,"decision":{"kind":"card_reward"}}""",
                 Action("reward-0", "choose_reward", ("option_index", 0)))
             .MapFrame("map", """{"schema_version":3,"decision":{"kind":"map"}}""",
                 MapAction("map-0-2", 0, 2, "Monster"))
             .Transition("combat", "finish-combat", "reward")
-            .Transition("reward", "reward-0", "map");
+            .ChooseStandaloneReward("reward", new(0), "map");
         NativeRunCoordinator coordinator = new(adapter);
 
         coordinator.RunReset(Request());
+        string branch = coordinator.Fork();
         EnvironmentResult reward = await coordinator.StepAsync("finish-combat");
         EnvironmentResult map = await coordinator.StepAsync("reward-0");
+        await coordinator.RestoreAsync(branch);
+        EnvironmentResult replayedReward = await coordinator.StepAsync("finish-combat");
+        EnvironmentResult replayedMap = await coordinator.StepAsync("reward-0");
 
         Assert.Equal("choose_reward", Assert.Single(reward.LegalActions).Kind);
+        Assert.Equal("choose_reward", Assert.Single(replayedReward.LegalActions).Kind);
         Assert.Equal("choose_map", Assert.Single(map.LegalActions).Kind);
+        Assert.Equal(map.StateHash, replayedMap.StateHash);
+        Assert.Equal([new StandaloneRewardSelection(0), new StandaloneRewardSelection(0)],
+            adapter.StandaloneRewardSelections);
+        Assert.Equal(2, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Standalone_reward_selection_preserves_order_and_uses_the_reward_port()
+    {
+        LegalAction take = Action("choose_reward:0:RELIC", "choose_reward",
+            ("option_index", 0), ("model_id", "RELIC"), ("skip", false));
+        LegalAction skip = Action("choose_reward:skip", "choose_reward",
+            ("option_index", -1), ("model_id", null), ("skip", true));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("reward")
+            .StandaloneRewardFrame("reward", """{"decision":{"kind":"reward_choice"}}""", take, skip)
+            .StandaloneRewardFrame("complete", """{"decision":{"kind":"reward_complete"}}""")
+            .ChooseStandaloneReward("reward", new(0), "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult before = coordinator.RunReset(Request());
+        ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(
+            () => coordinator.StepAsync("not-a-reward"));
+        Assert.Equal("invalid_action", error.Code);
+        Assert.Empty(adapter.StandaloneRewardSelections);
+        string branch = coordinator.Fork();
+        EnvironmentResult after = await coordinator.StepAsync(take.ActionId);
+        await coordinator.RestoreAsync(branch);
+        EnvironmentResult replayed = await coordinator.StepAsync(take.ActionId);
+
+        Assert.Equal([take, skip], before.LegalActions);
+        Assert.Empty(after.LegalActions);
+        Assert.Equal(after.StateHash, replayed.StateHash);
+        Assert.Equal([new StandaloneRewardSelection(0), new StandaloneRewardSelection(0)],
+            adapter.StandaloneRewardSelections);
+        Assert.Equal(0, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Standalone_reward_option_pick_temporarily_replaces_the_reward_state()
+    {
+        LegalAction take = Action("choose_reward:0:SCROLL_BOXES", "choose_reward", ("option_index", 0));
+        LegalAction option = Action("choose_option:bundle-0", "choose_option",
+            ("choice_id", "scroll-boxes"), ("option_ids", new[] { "bundle-0" }));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("reward")
+            .StandaloneRewardFrame("reward", """{"decision":{"kind":"reward_choice"}}""", take)
+            .StandaloneRewardFrame("option", """{"decision":{"kind":"option_choice"}}""", option)
+            .StandaloneRewardFrame("complete", """{"decision":{"kind":"reward_complete"}}""")
+            .ChooseStandaloneReward("reward", new(0), "option")
+            .Transition("option", option.ActionId, "complete");
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+
+        EnvironmentResult prompt = await coordinator.StepAsync(take.ActionId);
+        EnvironmentResult complete = await coordinator.StepAsync(option.ActionId);
+
+        Assert.Same(option, Assert.Single(prompt.LegalActions));
+        Assert.Empty(complete.LegalActions);
+        Assert.Equal(1, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Reward_nested_choice_limit_failure_keeps_its_code_and_restores_the_reward()
+    {
+        LegalAction take = Action("choose_reward:0:RELIC", "choose_reward", ("option_index", 0));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("reward")
+            .StandaloneRewardFrame("reward", """{"decision":{"kind":"reward_choice"}}""", take)
+            .StandaloneRewardFrame("mutated", """{"decision":{"kind":"reward_complete"}}""")
+            .ChooseStandaloneReward("reward", new(0), "mutated")
+            .ErrorAfterMutation("reward", take.ActionId, "choice_too_large");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult before = coordinator.RunReset(Request());
+
+        ProtocolException error = await Assert.ThrowsAsync<ProtocolException>(
+            () => coordinator.StepAsync(take.ActionId));
+
+        Assert.Equal("choice_too_large", error.Code);
+        Assert.Equal(before.StateHash, coordinator.Observe().StateHash);
+        Assert.Equal(take.ActionId, Assert.Single(coordinator.LegalActions()).ActionId);
+    }
+
+    [Fact]
+    public void Reward_reset_initializes_the_active_reward_session()
+    {
+        LegalAction skip = Action("choose_reward:skip", "choose_reward",
+            ("option_index", -1), ("model_id", null), ("skip", true));
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("reward")
+            .StandaloneRewardFrame("reward", """{"decision":{"kind":"reward_choice"}}""", skip);
+        NativeRunCoordinator coordinator = new(adapter);
+
+        EnvironmentResult reset = coordinator.RewardReset(Request() with { ResetMode = ResetModes.Combat });
+
+        Assert.Equal(skip, Assert.Single(reset.LegalActions));
+        Assert.Equal("reward_reset", JsonSerializer.SerializeToElement(reset.Transition)
+            .GetProperty("kind").GetString());
+        Assert.Equal(1, adapter.RewardResetCount);
+    }
+
+    [Fact]
+    public async Task Item_and_custom_reward_resets_preserve_their_transition_metadata()
+    {
+        ScriptedNativeRunAdapter itemAdapter = new ScriptedNativeRunAdapter("item")
+            .StandaloneRewardFrame("item", """{"decision":{"kind":"reward_choice"}}""",
+                Action("choose_reward:skip", "choose_reward", ("option_index", -1)));
+        NativeRunCoordinator itemCoordinator = new(itemAdapter);
+        EnvironmentResult item = itemCoordinator.ItemRewardReset(
+            new(Request() with { ResetMode = ResetModes.Combat }, "relic", "ANCHOR"));
+
+        ScriptedNativeRunAdapter customAdapter = new ScriptedNativeRunAdapter("custom")
+            .RewardPrompt("custom", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [0]);
+        NativeRunCoordinator customCoordinator = new(customAdapter);
+        EnvironmentResult custom = await customCoordinator.CustomRewardResetAsync(
+            new(Request() with { ResetMode = ResetModes.Combat }, ["gold"], Linked: true));
+
+        JsonElement itemTransition = JsonSerializer.SerializeToElement(item.Transition);
+        Assert.Equal("item_reward_reset", itemTransition.GetProperty("kind").GetString());
+        Assert.Equal("relic", itemTransition.GetProperty("reward_kind").GetString());
+        Assert.Equal("ANCHOR", itemTransition.GetProperty("model_id").GetString());
+        JsonElement customTransition = JsonSerializer.SerializeToElement(custom.Transition);
+        Assert.Equal("custom_reward_reset", customTransition.GetProperty("kind").GetString());
+        Assert.True(customTransition.GetProperty("linked").GetBoolean());
+        Assert.Equal(1, itemAdapter.ItemRewardResetCount);
+        Assert.Equal(1, customAdapter.CustomRewardResetCount);
+    }
+
+    [Fact]
+    public async Task Room_rewards_generate_choose_and_leave_through_the_reward_port()
+    {
+        LegalAction generate = Action("generate_room_rewards", "generate_room_rewards");
+        LegalAction card = Action("choose_room_reward:0:card:1:BASH", "choose_room_reward",
+            ("reward_index", 0), ("option_index", 1), ("reward_kind", "card"), ("model_id", "BASH"));
+        LegalAction relic = Action("choose_room_reward:1:take", "choose_room_reward",
+            ("reward_index", 1), ("option_index", 0), ("reward_kind", "relic"), ("model_id", "ANCHOR"));
+        LegalAction leave = Action("leave_room_rewards", "leave_room_rewards");
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("pending")
+            .RoomRewardFrame("pending", """{"decision":{"kind":"room_reward_choice"}}""", generate)
+            .RoomRewardFrame("rewards", """{"decision":{"kind":"room_reward_choice"}}""", card, relic, leave)
+            .RoomRewardFrame("resolved", """{"decision":{"kind":"room_reward_choice"}}""", leave)
+            .MapFrame("map", """{"decision":{"kind":"map"}}""", MapAction("route", 0, 1, "Monster"))
+            .GenerateRoomRewards("pending", "rewards")
+            .ChooseRoomReward("rewards", new(0, 1), "resolved")
+            .LeaveRoomRewards("resolved", "map");
+        NativeRunCoordinator coordinator = new(adapter);
+
+        coordinator.RunReset(Request());
+        string branch = coordinator.Fork();
+        EnvironmentResult rewards = await coordinator.StepAsync(generate.ActionId);
+        EnvironmentResult resolved = await coordinator.StepAsync(card.ActionId);
+        EnvironmentResult map = await coordinator.StepAsync(leave.ActionId);
+        await coordinator.RestoreAsync(branch);
+        await coordinator.StepAsync(generate.ActionId);
+        await coordinator.StepAsync(card.ActionId);
+        EnvironmentResult replayedMap = await coordinator.StepAsync(leave.ActionId);
+
+        Assert.Equal([card, relic, leave], rewards.LegalActions);
+        Assert.Equal([leave], resolved.LegalActions);
+        Assert.Equal(map.StateHash, replayedMap.StateHash);
+        Assert.Equal([new RoomRewardSelection(0, 1), new RoomRewardSelection(0, 1)],
+            adapter.RoomRewardSelections);
+        Assert.Equal(2, adapter.GenerateRoomRewardsCount);
+        Assert.Equal(2, adapter.LeaveRoomRewardsCount);
+        Assert.Equal("route", Assert.Single(map.LegalActions).ActionId);
+        Assert.Equal(0, adapter.GenericApplyCount);
+    }
+
+    [Fact]
+    public async Task Act_transition_replays_to_the_same_terminal_hash_through_its_typed_state()
+    {
+        LegalAction advance = Action("advance_act", "advance_act");
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("act-transition")
+            .ActTransitionFrame("act-transition", """{"decision":{"kind":"act_transition"}}""", advance)
+            .TerminalFrame("terminal", """{"decision":{"kind":"run_terminal"},"terminal":true,"victory":true}""", victory: true)
+            .AdvanceAct("act-transition", "terminal");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult transition = coordinator.RunReset(Request());
+        string branch = coordinator.Fork();
+
+        EnvironmentResult first = await coordinator.StepAsync(advance.ActionId);
+        EnvironmentResult restored = await coordinator.RestoreAsync(branch);
+        EnvironmentResult replayed = await coordinator.StepAsync(advance.ActionId);
+
+        Assert.Equal("advance_act", Assert.Single(transition.LegalActions).ActionId);
+        Assert.Empty(first.LegalActions);
+        Assert.True(first.Terminated);
+        Assert.True(first.Victory);
+        Assert.Equal(first.StateHash, replayed.StateHash);
+        Assert.Equal(2, adapter.AdvanceActCount);
+        Assert.Equal(0, adapter.GenericApplyCount);
+        Assert.Equal(0, JsonSerializer.SerializeToElement(restored.Transition)
+            .GetProperty("replayed_actions").GetInt32());
     }
 
     [Fact]
@@ -463,6 +657,36 @@ public sealed class NativeRunCoordinatorTests
         Assert.Equal(3, adapter.RewardResumeTokens.Count);
         Assert.NotSame(adapter.RewardResumeTokens[0].Marker, adapter.RewardResumeTokens[1].Marker);
         Assert.Same(adapter.RewardResumeTokens[0].Marker, adapter.RewardResumeTokens[2].Marker);
+    }
+
+    [Fact]
+    public async Task Restoring_a_nested_reward_rebuilds_its_typed_stack_and_expected_hash()
+    {
+        ScriptedNativeRunAdapter adapter = new ScriptedNativeRunAdapter("outer")
+            .RewardPrompt("outer", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [0])
+            .RewardPrompt("inner", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [1])
+            .RewardPrompt("outer-resumed", """{"decision":{"kind":"custom_reward_choice"}}""", rewardIndices: [])
+            .MapFrame("map", """{"decision":{"kind":"map"}}""", MapAction("route", 0, 1, "Monster"))
+            .ResumeRewardPrompt("outer", rewardIndex: 0, "inner")
+            .ResumeRewardParent("inner", rewardIndex: 1, "outer-resumed")
+            .SkipRewardPrompt("outer-resumed", "map");
+        NativeRunCoordinator coordinator = new(adapter);
+        EnvironmentResult outer = coordinator.RunReset(Request());
+        EnvironmentResult inner = await coordinator.StepAsync(
+            outer.LegalActions.Single(action => action.Kind == "choose_custom_reward").ActionId);
+        string branch = coordinator.Fork();
+
+        EnvironmentResult resumed = await coordinator.StepAsync(
+            inner.LegalActions.Single(action => action.Kind == "choose_custom_reward").ActionId);
+        EnvironmentResult first = await coordinator.StepAsync("skip_custom_rewards");
+        EnvironmentResult restored = await coordinator.RestoreAsync(branch);
+        resumed = await coordinator.StepAsync(
+            restored.LegalActions.Single(action => action.Kind == "choose_custom_reward").ActionId);
+        EnvironmentResult replayed = await coordinator.StepAsync("skip_custom_rewards");
+
+        Assert.Equal(first.StateHash, replayed.StateHash);
+        Assert.Equal("skip_custom_rewards", Assert.Single(resumed.LegalActions).ActionId);
+        Assert.Equal("route", Assert.Single(replayed.LegalActions).ActionId);
     }
 
     [Fact]

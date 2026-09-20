@@ -317,6 +317,68 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             ? new(_eventId)
             : null;
 
+    internal RewardDecisionKind? ActiveRewardDecision =>
+        _rewardMode ? RewardDecisionKind.Standalone
+        : _runMode && _runStage == "rewards" ? RewardDecisionKind.Room
+        : null;
+
+    internal bool HasActiveActTransition => _runMode && _runStage == "act_transition";
+
+    internal Task<EnvironmentResult> ChooseStandaloneRewardAsync(
+        StandaloneRewardSelection selection,
+        bool record = true) => ApplySemanticActionAsync(
+            candidate => candidate.Kind == "choose_reward"
+                && Convert.ToInt32(candidate.Parameters["option_index"]) == selection.OptionIndex,
+            "The selected standalone reward is not legal.",
+            () => ChooseRewardAsync(selection.OptionIndex),
+            record);
+
+    internal Task<EnvironmentResult> GenerateActiveRoomRewardsAsync(bool record = true) =>
+        ApplySemanticActionAsync(
+            candidate => candidate.Kind == "generate_room_rewards",
+            "Room rewards cannot be generated in the active decision.",
+            GenerateRoomRewardsAsync,
+            record);
+
+    internal Task<EnvironmentResult> ChooseActiveRoomRewardAsync(
+        RoomRewardSelection selection,
+        bool record = true) => ApplySemanticActionAsync(
+            candidate => candidate.Kind == "choose_room_reward"
+                && Convert.ToInt32(candidate.Parameters["reward_index"]) == selection.RewardIndex
+                && Convert.ToInt32(candidate.Parameters["option_index"]) == selection.OptionIndex,
+            "The selected room reward is not legal.",
+            () => ChooseRoomRewardAsync(selection.RewardIndex, selection.OptionIndex),
+            record);
+
+    internal Task<EnvironmentResult> LeaveActiveRoomRewardsAsync(bool record = true) =>
+        ApplySemanticActionAsync(
+            candidate => candidate.Kind == "leave_room_rewards",
+            "Room rewards cannot be left in the active decision.",
+            LeaveRoomRewardsAsync,
+            record);
+
+    internal Task<EnvironmentResult> AdvanceActiveActAsync(bool record = true) =>
+        ApplySemanticActionAsync(
+            candidate => candidate.Kind == "advance_act",
+            "The active run cannot advance to another act.",
+            AdvanceActAsync,
+            record);
+
+    private async Task<EnvironmentResult> ApplySemanticActionAsync(
+        Func<LegalAction, bool> matches,
+        string invalidMessage,
+        Func<Task> apply,
+        bool record)
+    {
+        ThrowIfPoisoned();
+        Stopwatch timer = Stopwatch.StartNew();
+        LegalAction action = BuildActions().SingleOrDefault(matches)
+            ?? throw new ProtocolException("invalid_action", invalidMessage);
+        _lastActionId = action.ActionId;
+        await apply().ConfigureAwait(false);
+        return FinishStep(action, timer, record);
+    }
+
     internal async Task<EnvironmentResult> ChooseEventOptionAsync(
         EventSelection selection,
         bool record = true)
