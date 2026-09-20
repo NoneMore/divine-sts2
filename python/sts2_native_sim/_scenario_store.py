@@ -34,7 +34,7 @@ from ._scenario_model import (
 def read_scenario_corpus(path: str | Path) -> Iterator[dict[str, Any]]:
     """Every row of a corpus, in shard order — the convention the repository's readers collect.
 
-    ``python/compile_native_rollouts.py`` takes a directory of shards, collects its ``*.jsonl.gz``
+    ``python/tools/compile_native_rollouts.py`` takes a directory of shards, collects its ``*.jsonl.gz``
     in name order and parses each line as one record. This is that convention, so a corpus written
     here is one those readers consume, and a caller can read one back without a second
     implementation of the walk. A single shard file is read too, which is how a caller looks at one

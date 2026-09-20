@@ -127,13 +127,13 @@ $isolatedAppData = Join-Path $sandboxFull 'userdata'
 $traceDirectory = Join-Path $isolatedAppData 'SlayTheSpire2\native_sim_traces'
 $traces = @(Get-ChildItem -LiteralPath $traceDirectory -File -Filter '*.jsonl' -ErrorAction SilentlyContinue | Sort-Object Name)
 New-Item -ItemType Directory -Path $CandidateDirectory,$CertifiedDirectory,$FailureDirectory -Force | Out-Null
-$replay = Join-Path $repositoryRoot 'python\differential_replay.py'
+$replay = Join-Path $repositoryRoot 'python\tools\differential_replay.py'
 $certifiedPaths = @()
 $failedPaths = @()
 $duplicatePaths = @()
 $certifiedHashes = @{}
 $certifiedSemanticHashes = @{}
-$inventoryScript = Join-Path $repositoryRoot 'python\trace_inventory.py'
+$inventoryScript = Join-Path $repositoryRoot 'python\tools\trace_inventory.py'
 foreach ($certifiedTrace in Get-ChildItem -LiteralPath $CertifiedDirectory -File -Filter '*.jsonl' -ErrorAction SilentlyContinue) {
     $certifiedHashes[(Get-FileHash -Algorithm SHA256 -LiteralPath $certifiedTrace.FullName).Hash] = $certifiedTrace.FullName
     $semanticOutput = & python $inventoryScript --semantic-hashes-only $certifiedTrace.FullName

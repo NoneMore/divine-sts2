@@ -1,7 +1,7 @@
 """Offline checks that the published canonical-state schema describes what a capture emits.
 
 The captures in `tests/fixtures/canonical-observations.json` are recorded from the
-shipped-game-backed native worker by `python/observation_schema_acceptance.py --record`,
+shipped-game-backed native worker by `tests/acceptance/observation_schema_acceptance.py --record`,
 which also validates them live. Re-record that file in the same change that changes the
 observation shape; these tests are what makes the schema a check rather than a document.
 """

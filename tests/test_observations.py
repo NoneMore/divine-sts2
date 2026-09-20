@@ -1,4 +1,4 @@
-﻿"""Offline tests for observation projection, permutation invariance, and fog-of-war masking."""
+"""Offline tests for observation projection, permutation invariance, and fog-of-war masking."""
 import json
 from pathlib import Path
 from typing import Any
@@ -10,7 +10,7 @@ from sts2_native_sim.observations import (
     to_agent_observation,
 )
 
-# Captures recorded from the native worker by `python/observation_schema_acceptance.py --record`.
+# Captures recorded from the native worker by `tests/acceptance/observation_schema_acceptance.py --record`.
 _CAPTURES: dict[str, dict[str, Any]] = json.loads(
     (Path(__file__).resolve().parent / "fixtures" / "canonical-observations.json").read_text(encoding="utf-8")
 )

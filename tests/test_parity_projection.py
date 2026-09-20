@@ -15,9 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from parity_run_acceptance import report
 from sts2_native_sim import parity
 from sts2_native_sim import parity_projection as projection
+
+from tests.acceptance.parity_run_acceptance import report
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "canonical-observations.json"
 #: A recorded fight from the shipped-game-backed worker: the shape a record's combat initial state

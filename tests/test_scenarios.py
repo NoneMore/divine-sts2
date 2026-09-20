@@ -1351,10 +1351,13 @@ def test_shard_names_stay_in_shard_order_past_the_second_digit(corpus_root: Path
     assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
 
 
-def test_the_repositorys_existing_corpus_reader_collects_the_shards_it_wrote(corpus_root: Path) -> None:
+def test_the_repositorys_existing_corpus_reader_collects_the_shards_it_wrote(
+    corpus_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`compile_native_rollouts` is the repository's reader for a corpus of shards: it must find
     this corpus's files and parse them, which is what "an existing reader can consume it" means."""
-    from compile_native_rollouts import shard_paths
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "python"))
+    from tools.compile_native_rollouts import shard_paths
 
     generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=_fresh_worker)
 

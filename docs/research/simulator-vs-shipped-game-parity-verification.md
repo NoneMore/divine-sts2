@@ -11,7 +11,7 @@
 
 ## 1. 一句话结论
 
-本仓库里没有"重写的模拟器"：**native sim 就是把实装的 `sts2.dll` 装进 Godot headless 进程、用反射加 Harmony 无头化后驱动**（`src/Sts2.NativeSim.GodotHost/Main.cs:19-24,43-46`；`src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs:92-93,394-397`），所以这里的"一致性"实际上是**同一条游戏二进制被两条驱动路径观察时结果是否相同**，而不是"独立实现 vs 原版"的等价性。目前唯一**跑通并留下记录**的、真正跨这两侧做比对的自动化检查是字段级 parity oracle（`python/parity_run_acceptance.py`），它在一次运行中把 14 个生成场景与真机客户端的战斗初始状态逐字段对齐，结论 14/14 一致、0 个比对哈希、2/2 个 Act-variant 探针（`artifacts/parity-run/parity-run.json`，2026-09-17，build `0.1.0+5926027…`）。这条 oracle **不在 CI 里**，覆盖范围只到"第一幕第一个战斗"及其 run/creature/pile/inventory 字段；另一条设计好的跨侧通道（真机导出 trace → 无头 worker 精确重放）**在本机没有任何产物，从未被认证过**。
+本仓库里没有"重写的模拟器"：**native sim 就是把实装的 `sts2.dll` 装进 Godot headless 进程、用反射加 Harmony 无头化后驱动**（`src/Sts2.NativeSim.GodotHost/Main.cs:19-24,43-46`；`src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs:92-93,394-397`），所以这里的"一致性"实际上是**同一条游戏二进制被两条驱动路径观察时结果是否相同**，而不是"独立实现 vs 原版"的等价性。目前唯一**跑通并留下记录**的、真正跨这两侧做比对的自动化检查是字段级 parity oracle（`tests/acceptance/parity_run_acceptance.py`），它在一次运行中把 14 个生成场景与真机客户端的战斗初始状态逐字段对齐，结论 14/14 一致、0 个比对哈希、2/2 个 Act-variant 探针（`artifacts/parity-run/parity-run.json`，2026-09-17，build `0.1.0+5926027…`）。这条 oracle **不在 CI 里**，覆盖范围只到"第一幕第一个战斗"及其 run/creature/pile/inventory 字段；另一条设计好的跨侧通道（真机导出 trace → 无头 worker 精确重放）**在本机没有任何产物，从未被认证过**。
 
 ---
 
@@ -37,7 +37,7 @@
 |---|---|---|
 | "模拟器"侧 | Godot headless 进程 + 反射/Harmony 驱动的**同一份 `sts2.dll`**（**不是** .NET 重写实现） | `python/sts2_native_sim/client.py:91`（`--headless --path <GodotHost> -- --server <sts2.dll>`）、`Main.cs:26,30-35,45-49` |
 | "实机游戏"侧 | 真实安装的 `SlayTheSpire2.exe`（`--headless --force-steam=off`）+ in-process 桥接 mod DLL | `python/sts2_native_sim/full_app_client.py:172-202`、`:17-27`（`src/Sts2.NativeSim.FullAppBridge/bin/Release/net9.0/package/sts2-full-app-bridge.dll`） |
-| 第三类通道 | 真机内跑的 Harmony 导出 mod 产出 JSONL trace，再在无头 worker 上重放 | `src/Sts2.NativeSim.TraceExporter/TraceExporterMod.cs:21-37`、`python/differential_replay.py:93-110` |
+| 第三类通道 | 真机内跑的 Harmony 导出 mod 产出 JSONL trace，再在无头 worker 上重放 | `src/Sts2.NativeSim.TraceExporter/TraceExporterMod.cs:21-37`、`python/tools/differential_replay.py:93-110` |
 
 桥接 mod 与导出 mod 直接引用实装程序集（`src/Sts2.NativeSim.FullAppBridge/Sts2.NativeSim.FullAppBridge.csproj`：`RequiresGameData` + `sts2.dll`/`0Harmony.dll`/`GodotSharp.dll` 的 `HintPath="$(GameDataDir)\…"`，路径来自 `STS2_GAME_ROOT`，见 `Directory.Build.props:9-18`）。因此**"game 侧"的取值来自游戏运行时对象，但"读的是哪个访问器/字段"是仓库自己写的 mod 决定的**——这一半是被假定的，后文 §5 给出三个"看起来有、实际读错"的实测例子。
 
@@ -47,39 +47,39 @@
 
 ### 3.1 字段级 parity oracle（唯一真正的 simulator↔shipped 自动比对）
 
-- **入口**：`python/parity_run_acceptance.py`；`report()` `:571-623`，`main()` `:626-690`，固定样本 `SAMPLE` `:187-202`（14 个场景 / 10 条不同 run / IRONCLAD+DEFECT / A0+A2），变体探针 `VARIANT_PROBES` `:210-213`（2 个）。
+- **入口**：`tests/acceptance/parity_run_acceptance.py`；`report()` `:571-623`，`main()` `:626-690`，固定样本 `SAMPLE` `:187-202`（14 个场景 / 10 条不同 run / IRONCLAD+DEFECT / A0+A2），变体探针 `VARIANT_PROBES` `:210-213`（2 个）。
 - **记录侧**：`generate_rows` 在 native worker 上生成（`_records` `:221-243` → `python/sts2_native_sim/scenarios.py:571-589`），失败元素以 failure row 形式报出（`:246-260`）。
 - **真机侧**：`FullAppBridgeClient.launch()`（`:496`、`:517`）→ 启动真 `SlayTheSpire2.exe`，用记录的 seed/角色/Ascension 从 `start_run` 驱动，经 Ancient 房、按 `choose_event:{option_index}` 取记录的选项（`:345-351`）、按记录的"首个合法动作"规则回答卡选择提示（`:263-311`），走到记录的 row-1 节点后停在战斗（`:314-373`，`MAX_STEPS=40`）。
 - **比对**：`compare_contract`（`parity_projection.py:329-357`）把两侧投影成同一形状后用仓库既有的逐路径比较器 `parity.compare_snapshots`（`python/sts2_native_sim/parity.py:33-64`），阶段词经 `decision_vocabulary` 归一（`parity_projection.py:377-413`），act index 基准只声明一次（`:58-62,436-447`）。
-- **调用方式**：手工。`python python/parity_run_acceptance.py --report … [--workers N] [--limit N] [--only LABEL] [--dump DIR] [--no-probes]`（`:626-642`）。需要配置 `STS2_GAME_ROOT`，且沙盒必须落在游戏安装所在卷（`:59-61`）。
+- **调用方式**：手工。`python tests/acceptance/parity_run_acceptance.py --report … [--workers N] [--limit N] [--only LABEL] [--dump DIR] [--no-probes]`（`:626-642`）。需要配置 `STS2_GAME_ROOT`，且沙盒必须落在游戏安装所在卷（`:59-61`）。
 - **是否在 CI**：**否**。`.github/workflows/ci.yml:22-35` 只做 `pip install -e ".[dev]"`、`compileall`、`pytest -q`、两个 game-independent 的 C# 工程构建、`scripts/test-public-tree.ps1`。整个仓库没有任何 workflow 或脚本调用 `parity_run_acceptance.py`（grep 全仓仅命中 `tests/test_parity_projection.py:18` 的 `from parity_run_acceptance import report`，那只是在无样本的情况下取报告文档，不驱动游戏）。
 - **是否有调用者**：CI 内只有 `report`（离线）；**真正运行 oracle 的调用者不存在**（无脚本、无 README 命令）。
 - **通过证据**：见 §4.1。
 
 ### 3.2 桥接/全客户端自身的确定性（game ↔ game，不是 sim ↔ game）
 
-`python/full_app_bridge_acceptance.py:48-119`：4 个独立的真 `SlayTheSpire2.exe` 进程，相同 seed/角色/动作序列，要求 `len(set(initial_hashes)) != 1` 即抛错（`:117-119`），并做前缀重放与反事实分支（`:194-213`）。它证明的是"真机 + 桥接可复现、可回放、可分支"，**两侧都是同一个编码器**。运行记录见 `artifacts/bridge-combat-acceptance.log`、`artifacts/bridge-run-inventory-acceptance.txt`（§4）。不在 CI（需要游戏安装）。
+`tests/acceptance/full_app_bridge_acceptance.py:48-119`：4 个独立的真 `SlayTheSpire2.exe` 进程，相同 seed/角色/动作序列，要求 `len(set(initial_hashes)) != 1` 即抛错（`:117-119`），并做前缀重放与反事实分支（`:194-213`）。它证明的是"真机 + 桥接可复现、可回放、可分支"，**两侧都是同一个编码器**。运行记录见 `artifacts/bridge-combat-acceptance.log`、`artifacts/bridge-run-inventory-acceptance.txt`（§4）。不在 CI（需要游戏安装）。
 
 ### 3.3 真机 trace → 无头 worker 精确重放（第二套跨侧通道；已建成，无产物）
 
 - `scripts/run-isolated-autotrace.ps1:99-102` 在硬链接沙盒里启动真 `SlayTheSpire2.exe`，带 `--native-sim-trace --native-sim-autotrace-driver --native-sim-autotrace-policy=…`；`:127` trace 目录 = 沙盒 APPDATA 下的 `native_sim_traces`；`:152` 对每条 trace 执行 `python differential_replay.py --require-exact`；`:29-31,175-188` 通过者复制进 `artifacts/shipped-autotraces/certified`。
-- 重放器：`python/differential_replay.py:93-110`（在 `NativeWorker` 上 `reset`+逐 checkpoint `step`，用 `first_difference` 精确比对 observation；`:29,51` 是它**自带的**比较器），并先比对 game build（`:102-105`）。
+- 重放器：`python/tools/differential_replay.py:93-110`（在 `NativeWorker` 上 `reset`+逐 checkpoint `step`，用 `first_difference` 精确比对 observation；`:29,51` 是它**自带的**比较器），并先比对 game build（`:102-105`）。
 - **精确否定**：本机不存在 `native_sim_traces` 目录、不存在 `artifacts/shipped-autotraces/{candidates,certified,failures}`、不存在任何 `native-sim-autotrace-run.json`（对仓库、用户 APPDATA、LOCALAPPDATA、TEMP 的有界搜索均无命中）。即**该通道从未在本 checkout 留下任何成功或失败的认证产物**。
-- 唯一跑过的相关验证是 `python/differential_harness_acceptance.py`，而它在第一行就自我否定：
+- 唯一跑过的相关验证是 `tests/acceptance/differential_harness_acceptance.py`，而它在第一行就自我否定：
   `:1` "Self-test for trace parsing/comparison; **this does not count as differential coverage**"，且喂进去的是模拟器自产 trace（`:23` `"source": "simulator_self_test"`）。它证明的是"比较器能发现被篡改的字段"（`:36-39`），不是跨实现一致性。
-- 该通道的辅助工具：`python/differential_campaign.py:14`、`python/promote_differential_candidates.py:13,27`、`python/trace_inventory.py:1-6`（"read-only inventory, not replay validation"）。三者都只有 `differential_replay` 这一个真实依赖，且没有 trace 可以处理。
+- 该通道的辅助工具：`python/tools/differential_campaign.py:14`、`python/tools/promote_differential_candidates.py:13,27`、`python/tools/trace_inventory.py:1-6`（"read-only inventory, not replay validation"）。三者都只有 `differential_replay` 这一个真实依赖，且没有 trace 可以处理。
 
 ### 3.4 由 seed 独立推导的"预言机"（sim ↔ 反编译移植 ↔ sim）
 
 - `python/sts2_native_sim/shipped_rng.py:1-12` 明说是反编译件的直接移植：`StringHelper.GetDeterministicHashCode`、`MegaRandom`（splitmix64+xoshiro256\*\*）、`Rng` 的抽取面。
-- 调用者只有两个 acceptance：`python/act_variant_acceptance.py:32`（对比 seed→Act variant）与 `python/ancient_room_acceptance.py:52`（对比 seed→Ancient 报价与 SlimesWeak 组成）。
+- 调用者只有两个 acceptance：`tests/acceptance/act_variant_acceptance.py:32`（对比 seed→Act variant）与 `tests/acceptance/ancient_room_acceptance.py:52`（对比 seed→Ancient 报价与 SlimesWeak 组成）。
 - 两个脚本都**只驱动 NativeWorker**（`act_variant_acceptance.py:31`；`ancient_room_acceptance.py:50`），不与真机对话；`ancient_room_acceptance.py:29-33` 自己声明：
   > "It is **not** the shipped-game parity comparison: that compares whole states field by field against a real client … What this script covers is the simulator's side of the claim, plus the independent ports…"
 - 所以这里的"游戏侧"是**反编译源码的移植**，属于假定而非观测（`.scratch/neow-options/neow-options.md:5`："this is unverified at runtime"；`:68`："That is static reasoning only; it has not been observed"）。
 
 ### 3.5 观察形状与 schema 的离线锚定（不是 parity）
 
-- 在线记录 + 校验：`python/observation_schema_acceptance.py:1-21`（驱动 worker 走遍每个 run stage，验证 `schemas/canonical-state.schema.json`；`--record` 写出 `tests/fixtures/canonical-observations.json`）。
+- 在线记录 + 校验：`tests/acceptance/observation_schema_acceptance.py:1-21`（驱动 worker 走遍每个 run stage，验证 `schemas/canonical-state.schema.json`；`--record` 写出 `tests/fixtures/canonical-observations.json`）。
 - 离线（CI 内）：`tests/test_observation_schema.py:58`（校验已入库的真实 capture 夹具）、`tests/test_scenarios.py:571,677,1322,1405`（行/schema/字节同一性）、`tests/test_bridge_observation_shape.py:29-31,41-50`（**用正则读 FullAppBridge/PNC 的 C# 源码**做静态断言）、`tests/test_decision_vocabulary.py:33-60`（同样读 C# 源码收集阶段词）。
 - 这些都**不驱动游戏**，因此证明的是"形状/词汇/序列化一致"，不是"值与实机一致"。它们把桥接观察与"模拟器自己的投影"对齐（`tests/test_bridge_observation_shape.py:1-7`），后者本身是同一仓库的产物。
 
@@ -164,11 +164,11 @@
 4. **契约字段清单是单一来源并有离线锚定**（`parity_projection.py:155-206` ↔ `tests/test_parity_projection.py:120-135,300-313`），且在 CI 中执行（`.github/workflows/ci.yml:26-27`）。
 5. **模拟器内部确定性与语料字节同一**（`tests/test_scenarios.py:1322,1405`；`artifacts/scenario-corpus-ticket10` vs `-repeat`）。
 6. **桥接 4 进程哈希一致 + 前缀回放/分支可用**（`full_app_bridge_acceptance.py:117-119,194-213`）——属 game↔game。
-7. **ADR-0001 的完全解锁前提在桥接侧可观测**：`python/full_app_unlock_acceptance.py:16-32` 断言 `hello`/`start_run`/`history` 都报 `unlock_policy == "all"`，并确认角色/Ascension 被采用。
+7. **ADR-0001 的完全解锁前提在桥接侧可观测**：`tests/acceptance/full_app_unlock_acceptance.py:16-32` 断言 `hello`/`start_run`/`history` 都报 `unlock_policy == "all"`，并确认角色/Ascension 被采用。
 
 ### 5.2 假设（无自动强制，或只由反编译源码/文档支撑）
 
-1. **ADR-0003 的"可在 shipped game 中手工复现"没有自动化强制**。最接近的是 `python/scenario_record_acceptance.py` 的"仅用记录字段重驱动 → 同一 state hash"，而它的 docstring 自称是 "**the simulator-side half** of 'paste the seed into the shipped game's custom run screen and the same fight is there'"（`:22-27`）。仓库里找不到任何对手工复现的机器检查。
+1. **ADR-0003 的"可在 shipped game 中手工复现"没有自动化强制**。最接近的是 `tests/acceptance/scenario_record_acceptance.py` 的"仅用记录字段重驱动 → 同一 state hash"，而它的 docstring 自称是 "**the simulator-side half** of 'paste the seed into the shipped game's custom run screen and the same fight is there'"（`:22-27`）。仓库里找不到任何对手工复现的机器检查。
 2. **Act variant 的 shipped 侧被 ADR-0001 故意偏移**：因为 bridge 沙盒是全新 profile，实机强制非默认变体，于是 oracle 的对比样本被限定为 `UNDERDOCKS`（`parity_run_acceptance.py:40-49,175-186`；`parity-findings.md:270-279`：默认变体那一半"unreachable here"）。
 3. **`act_variant_acceptance` / `ancient_room_acceptance` 的"游戏侧"是反编译移植**（`shipped_rng.py:1-12` 自述），不是运行时观测。
 4. **手牌能量消耗、升级数、遗物计数"存在"分支只有离线/静态锚定**：`parity-findings.md:129-137`；`issues/12-…md:76-84`；`issues/13-…md:129-137,175`。
@@ -208,7 +208,7 @@
 - `tests/test_parity_projection.py:18-25,120-135,146,279-313`
 
 **oracle 与驱动**
-- `python/parity_run_acceptance.py:2-62,93-121,175-213,221-260,263-373,376-432,455-506,525-568,571-623,626-690`
+- `tests/acceptance/parity_run_acceptance.py:2-62,93-121,175-213,221-260,263-373,376-432,455-506,525-568,571-623,626-690`
 - `python/sts2_native_sim/scenarios.py:1-8,414-423,571-589,706-799,872-895`
 - `python/sts2_native_sim/client.py:33,91,105,127-134,178-220`
 - `python/sts2_native_sim/full_app_client.py:17-27,73-86,101-170,172-202,243-284`
@@ -222,15 +222,15 @@
 - `src/Sts2.NativeSim.TraceExporter/TraceExporterMod.cs:21-37,122-160`
 - `src/Sts2.NativeSim.AutoTraceDriver/Sts2.NativeSim.AutoTraceDriver.csproj`
 - `scripts/run-isolated-autotrace.ps1:29-31,99-102,126-188`
-- `python/differential_replay.py:1-5,29,51,74-110`
-- `python/differential_harness_acceptance.py:1,13-41`；`python/differential_campaign.py:14-23`；`python/promote_differential_candidates.py:13,27-30`；`python/trace_inventory.py:1-6`
+- `python/tools/differential_replay.py:1-5,29,51,74-110`
+- `tests/acceptance/differential_harness_acceptance.py:1,13-41`；`python/tools/differential_campaign.py:14-23`；`python/tools/promote_differential_candidates.py:13,27-30`；`python/tools/trace_inventory.py:1-6`
 
 **由 seed 推导的移植**
 - `python/sts2_native_sim/shipped_rng.py:1-12,34-44,51-80`
-- `python/act_variant_acceptance.py:1-21,31-38`；`python/ancient_room_acceptance.py:1-39,50-52`
+- `tests/acceptance/act_variant_acceptance.py:1-21,31-38`；`tests/acceptance/ancient_room_acceptance.py:1-39,50-52`
 
 **schema 与离线测试**
-- `python/observation_schema_acceptance.py:1-21,40-44`；`python/sts2_native_sim/schema.py:43`
+- `tests/acceptance/observation_schema_acceptance.py:1-21,40-44`；`python/sts2_native_sim/schema.py:43`
 - `tests/conftest.py:11-20`；`tests/test_observation_schema.py:58`；`tests/test_bridge_observation_shape.py:1-7,29-31,41-50`；`tests/test_decision_vocabulary.py:1-9,33-60`；`tests/test_scenarios.py:571,677,1322,1405`
 - `.github/workflows/ci.yml:22-35`；`scripts/test-public-tree.ps1:5-30`；`scripts/test-godot-determinism.ps1:47-55`；`pyproject.toml:13-18,27-43`
 

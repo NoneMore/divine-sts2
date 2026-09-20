@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from acceptance import SCENARIO
 from sts2_native_sim import NativeWorkerPool
+from sts2_native_sim._legacy_scenario import SCENARIO
 
 def run(count: int, iterations: int) -> dict:
     with NativeWorkerPool(count) as pool:
