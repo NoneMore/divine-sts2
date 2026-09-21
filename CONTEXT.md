@@ -1,15 +1,19 @@
 # STS2 Gym
 
-STS2 Gym exposes isolated native Slay the Spire 2 runs for simulation and full-application automation without treating profile completion as simulation state.
+STS2 Gym exposes isolated native Slay the Spire 2 runs for simulation and full-application automation under one progression-complete baseline.
 
 ## Language
 
+**Progression-complete baseline**:
+The project-wide premise that every run has all progression unlock, content discovery, epoch, and tutorial gates complete. It excludes achievements and career totals and is not a selectable run input: the simulator represents its gameplay effects directly, while each full-app sandbox materializes it as deterministic isolated progress data.
+_Avoid_: Completed profile, unlock mode, progression configuration
+
 **Fully unlocked run**:
-A new run whose legal gameplay content pools have every progression unlock gate open, while still obeying game-mode constraints. Every simulator run starts fully unlocked; this does not imply discovered compendium entries, achievements, tutorial completion, badges, or fabricated career statistics.
-_Avoid_: Completed profile, all-unlocked profile
+A new run whose legal gameplay content pools follow the progression-complete baseline while still obeying game-mode constraints. Character, run seed, and Ascension remain run inputs; profile progression and discovery do not.
+_Avoid_: Progression-locked run, configurable-unlock run, all-unlocked profile
 
 **Full-app sandbox**:
-An isolated single-player full-game session whose user-data directories are separate from the player's real profile and saves.
+An isolated single-player full-game session whose user-data directories are separate from the player's real profile and saves and materialize the progression-complete baseline.
 _Avoid_: Test profile, real profile
 
 **Shipped game**:
