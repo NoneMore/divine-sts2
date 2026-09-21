@@ -25,3 +25,26 @@ def test_cli_help_is_side_effect_free(capsys: pytest.CaptureFixture[str]) -> Non
         cli.main(["--help"])
     assert raised.value.code == 0
     assert "doctor" in capsys.readouterr().out
+
+
+def test_current_architecture_docs_link_implemented_modules_and_tool_replacements() -> None:
+    architecture = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    tooling = (ROOT / "docs" / "tooling.md").read_text(encoding="utf-8")
+
+    for required in (
+        "Sts2.NativeSim.Core/RunSession",
+        "Sts2.NativeSim.Protocol",
+        "sts2_native_sim.scenarios",
+        "ADR-0005",
+        "ADR-0006",
+    ):
+        assert required in architecture
+    for required in (
+        "AutoTraceDriver",
+        "run-isolated-autotrace.ps1",
+        "TraceExporterSmoke",
+        "ApiProbe",
+        "latency_benchmark.py",
+        "NativeSearchCoordinator",
+    ):
+        assert required in tooling

@@ -7,5 +7,5 @@
   "has_pck": false,
   "has_dll": true,
   "affects_gameplay": false,
-  "dependencies": []
+  "dependencies": [{"id": "Sts2.NativeSim.Protocol", "min_version": "0.1.0"}]
 }

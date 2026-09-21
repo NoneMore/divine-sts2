@@ -16,9 +16,9 @@
     <None Include="sts2-full-app-bridge.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="PackageFullAppBridge" AfterTargets="Build">
+    <RemoveDir Directories="$(OutputPath)package" />
     <MakeDir Directories="$(OutputPath)package" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(OutputPath)package" />
-    <Copy SourceFiles="$(OutputPath)Sts2.NativeSim.Protocol.dll" DestinationFolder="$(OutputPath)package" Condition="Exists('$(OutputPath)Sts2.NativeSim.Protocol.dll')" />
     <Copy SourceFiles="sts2-full-app-bridge.json" DestinationFolder="$(OutputPath)package" />
   </Target>
 </Project>

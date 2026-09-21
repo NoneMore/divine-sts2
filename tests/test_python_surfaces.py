@@ -17,6 +17,28 @@ from sts2_native_sim.scenarios import CombatEpisode, materialize_scenario
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "examples/02_mcts_search.py",
+        "python/benchmark.py",
+        "tests/Sts2.NativeSim.TraceExporterSmoke",
+        "tools/Sts2.NativeSim.ApiProbe",
+    ],
+)
+def test_audited_deletion_candidates_are_not_public_tree_entries(relative_path: str) -> None:
+    assert not (ROOT / relative_path).exists()
+
+
+def test_autotrace_driver_is_built_and_has_a_full_app_smoke_entry() -> None:
+    solution = (ROOT / "Sts2.NativeSim.sln").read_text(encoding="utf-8-sig")
+    smoke_script = (ROOT / "scripts" / "run-isolated-autotrace.ps1").read_text(encoding="utf-8-sig")
+
+    assert "src\\Sts2.NativeSim.AutoTraceDriver\\Sts2.NativeSim.AutoTraceDriver.csproj" in solution
+    assert "Sts2.NativeSim.AutoTraceDriver\\Sts2.NativeSim.AutoTraceDriver.csproj" in smoke_script
+    assert "--require-exact" in smoke_script
+
+
 def test_python_support_areas_exist() -> None:
     expected = [
         ROOT / "python" / "tools",

@@ -14,17 +14,26 @@ from .full_app_sandbox import SandboxLayout, share_install
 from .paths import find_game_root, find_sandbox_root
 
 
-def bridge_package_dir() -> Path:
-    """Where the built full-app bridge mod package lives."""
+def _package_dir(project_name: str) -> Path:
     return (
         Path(__file__).resolve().parent.parent.parent
         / "src"
-        / "Sts2.NativeSim.FullAppBridge"
+        / project_name
         / "bin"
         / "Release"
         / "net9.0"
         / "package"
     )
+
+
+def bridge_package_dir() -> Path:
+    """Where the built full-app bridge mod package lives."""
+    return _package_dir("Sts2.NativeSim.FullAppBridge")
+
+
+def protocol_package_dir() -> Path:
+    """Where the built shared protocol mod package lives."""
+    return _package_dir("Sts2.NativeSim.Protocol")
 
 
 def bridge_run(observation: dict[str, Any]) -> dict[str, Any]:
@@ -111,25 +120,27 @@ class FullAppBridgeClient:
             if not (self.sandbox_dir / required).is_file():
                 raise FileNotFoundError(f"Sandbox preparation did not produce {required}: {self.sandbox_dir}")
 
-        # Deploy full app bridge mod
-        mods_dir = self.sandbox_dir / "mods" / "sts2-full-app-bridge"
-        mods_dir.mkdir(parents=True, exist_ok=True)
-
-        # Locate built mod package
-        mod_package = bridge_package_dir()
-        dll_src = mod_package / "sts2-full-app-bridge.dll"
-
-        if not dll_src.exists():
-            raise FileNotFoundError(f"Bridge DLL not found at {dll_src}. Build Sts2.NativeSim.FullAppBridge first.")
-
-        for pkg_file in mod_package.glob("*"):
-            if pkg_file.is_file():
-                dest_file = mods_dir / pkg_file.name
-                try:
-                    shutil.copy2(pkg_file, dest_file)
-                except Exception:
-                    if not dest_file.exists():
-                        raise
+        # The game loads one assembly per mod manifest. Protocol is therefore a small internal
+        # dependency mod rather than a loose DLL beside the bridge, and the manifest dependency
+        # makes the game load its types before scanning the bridge assembly.
+        packages = (
+            ("Sts2.NativeSim.Protocol", protocol_package_dir(), "Sts2.NativeSim.Protocol.dll"),
+            ("sts2-full-app-bridge", bridge_package_dir(), "sts2-full-app-bridge.dll"),
+        )
+        for mod_id, mod_package, assembly_name in packages:
+            dll_src = mod_package / assembly_name
+            if not dll_src.exists():
+                raise FileNotFoundError(f"Mod DLL not found at {dll_src}. Build the solution first.")
+            mod_dir = self.sandbox_dir / "mods" / mod_id
+            mod_dir.mkdir(parents=True, exist_ok=True)
+            for pkg_file in mod_package.glob("*"):
+                if pkg_file.is_file():
+                    dest_file = mod_dir / pkg_file.name
+                    try:
+                        shutil.copy2(pkg_file, dest_file)
+                    except Exception:
+                        if not dest_file.exists():
+                            raise
 
         # Setup clean isolated userdata
         userdata_dir = self.sandbox_dir / "userdata"
@@ -157,6 +168,10 @@ class FullAppBridgeClient:
         settings_data["mod_settings"] = {"mods_enabled": True, "mod_list": []}
         settings_data["fullscreen"] = False
         settings_data["skip_intro_logo"] = True
+        settings_data["volume_master"] = 0
+        settings_data["volume_bgm"] = 0
+        settings_data["volume_sfx"] = 0
+        settings_data["volume_ambience"] = 0
 
         with open(settings_dir / "settings.save", "w", encoding="utf-8") as f:
             json.dump(settings_data, f, indent=2)

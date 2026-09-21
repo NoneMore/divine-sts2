@@ -23,7 +23,7 @@ public static class FullAppCanonicalObservationEncoder
             game_build = observation.GameBuild,
             run = observation.Run,
             combat = observation.Combat,
-            inventory = observation.Inventory,
+            inventory = observation.Combat is not null ? observation.Inventory : null,
             map = observation.Phase == "map" ? stageBlock : null,
             reward = observation.Phase == "card_reward" ? stageBlock : null,
             rest_site = observation.Phase == "rest_site" ? stageBlock : null,

@@ -89,4 +89,36 @@ public sealed class HostWireAdapterTests
         Assert.Equal("Play Strike", bridgeAction.GetProperty("description").GetString());
         Assert.False(bridgeAction.TryGetProperty("kind", out _));
     }
+
+    [Fact]
+    public void FullAppEventProjectionKeepsRunInventoryOutOfTheEventStage()
+    {
+        ObservationDto observation = new()
+        {
+            Phase = "event",
+            GameBuild = new GameBuildDto
+            {
+                Version = "test",
+                AssemblySha256 = "assembly",
+                PckSha256 = "pck",
+            },
+            Run = new RunObservationDto
+            {
+                Seed = "SEED",
+                ActVariant = "UNDERDOCKS",
+            },
+            Inventory = new InventoryObservationDto(),
+            Room = new RoomObservationDto
+            {
+                RoomType = "Neow",
+                Options = ["choice"],
+            },
+        };
+
+        CanonicalObservation canonical = FullAppCanonicalObservationEncoder.Encode(observation, []);
+
+        Assert.NotNull(canonical.Event);
+        Assert.Null(canonical.Inventory);
+        Assert.IsType<CanonicalEventObservationStage>(canonical.Stage);
+    }
 }

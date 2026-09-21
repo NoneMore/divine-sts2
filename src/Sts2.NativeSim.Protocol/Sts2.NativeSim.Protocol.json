@@ -1,0 +1,11 @@
+{
+  "id": "Sts2.NativeSim.Protocol",
+  "name": "STS2 Native Simulation Protocol",
+  "author": "sts2-native-sim",
+  "description": "Internal shared protocol and canonical observation types for simulator game mods.",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false,
+  "dependencies": []
+}

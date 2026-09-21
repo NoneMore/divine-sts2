@@ -13,7 +13,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.GodotHost", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.TraceExporter", "src\Sts2.NativeSim.TraceExporter\Sts2.NativeSim.TraceExporter.csproj", "{2A62CF9B-CC9D-48E4-BF74-5C0C59672B91}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.TraceExporterSmoke", "tests\Sts2.NativeSim.TraceExporterSmoke\Sts2.NativeSim.TraceExporterSmoke.csproj", "{B8247338-76A0-4642-8A08-32BD731D770B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.AutoTraceDriver", "src\Sts2.NativeSim.AutoTraceDriver\Sts2.NativeSim.AutoTraceDriver.csproj", "{E523A919-0155-4C4A-A829-FF4C381E9E33}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sts2.NativeSim.FullAppBridge", "src\Sts2.NativeSim.FullAppBridge\Sts2.NativeSim.FullAppBridge.csproj", "{3E481A57-8C8B-48BE-9E45-84092EBE4112}"
 EndProject
@@ -49,10 +49,10 @@ Global
 		{2A62CF9B-CC9D-48E4-BF74-5C0C59672B91}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2A62CF9B-CC9D-48E4-BF74-5C0C59672B91}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2A62CF9B-CC9D-48E4-BF74-5C0C59672B91}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B8247338-76A0-4642-8A08-32BD731D770B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B8247338-76A0-4642-8A08-32BD731D770B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B8247338-76A0-4642-8A08-32BD731D770B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B8247338-76A0-4642-8A08-32BD731D770B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E523A919-0155-4C4A-A829-FF4C381E9E33}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E523A919-0155-4C4A-A829-FF4C381E9E33}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E523A919-0155-4C4A-A829-FF4C381E9E33}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E523A919-0155-4C4A-A829-FF4C381E9E33}.Release|Any CPU.Build.0 = Release|Any CPU
 		{3E481A57-8C8B-48BE-9E45-84092EBE4112}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{3E481A57-8C8B-48BE-9E45-84092EBE4112}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3E481A57-8C8B-48BE-9E45-84092EBE4112}.Release|Any CPU.ActiveCfg = Release|Any CPU

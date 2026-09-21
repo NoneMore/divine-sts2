@@ -132,6 +132,14 @@ STS2_SANDBOX_ROOT=D:\SteamLibrary\steamapps\common\divine-sts2\full-app-sandboxe
 
 ---
 
+## Architecture and internal tools
+
+See [`docs/architecture.md`](docs/architecture.md) for the implemented module boundaries and
+accepted ADRs. [`docs/tooling.md`](docs/tooling.md) describes maintained internal tools,
+experiments, the AutoTrace smoke workflow, and replacements for removed edge utilities.
+
+---
+
 ## Legal
 
 `divine-sts2` is an independent research project and is not affiliated with or endorsed by Mega Crit. Users must provide their own legally obtained copy of Slay the Spire 2. Distributed under the [MIT License](LICENSE).

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 from pathlib import Path
 
@@ -92,3 +93,47 @@ def test_prepare_sandbox_reports_the_location_it_used(
     assert str(sandbox_root) in layout.describe()
     linked = client.sandbox_dir / "SlayTheSpire2.pck"
     assert os.stat(linked).st_ino == os.stat(fake_install / "SlayTheSpire2.pck").st_ino
+    settings = json.loads(
+        (client.sandbox_dir / "userdata" / "SlayTheSpire2" / "default" / "1" / "settings.save").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert settings["volume_master"] == 0
+    assert settings["volume_bgm"] == 0
+    assert settings["volume_sfx"] == 0
+    assert settings["volume_ambience"] == 0
+
+
+def test_prepare_sandbox_deploys_bridge_and_protocol_as_separate_mods(
+    fake_install: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge_package = tmp_path / "bridge-package"
+    protocol_package = tmp_path / "protocol-package"
+    bridge_package.mkdir()
+    protocol_package.mkdir()
+    (bridge_package / "sts2-full-app-bridge.dll").write_bytes(b"bridge")
+    (bridge_package / "sts2-full-app-bridge.json").write_text("{}", encoding="utf-8")
+    (protocol_package / "Sts2.NativeSim.Protocol.dll").write_bytes(b"protocol")
+    (protocol_package / "Sts2.NativeSim.Protocol.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(full_app_client, "bridge_package_dir", lambda: bridge_package)
+    monkeypatch.setattr(full_app_client, "protocol_package_dir", lambda: protocol_package)
+
+    client = FullAppBridgeClient(
+        FullAppClientConfig(
+            game_root=str(fake_install),
+            sandbox_root=str(tmp_path / "sandboxes"),
+            worker_id=0,
+        )
+    )
+
+    client.prepare_sandbox()
+
+    mods = client.sandbox_dir / "mods"
+    assert {path.name for path in (mods / "sts2-full-app-bridge").iterdir()} == {
+        "sts2-full-app-bridge.dll",
+        "sts2-full-app-bridge.json",
+    }
+    assert {path.name for path in (mods / "Sts2.NativeSim.Protocol").iterdir()} == {
+        "Sts2.NativeSim.Protocol.dll",
+        "Sts2.NativeSim.Protocol.json",
+    }

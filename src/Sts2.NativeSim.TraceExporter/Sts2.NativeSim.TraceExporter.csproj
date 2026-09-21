@@ -19,9 +19,9 @@
     <Compile Include="..\Sts2.NativeSim.Core\ReflectionTools.cs" Link="ReflectionTools.cs" />
   </ItemGroup>
   <Target Name="PackageTraceExporter" AfterTargets="Build">
+    <RemoveDir Directories="$(OutputPath)package" />
     <MakeDir Directories="$(OutputPath)package" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(OutputPath)package" />
-    <Copy SourceFiles="$(OutputPath)Sts2.NativeSim.Protocol.dll" DestinationFolder="$(OutputPath)package" Condition="Exists('$(OutputPath)Sts2.NativeSim.Protocol.dll')" />
     <Copy SourceFiles="sts2-native-trace-exporter.json" DestinationFolder="$(OutputPath)package" />
   </Target>
 </Project>

@@ -31,9 +31,12 @@ if (-not $CertifiedDirectory) { $CertifiedDirectory = Join-Path $repositoryRoot 
 if (-not $FailureDirectory) { $FailureDirectory = Join-Path $repositoryRoot 'artifacts\shipped-autotraces\failures' }
 
 $env:STS2_GAME_ROOT = $gameRootResolved
+$protocolProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.Protocol\Sts2.NativeSim.Protocol.csproj'
 $exporterProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.TraceExporter\Sts2.NativeSim.TraceExporter.csproj'
 $driverProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.AutoTraceDriver\Sts2.NativeSim.AutoTraceDriver.csproj'
 $workerProject = Join-Path $repositoryRoot 'src\Sts2.NativeSim.GodotHost\Sts2.NativeSim.GodotHost.csproj'
+Invoke-DivineDotnet build $protocolProject -c Release --nologo | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "Protocol mod build failed with exit code $LASTEXITCODE" }
 Invoke-DivineDotnet build $exporterProject -c Release --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Trace exporter build failed with exit code $LASTEXITCODE" }
 Invoke-DivineDotnet build $driverProject -c Release --nologo | Out-Host
@@ -72,9 +75,11 @@ $shouldLaunch = $null -eq $existingManifest -or -not $existingManifest.status.St
 $launchFailure = $null
 if ($shouldLaunch) {
     $mods = Join-Path $sandboxFull 'mods'
+    $protocolDestination = Join-Path $mods 'Sts2.NativeSim.Protocol'
     $exporterDestination = Join-Path $mods 'Sts2NativeTraceExporter'
     $driverDestination = Join-Path $mods 'Sts2NativeAutoTraceDriver'
-    New-Item -ItemType Directory -Path $exporterDestination,$driverDestination -Force | Out-Null
+    New-Item -ItemType Directory -Path $protocolDestination,$exporterDestination,$driverDestination -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Split-Path $protocolProject) 'bin\Release\net9.0\package\Sts2.NativeSim.Protocol.dll'),(Join-Path (Split-Path $protocolProject) 'bin\Release\net9.0\package\Sts2.NativeSim.Protocol.json') -Destination $protocolDestination -Force
     Copy-Item -LiteralPath (Join-Path (Split-Path $exporterProject) 'bin\Release\net9.0\package\sts2-native-trace-exporter.dll'),(Join-Path (Split-Path $exporterProject) 'bin\Release\net9.0\package\sts2-native-trace-exporter.json') -Destination $exporterDestination -Force
     Copy-Item -LiteralPath (Join-Path (Split-Path $driverProject) 'bin\Release\net9.0\package\sts2-native-autotrace-driver.dll'),(Join-Path (Split-Path $driverProject) 'bin\Release\net9.0\package\sts2-native-autotrace-driver.json') -Destination $driverDestination -Force
 
@@ -87,6 +92,10 @@ if ($shouldLaunch) {
     $settings.mod_settings = [pscustomobject]@{ mods_enabled = $true; mod_list = @() }
     $settings.fullscreen = $false
     $settings.skip_intro_logo = $true
+    $settings.volume_master = 0
+    $settings.volume_bgm = 0
+    $settings.volume_sfx = 0
+    $settings.volume_ambience = 0
     $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $isolatedSettingsDirectory 'settings.save') -Encoding utf8
 
     $savedAppData = $env:APPDATA

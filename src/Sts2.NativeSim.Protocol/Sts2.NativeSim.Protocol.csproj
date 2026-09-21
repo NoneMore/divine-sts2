@@ -1,1 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <None Include="Sts2.NativeSim.Protocol.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="PackageProtocolMod" AfterTargets="Build">
+    <RemoveDir Directories="$(OutputPath)package" />
+    <MakeDir Directories="$(OutputPath)package" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(OutputPath)package" />
+    <Copy SourceFiles="Sts2.NativeSim.Protocol.json" DestinationFolder="$(OutputPath)package" />
+  </Target>
+</Project>
