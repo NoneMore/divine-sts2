@@ -142,16 +142,17 @@ class FullAppBridgeClient:
                         if not dest_file.exists():
                             raise
 
-        # Setup clean isolated userdata
+        # Set up isolated userdata. Progress is deliberately preserved: the bridge provisions a
+        # missing baseline through shipped-game APIs and validates an existing one fail-closed.
         userdata_dir = self.sandbox_dir / "userdata"
         saves_dir = userdata_dir / "SlayTheSpire2" / "default" / "1" / "modded" / "profile1" / "saves"
         if saves_dir.exists():
-            for f in saves_dir.glob("*.save*"):
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
-
+            # A full-app entry always starts a new run. Active run saves are run-scoped state, not
+            # part of the persistent progression baseline, and would send AutoSlay through its
+            # abandon/continue UI on the next process launch.
+            for run_save_name in ("current_run.save", "current_run_mp.save"):
+                for run_save in saves_dir.glob(f"{run_save_name}*"):
+                    run_save.unlink()
         settings_dir = userdata_dir / "SlayTheSpire2" / "default" / "1"
         settings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -254,6 +255,17 @@ class FullAppBridgeClient:
 
         if not connected:
             raise ConnectionError(f"Failed to connect to bridge socket on port {self.bound_port}")
+
+        readiness_started = time.time()
+        while time.time() - readiness_started < self.config.timeout_seconds:
+            hello = self.hello()
+            status = hello.get("status")
+            if status == "ready":
+                return
+            if status == "failed":
+                raise RuntimeError(f"Full-app progression baseline failed: {hello.get('error', 'unknown failure')}")
+            time.sleep(0.05)
+        raise TimeoutError(f"Worker {self.config.worker_id} timed out waiting for progression baseline readiness")
 
     def call(self, method: str, params: Optional[Dict[str, Any]] = None) -> Any:
         if self.sock is None or self.file_writer is None or self.file_reader is None:

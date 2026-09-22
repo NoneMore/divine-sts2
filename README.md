@@ -10,7 +10,13 @@ High-throughput, deterministic, headless reinforcement learning and MCTS executi
 
 Executes game mechanics directly from your local Steam installation inside isolated, presentation-suppressed .NET 9 workers. Contains zero copyrighted assets, game binaries, or proprietary art.
 
-Every newly created simulator run uses the game's complete legal gameplay content pools. Character, seed, and Ascension remain configurable, while profile progression never narrows cards, relics, potions, events, Acts, Ancients, or encounter ordering. This does not modify profile saves or mark achievements, tutorials, statistics, or compendium entries as complete. The `hello`, `diagnostics`, and full-app `start_run` responses expose this invariant as `unlock_policy: "all"`.
+Every run uses one progression-complete baseline. Character, seed, and Ascension remain configurable,
+while profile progression never narrows cards, relics, potions, events, Acts, Ancients, or encounter
+ordering. The simulator models those effects directly; each isolated full-app sandbox materializes and
+validates deterministic progress through the shipped game's APIs. It never touches the player's real
+profile or synthesizes achievements, career totals, or multiplayer session state. A ready full-app
+`hello` reports `progression_policy`, the canonical `profile_fingerprint`, PID, bound port, and game
+build; `start_run` is unavailable while that baseline is initializing.
 
 ---
 

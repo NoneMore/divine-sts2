@@ -305,7 +305,7 @@ def test_the_oracle_reports_the_contract_it_compares() -> None:
     module's own declaration — not a list of the oracle's that happens to agree today. It is built here
     from no results, which is the same document a run produces with its samples removed.
     """
-    document = report([], [], {"version": "test", "assembly_sha256": "AA", "pck_sha256": "BB"}, complete_sample=False)
+    document = report([], {"version": "test", "assembly_sha256": "AA", "pck_sha256": "BB"}, complete_sample=False)
     assert document["contract"]["fields_compared"] == list(projection.CONTRACT_FIELDS)
     assert document["contract"]["state_hashes_compared"] == 0
     assert document["contract"]["fields_not_compared"] == [

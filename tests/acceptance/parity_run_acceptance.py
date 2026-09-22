@@ -29,24 +29,17 @@ What the run does, per sample:
 The sample, and what it covers
 ------------------------------
 
-:data:`SAMPLE` is fixed: fourteen scenarios over two characters (IRONCLAD, DEFECT) and two Ascensions
-(0 and 2), on ten distinct runs, taking every Ancient choice of each run that this seam can drive.
+:data:`SAMPLE` is fixed: sixteen scenarios over two characters (IRONCLAD, DEFECT) and two Ascensions
+(0 and 2), on twelve distinct runs, taking every Ancient choice of each run that this seam can drive.
 Which nested-choice kinds that came to is *measured* and reported, and what the sample does **not**
 cover is named in :data:`NESTED_KINDS_NOT_COVERED`: a bundle or relic *option* pick has no selector
 branch in the shipped game, as ticket 14 measured, and a *reward set* is not driven by this sample at
 all. So nothing here claims complete Ancient-choice coverage; it claims the choices it names and the
 nested kinds it actually drove.
 
-The Act-variant dimension is bounded by the shipped side, and the bound is measured rather than
-assumed. The shipped game forces act 1's *non-default* variant the first time a profile meets it
-(``ActModel.GetRandomList`` consults ``SaveManager.Progress.DiscoveredActs``), and the bridge's sandbox
-profile is a fresh one, so a shipped run there plays that variant for every seed — while the simulator
-pins the discovery check off and lets the seed alone decide, which is the roll a profile that has met
-every act gets (ADR-0001; ticket 02). A seed whose shipped roll is the default variant therefore names
-a situation this oracle cannot reach, and :data:`VARIANT_PROBES` keeps a few such scenarios in the run
-to *measure* that: they are not compared, they are checked to come out exactly as the bound says, and
-a run where they do not is a failure. The compared sample is therefore every seed whose shipped roll
-is the non-default variant — which is the shipped profile's act 1 — and the report says so.
+Both Act variants are ordinary compared scenarios. The full-app sandbox materializes every Act as
+discovered before it becomes ready, so ``ActModel.GetRandomList`` follows the run seed instead of the
+first-discovery override; the shipped-game oracle and simulator therefore reach the same variant.
 
 What is never compared
 ----------------------
@@ -63,10 +56,8 @@ the install, so a sandbox on another volume would copy 11 GB instead.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import sys
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -172,18 +163,11 @@ class _RecordedRun:
     failures: list[dict[str, Any]]
 
 
-#: The act-1 Act variant the shipped game forces when a profile has not met it: act 1's non-default
-#: variant, which ``ActModel.GetRandomList`` picks ahead of the seed's roll. The bridge's sandbox
-#: profile is a fresh one, so a shipped run there plays this variant whatever the seed says — which is
-#: what :data:`VARIANT_PROBES` measures, and why the compared sample is the seeds that roll it anyway.
-FORCED_VARIANT = "UNDERDOCKS"
-
-#: The fixed sample: fourteen scenarios over two characters (IRONCLAD, DEFECT) and two Ascensions (0
-#: and 2), on ten distinct runs, taking every Ancient choice of each run that this seam can drive. The
+#: The fixed sample: sixteen scenarios over two characters (IRONCLAD, DEFECT) and two Ascensions (0
+#: and 2), on twelve distinct runs, taking every Ancient choice of each run that this seam can drive. The
 #: relic named is the one the build this run reports offered at that index, so a sample that stopped
-#: naming the same choice fails loudly rather than quietly comparing a different one. Every seed here
-#: rolls `UNDERDOCKS`, which is the variant a shipped run on this oracle's fresh profile plays — so
-#: the shipped game really is in the situation the record describes.
+#: naming the same choice fails loudly rather than quietly comparing a different one. Both Act 1
+#: variants are represented and compared under the shared progression-complete baseline.
 SAMPLE: tuple[Sample, ...] = (
     Sample("IRONCLAD", 0, "ANC1ENT10", 0, "LEAD_PAPERWEIGHT"),
     Sample("IRONCLAD", 0, "ANC1ENT10", 1, "PRECISE_SCISSORS"),
@@ -199,15 +183,6 @@ SAMPLE: tuple[Sample, ...] = (
     Sample("DEFECT", 0, "ACTVAR1ANT07", 1, "POMANDER"),
     Sample("DEFECT", 2, "ANC1ENT19", 2, "HEFTY_TABLET"),
     Sample("DEFECT", 2, "ANC1ENT22", 2, "PRECARIOUS_SHEARS"),
-)
-
-#: The scenarios that measure the Act-variant bound rather than being compared: seeds whose shipped
-#: roll is the *default* variant, which a fresh shipped profile does not play. Each is checked to come
-#: out exactly as the bound says — the record names one variant and the shipped run reports the other,
-#: and that other is :data:`FORCED_VARIANT`. A run where a probe does not come out that way fails: it
-#: means the bound closed (good news, and those scenarios move into :data:`SAMPLE`) or that something
-#: else moved, and either way the evidence must not claim the bound it no longer has.
-VARIANT_PROBES: tuple[Sample, ...] = (
     Sample("IRONCLAD", 0, "SCENAR10A01", 0, "ARCANE_SCROLL"),
     Sample("IRONCLAD", 0, "ANC1ENT01", 0, "BOOMING_CONCH"),
 )
@@ -386,9 +361,8 @@ def _compare(record: _Record, observation: dict[str, Any]) -> dict[str, Any]:
     The Act variant is the first precondition and the sharpest one: a run in a different Act is not in
     the recorded situation at all — different node, different encounter pools, different everything — so
     there is nothing to compare field by field and the failure names the contract field that moved. The
-    compared sample is built from the seeds a fresh shipped profile plays (`FORCED_VARIANT`), so this is
-    the safety net that names the bound when the sample and the profile disagree; `VARIANT_PROBES` is
-    where the bound is measured on purpose.
+    compared sample contains both variants, so this check proves the progression-complete shipped
+    profile followed the same run-seed selection as the simulator.
     """
     recipe, state = record.recipe, record.state
     run, node = observation["run"], recipe["node"]
@@ -506,70 +480,8 @@ def _sample_result(
     return result
 
 
-@contextlib.contextmanager
-def _launched(sample: Sample, worker_id: int) -> Iterator[FullAppBridgeClient]:
-    """A headless shipped game for one sample, in the sample's own sandbox, closed on the way out.
-
-    The whole run stands on this: one game process per sample, on a character the sample names, in a
-    sandbox hard-linked beside the install. Both the comparison and the variant probe need exactly this
-    and neither needs to know how it is built, so it is built once.
-    """
-    client = FullAppBridgeClient(FullAppClientConfig(worker_id=worker_id))
-    try:
-        client.launch(requested_character=sample.character)
-        yield client
-    finally:
-        client.close()
-
-
-def _probe_result(sample: Sample, runs: dict[Run, _RecordedRun], worker_id: int) -> dict[str, Any]:
-    """Measure which Act variant a shipped run on a fresh profile plays for one seed.
-
-    The run only has to reach its Ancient room: the variant is on the run block of the first
-    observation, and a fight on the wrong Act would compare a different situation rather than the
-    recorded one. The measurement is the bound itself — the record names the seed's own roll and the
-    shipped run reports :data:`FORCED_VARIANT` instead — so a probe that comes out any other way is a
-    failure of this run, not a pass.
-    """
-    result: dict[str, Any] = {
-        "label": sample.label,
-        "character": sample.character,
-        "ascension": sample.ascension,
-        "probe": True,
-    }
-    try:
-        record = _record_for(sample, runs)
-        result.update({"seed": record.recipe["seed"], "recorded_variant": record.recipe["act_variant"]})
-        with _launched(sample, worker_id) as client:
-            started = client.start_run(
-                seed=record.recipe["seed"], character=sample.character, ascension=sample.ascension
-            )
-            observation = started["observation"]
-            shipped_variant = observation["run"]["act_variant"]
-        result.update({
-            "act_variant": shipped_variant,
-            "shipped_variant": shipped_variant,
-            "map_coord": dict(observation.get("map_coord") or {}),
-            "bounds_the_record": shipped_variant != record.recipe["act_variant"],
-            "forced_variant": shipped_variant == FORCED_VARIANT,
-        })
-        _check(
-            result["bounds_the_record"],
-            f"the shipped profile plays the recorded variant {shipped_variant} for {sample.seed}, so this seed is no "
-            "longer a probe of the variant bound and belongs in the compared sample",
-        )
-        _check(
-            result["forced_variant"],
-            f"the shipped run reports {shipped_variant} where the fresh profile's forced variant is {FORCED_VARIANT}",
-        )
-        result["matched"] = True
-    except Exception as error:  # noqa: BLE001 — any failure is this probe's, and the run continues
-        result.update({"matched": False, "failure": f"{type(error).__name__}: {error}"})
-    return result
-
-
 def report(
-    results: list[dict[str, Any]], probes: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool
+    results: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool
 ) -> dict[str, Any]:
     """The run as a document: what was compared, what was covered, and what happened per sample.
 
@@ -586,10 +498,9 @@ def report(
     # was chosen for would otherwise report coverage it does not have.
     coverage_agrees = not complete_sample or set(covered) == set(NESTED_KINDS_COVERED)
     matched = [result for result in results if result.get("matched")]
-    probes_measured = [probe for probe in probes if probe.get("matched")]
     exercised = sorted(set().union(*(result.get("exercised_fields", []) for result in results)))
     return {
-        "success": len(matched) == len(results) and len(probes_measured) == len(probes) and coverage_agrees,
+        "success": len(matched) == len(results) and coverage_agrees,
         "game_build": build,
         "sample": {
             "size": len(results),
@@ -611,12 +522,7 @@ def report(
             "not_covered": NESTED_KINDS_NOT_COVERED,
             "agrees": coverage_agrees,
         },
-        "act_variant_bound": {
-            "compared_sample_variant": sorted({result["act_variant"] for result in results if "act_variant" in result}),
-            "forced_variant": FORCED_VARIANT,
-            "probes_measured": len(probes_measured),
-            "probes": probes,
-        },
+        "act_variants_compared": sorted({result["act_variant"] for result in results if "act_variant" in result}),
         "matched": len(matched),
         "mismatched": len(results) - len(matched),
         "results": results,
@@ -633,7 +539,6 @@ def main(argv: list[str] | None = None) -> int:
         help="compare only the samples with this label, repeatable — a run whose sample takes minutes needs a way "
              "to re-drive the one that a dropped game process cost",
     )
-    parser.add_argument("--no-probes", action="store_true", help="skip the Act-variant probes, which each cost a game")
     parser.add_argument("--report", type=Path, help="also write the report to this JSON file")
     parser.add_argument(
         "--dump", type=Path,
@@ -647,11 +552,10 @@ def main(argv: list[str] | None = None) -> int:
         samples = tuple(sample for sample in SAMPLE if sample.label in named)
         if not samples:
             parser.error(f"no sample is labelled {sorted(named)}")
-    probes = () if arguments.no_probes or arguments.only else VARIANT_PROBES
     with NativeWorkerPool(arguments.workers) as pool:
-        runs_to_record = len({sample.run for sample in (*samples, *probes)})
+        runs_to_record = len({sample.run for sample in samples})
         print(f"Recording {runs_to_record} runs with {arguments.workers} native workers...", flush=True)
-        runs = _records(pool, (*samples, *probes))
+        runs = _records(pool, samples)
         build = pool.workers[0].build
         print(f"Recorded on game build {build['assembly_sha256']}; now driving the shipped game.", flush=True)
 
@@ -663,14 +567,7 @@ def main(argv: list[str] | None = None) -> int:
             state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
             print(f"    {sample.label}: {state}", flush=True)
 
-        probe_results: list[dict[str, Any]] = []
-        for offset, sample in enumerate(probes):
-            print(f"[probe] launching a headless shipped game for {sample.label}...", flush=True)
-            probe = _probe_result(sample, runs, arguments.worker_id + len(samples) + offset)
-            probe_results.append(probe)
-            print(f"    {sample.label}: {probe.get('shipped_variant', probe.get('failure'))}", flush=True)
-
-    document = report(results, probe_results, build, complete_sample=tuple(samples) == SAMPLE)
+    document = report(results, build, complete_sample=tuple(samples) == SAMPLE)
     if arguments.report is not None:
         arguments.report.parent.mkdir(parents=True, exist_ok=True)
         arguments.report.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -678,11 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     for result in results:
         if not result.get("matched"):
             print(json.dumps(result, indent=2, sort_keys=True), flush=True)
-    probes_measured = document["act_variant_bound"]["probes_measured"]
-    print(
-        f"\n{document['matched']} of {len(results)} samples matched field for field, "
-        f"{probes_measured} of {len(probe_results)} variant probes measured the bound."
-    )
+    print(f"\n{document['matched']} of {len(results)} samples matched field for field.")
     return 0 if document["success"] else 1
 
 

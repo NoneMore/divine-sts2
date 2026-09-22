@@ -12,6 +12,7 @@ namespace Sts2.NativeSim.FullAppBridge;
 public static class FullAppBridgeServer
 {
     public const string UnlockPolicy = "all";
+    private static readonly ProgressionReadiness ProgressReadiness = new();
     private static TcpListener? _listener;
     private static TcpClient? _client;
     private static NetworkStream? _stream;
@@ -47,6 +48,10 @@ public static class FullAppBridgeServer
     public static string RequestedCharacter { get; private set; } = "IRONCLAD";
     public static int RequestedAscension { get; private set; } = 0;
     public static bool IsRunStarted { get; private set; }
+
+    public static void MarkProgressReady(string fingerprint) => ProgressReadiness.Complete(fingerprint);
+
+    public static void MarkProgressFailed(Exception failure) => ProgressReadiness.Fail(failure);
 
     /// <summary>
     /// Whether a client is driving this worker. A prompt the game opens with nobody to answer it
@@ -166,21 +171,18 @@ public static class FullAppBridgeServer
         switch (method.ToLowerInvariant())
         {
             case "hello":
-                return new Dictionary<string, object?>
-                {
-                    ["status"] = "ready",
-                    // The shipped build this worker is, measured rather than declared — the same one
-                    // block the worker's observations carry, so a client that only says hello learns
-                    // the build the run it starts will be on. It replaces a flat `version` that had
-                    // been hardcoded to one build, and it is the shape the simulator's own hello
-                    // reports, rather than one build written twice.
-                    ["game_build"] = GameBuild.Current,
-                    ["pid"] = Environment.ProcessId,
-                    ["bound_port"] = BoundPort,
-                    ["unlock_policy"] = UnlockPolicy,
-                };
+                ProgressionReadinessSnapshot readiness = ProgressReadiness.Snapshot();
+                return FullAppBridgeHandshake.CreateHello(
+                    readiness,
+                    // Hash the shipped build only after profile readiness, so an initializing hello
+                    // remains prompt even though the PCK is large.
+                    () => GameBuild.Current,
+                    Environment.ProcessId,
+                    BoundPort,
+                    "fresh");
 
             case "start_run":
+                FullAppBridgeHandshake.EnsureCanStart(ProgressReadiness);
                 if (parameters.TryGetProperty("seed", out JsonElement seed))
                     RequestedSeed = seed.ToString();
                 if (parameters.TryGetProperty("character", out JsonElement character))
@@ -204,6 +206,8 @@ public static class FullAppBridgeServer
                     ["character"] = RequestedCharacter,
                     ["ascension"] = RequestedAscension,
                     ["unlock_policy"] = UnlockPolicy,
+                    ["progression_policy"] = ProgressionCompletePolicy.Revision,
+                    ["profile_fingerprint"] = ProgressReadiness.ProfileFingerprint,
                     ["observation"] = CurrentObservation,
                     ["legal_actions"] = CurrentLegalActions,
                 };

@@ -137,3 +137,42 @@ def test_prepare_sandbox_deploys_bridge_and_protocol_as_separate_mods(
         "Sts2.NativeSim.Protocol.dll",
         "Sts2.NativeSim.Protocol.json",
     }
+
+
+def test_prepare_sandbox_preserves_progress_for_bridge_validation(
+    fake_install: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bridge_package = tmp_path / "bridge-package"
+    protocol_package = tmp_path / "protocol-package"
+    bridge_package.mkdir()
+    protocol_package.mkdir()
+    (bridge_package / "sts2-full-app-bridge.dll").write_bytes(b"bridge")
+    (protocol_package / "Sts2.NativeSim.Protocol.dll").write_bytes(b"protocol")
+    monkeypatch.setattr(full_app_client, "bridge_package_dir", lambda: bridge_package)
+    monkeypatch.setattr(full_app_client, "protocol_package_dir", lambda: protocol_package)
+    client = FullAppBridgeClient(
+        FullAppClientConfig(game_root=str(fake_install), sandbox_root=str(tmp_path / "sandboxes"), worker_id=0)
+    )
+    progress = (
+        client.sandbox_dir
+        / "userdata"
+        / "SlayTheSpire2"
+        / "default"
+        / "1"
+        / "modded"
+        / "profile1"
+        / "saves"
+        / "progress.save"
+    )
+    progress.parent.mkdir(parents=True)
+    progress.write_text("canonical-progress", encoding="utf-8")
+    current_run = progress.parent / "current_run.save"
+    multiplayer_run = progress.parent / "current_run_mp.save"
+    current_run.write_text("abandoned-run", encoding="utf-8")
+    multiplayer_run.write_text("abandoned-multiplayer-run", encoding="utf-8")
+
+    client.prepare_sandbox()
+
+    assert progress.read_text(encoding="utf-8") == "canonical-progress"
+    assert not current_run.exists()
+    assert not multiplayer_run.exists()

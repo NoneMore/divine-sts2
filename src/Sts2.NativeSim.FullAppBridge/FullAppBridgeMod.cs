@@ -39,6 +39,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Shops;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Unlocks;
 
 namespace Sts2.NativeSim.FullAppBridge;
@@ -64,6 +65,7 @@ public static class FullAppBridgeMod
         PresentationSuppression.Apply(harmony);
 
         TryPatchPostfix(harmony, typeof(NGame), "LaunchMainMenu", nameof(OnMainMenuLaunched));
+        PatchRequiredPostfix(harmony, typeof(SaveManager), nameof(SaveManager.InitProgressData), [], nameof(OnProgressDataInitialized));
         TryPatchPrefix(harmony, typeof(StartRunLobby), "BeginRunForAllPlayersIfAllReady", nameof(OnBeginRunForAllPlayers));
         PatchRequiredPrefix(harmony, typeof(StartRunLobby), "BeginRunForAllPlayers", [typeof(string), typeof(List<ModifierModel>)], nameof(UseFullyUnlockedLobby));
         PatchRequiredPrefix(harmony, typeof(Player), nameof(Player.CreateForNewRun), [typeof(CharacterModel), typeof(UnlockState), typeof(ulong)], nameof(UseFullyUnlockedPlayer));
@@ -136,6 +138,44 @@ public static class FullAppBridgeMod
         MethodInfo patch = AccessTools.Method(typeof(FullAppBridgeMod), patchMethodName)
             ?? throw new MissingMethodException(typeof(FullAppBridgeMod).FullName, patchMethodName);
         harmony.Patch(method, prefix: new HarmonyMethod(patch));
+    }
+
+    private static void PatchRequiredPostfix(Harmony harmony, Type type, string methodName, Type[] parameterTypes, string patchMethodName)
+    {
+        MethodInfo method = AccessTools.DeclaredMethod(type, methodName, parameterTypes)
+            ?? throw new MissingMethodException(type.FullName, methodName);
+        MethodInfo patch = AccessTools.Method(typeof(FullAppBridgeMod), patchMethodName)
+            ?? throw new MissingMethodException(typeof(FullAppBridgeMod).FullName, patchMethodName);
+        harmony.Patch(method, postfix: new HarmonyMethod(patch));
+    }
+
+    private static void OnProgressDataInitialized(ReadSaveResult<SerializableProgress> __result)
+    {
+        try
+        {
+            SaveManager saveManager = SaveManager.Instance;
+            string fingerprint;
+            if (__result.Status == ReadSaveStatus.FileNotFound)
+            {
+                fingerprint = ShippedProgressionProfile.MaterializeMissing(saveManager.Progress);
+                saveManager.SaveProgressFile();
+            }
+            else if (__result.Success)
+            {
+                fingerprint = ShippedProgressionProfile.ValidateExisting(saveManager.Progress);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Progress save could not be trusted ({__result.Status}): {__result.ErrorMessage ?? "no detail"}.");
+            }
+            FullAppBridgeServer.MarkProgressReady(fingerprint);
+        }
+        catch (Exception ex)
+        {
+            FullAppBridgeServer.MarkProgressFailed(ex);
+            GD.PrintErr($"[FullAppBridge] Progression-complete baseline failed: {ex}");
+        }
     }
 
     private static void OnMainMenuLaunched(ref Task __result)
