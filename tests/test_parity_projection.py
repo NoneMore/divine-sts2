@@ -344,3 +344,68 @@ def test_complete_parity_report_requires_all_sixteen_comparisons() -> None:
     assert incomplete["success"] is False
     duplicated = report(results[:-1] + [results[0]], build, complete_sample=True)
     assert duplicated["success"] is False
+
+
+def test_reuse_candidate_report_requires_one_process_and_complete_teardown_evidence() -> None:
+    build = {"version": "test", "assembly_sha256": "AA", "pck_sha256": "BB"}
+    results = [
+        {
+            "label": sample.label,
+            "character": sample.character,
+            "ascension": sample.ascension,
+            "seed": sample.seed,
+            "nested_kinds": ["card_choice"] if index == 0 else [],
+            "matched": True,
+            "pid": 123,
+            "process_entry_ordinal": index + 1,
+            "start_path": "menu" if index == 0 else "direct",
+            "warm": index > 0,
+            "process_mode": "reuse",
+            "startup_seconds": 1.0 if index == 0 else 0.0,
+            "entry_seconds": 2.0,
+            "teardown_seconds": 0.5,
+            "replacement_count": 0,
+            "pck_fingerprint_bytes": 1234 if index == 0 else 0,
+            "pck_fingerprint_count": 1 if index == 0 else 0,
+            "teardown": {
+                "final_state": "idle", "ended_generation": 2 * index + 1, "driver_result": "abandoned",
+                "ending_phase": "combat", "parked_wait_released": True,
+                "stale_continuation_refusals": 1,
+                "reset_history_counts": {"actions": 2, "state_hashes": 3}, "duration_ms": 2,
+            },
+        }
+        for index, sample in enumerate(SAMPLE)
+    ]
+    complete = report(results, build, complete_sample=True, process_mode="reuse-candidate", total_wall_seconds=42.0)
+    assert complete["success"] is True
+    assert complete["one_process_evidence"] is True
+    assert complete["performance"] == {
+        "shipped_game_processes_started": 1,
+        "maximum_live_process_count": 1,
+        "pck_bytes_hashed": 1234,
+        "pck_fingerprints": 1,
+        "total_wall_seconds": 42.0,
+    }
+
+    replacement = [dict(result) for result in results]
+    replacement[-1]["pid"] = 456
+    replacement[-1]["replacement_count"] = 1
+    assert report(replacement, build, True, process_mode="reuse-candidate")["success"] is False
+
+    missing_teardown = [dict(result) for result in results]
+    missing_teardown[3]["teardown"] = None
+    assert report(missing_teardown, build, True, process_mode="reuse-candidate")["success"] is False
+
+    stale_generation = [dict(result) for result in results]
+    stale_generation[3]["teardown"] = dict(results[3]["teardown"], ended_generation=3)
+    assert report(stale_generation, build, True, process_mode="reuse-candidate")["success"] is False
+
+    unrecorded = [
+        {"label": sample.label, "character": sample.character, "ascension": sample.ascension,
+         "nested_kinds": [], "matched": False, "failure": "scenario generation failed"}
+        for sample in SAMPLE
+    ]
+    no_launch = report(unrecorded, build, True, process_mode="reuse-candidate")
+    assert no_launch["success"] is False
+    assert no_launch["performance"]["shipped_game_processes_started"] == 0
+    assert no_launch["performance"]["maximum_live_process_count"] == 0

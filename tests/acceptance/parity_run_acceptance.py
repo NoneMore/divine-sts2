@@ -37,6 +37,11 @@ branch in the shipped game, as ticket 14 measured, and a *reward set* is not dri
 all. So nothing here claims complete Ancient-choice coverage; it claims the choices it names and the
 nested kinds it actually drove.
 
+The default run launches one fresh menu-start process per sample. ``--reuse-candidate`` instead runs
+the complete fixed set through one serial reusable worker and one sandbox: the first entry uses the
+menu path, and subsequent entries use direct warm starts. Its report includes lifecycle and process
+evidence but does not issue reuse certification.
+
 Both Act variants are ordinary compared scenarios. The full-app sandbox materializes every Act as
 discovered before it becomes ready, so ``ActModel.GetRandomList`` follows the run seed instead of the
 first-discovery override; the shipped-game oracle and simulator therefore reach the same variant.
@@ -58,6 +63,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -76,6 +82,7 @@ from sts2_native_sim.parity_projection import (
     project_record,
     shape_paths,
 )
+from sts2_native_sim.reusable_full_app_worker import ReusableFullAppWorker, RunEntry
 from sts2_native_sim.scenarios import SCENARIO_RECORD, ScenarioRequest, generate_rows
 
 #: The stage word the bridge reports while a flat card-set prompt is open, the action type that
@@ -287,7 +294,7 @@ def _answer_card_select(
 
 
 def _drive_to_the_fight(
-    client: FullAppBridgeClient, sample: Sample, record: _Record
+    client: FullAppBridgeClient, sample: Sample, record: _Record, started: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Drive the shipped game to the fight the record describes, and hand back what it saw.
 
@@ -298,7 +305,8 @@ def _drive_to_the_fight(
     which is the rule the generator's drive uses and the rule the row-1 node is picked by.
     """
     recipe = record.recipe
-    started = client.start_run(seed=recipe["seed"], character=sample.character, ascension=sample.ascension)
+    if started is None:
+        started = client.start_run(seed=recipe["seed"], character=sample.character, ascension=sample.ascension)
     observation = started["observation"]
     _check(
         str(observation.get("phase")) == "event",
@@ -445,6 +453,22 @@ def _dump(sample: Sample, record: _Record, observation: dict[str, Any], dump_dir
         (dump_dir / f"{name}.{suffix}").write_text(json.dumps(document, indent=1, sort_keys=True), encoding="utf-8")
 
 
+def _result_header(sample: Sample) -> dict[str, Any]:
+    return {"label": sample.label, "character": sample.character,
+            "ascension": sample.ascension, "nested_kinds": []}
+
+
+def _record_metadata(record: _Record) -> dict[str, Any]:
+    recipe = record.recipe
+    return {
+        "seed": recipe["seed"],
+        "act_variant": recipe["act_variant"],
+        "ancient_choice": recipe["ancient_choice"],
+        "nested_kinds": [nested["kind"] for nested in recipe["nested_choices"]],
+        "node": recipe["node"],
+    }
+
+
 def _sample_result(
     sample: Sample, runs: dict[Run, _RecordedRun], worker_id: int, dump_dir: Path | None = None
 ) -> dict[str, Any]:
@@ -454,19 +478,13 @@ def _sample_result(
     not turn into a scenario is that sample's failure, reported with the stage and the error it failed
     at, rather than an exception that ends the run and leaves the other samples unmeasured.
     """
-    result: dict[str, Any] = {"label": sample.label, "character": sample.character, "ascension": sample.ascension}
+    result = _result_header(sample)
     client = FullAppBridgeClient(FullAppClientConfig(worker_id=worker_id))
     observation: dict[str, Any] | None = None
     record: _Record | None = None
     try:
         record = _record_for(sample, runs)
-        result.update({
-            "seed": record.recipe["seed"],
-            "act_variant": record.recipe["act_variant"],
-            "ancient_choice": record.recipe["ancient_choice"],
-            "nested_kinds": [nested["kind"] for nested in record.recipe["nested_choices"]],
-            "node": record.recipe["node"],
-        })
+        result.update(_record_metadata(record))
         client.launch(requested_character=sample.character)
         observation, stages, prompts = _drive_to_the_fight(client, sample, record)
         result.update({"stages": stages, "card_prompts": prompts})
@@ -480,8 +498,52 @@ def _sample_result(
     return result
 
 
+def _reuse_candidate_result(
+    sample: Sample, runs: dict[Run, _RecordedRun], worker: ReusableFullAppWorker,
+    dump_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Compare one entry using the same drive and projection as fresh parity."""
+    result = _result_header(sample)
+    try:
+        record = _record_for(sample, runs)
+        result.update(_record_metadata(record))
+    except Exception as error:  # noqa: BLE001 - a missing scenario belongs to this entry
+        result.update({"matched": False, "difference": None, "failure": f"{type(error).__name__}: {error}"})
+        return result
+
+    entry = RunEntry(seed=record.recipe["seed"], character=sample.character, ascension=sample.ascension)
+    executed = worker.run_entry(entry, lambda client, started: _drive_to_the_fight(client, sample, record, started))
+    result.update({
+        "pid": executed.pid,
+        "process_entry_ordinal": executed.process_entry_ordinal,
+        "start_path": executed.start_path,
+        "warm": executed.start_path == "direct" if executed.start_path is not None else None,
+        "process_mode": executed.process_mode,
+        "startup_seconds": executed.startup_seconds,
+        "entry_seconds": executed.entry_seconds,
+        "teardown_seconds": executed.teardown_seconds,
+        "replacement_count": executed.replacement_count,
+        "pck_fingerprint_bytes": executed.pck_fingerprint_bytes,
+        "pck_fingerprint_count": executed.pck_fingerprint_count,
+        "teardown": executed.teardown,
+    })
+    if not executed.succeeded or executed.value is None:
+        result.update({"matched": False, "difference": None, "failure": executed.error or "worker returned no observation"})
+        return result
+    observation, stages, prompts = executed.value
+    result.update({"stages": stages, "card_prompts": prompts})
+    try:
+        result.update(_compare(record, observation))
+    except Exception as error:  # noqa: BLE001 - comparison failure belongs to this entry
+        result.update({"matched": False, "difference": None, "failure": f"{type(error).__name__}: {error}"})
+    if dump_dir is not None and not result.get("matched"):
+        _dump(sample, record, observation, dump_dir)
+    return result
+
+
 def report(
-    results: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool
+    results: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool,
+    *, process_mode: str = "fresh", total_wall_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """The run as a document: what was compared, what was covered, and what happened per sample.
 
@@ -502,8 +564,49 @@ def report(
         len(results) == len(SAMPLE) and {result["label"] for result in results} == {sample.label for sample in SAMPLE}
     )
     exercised = sorted(set().union(*(result.get("exercised_fields", []) for result in results)))
-    return {
-        "success": len(matched) == len(results) and coverage_agrees and entries_agree,
+    one_process_evidence = False
+    performance = None
+    if process_mode == "reuse-candidate":
+        process_count = max((result["replacement_count"] for result in results
+                             if "replacement_count" in result), default=-1) + 1
+        performance = {
+            "shipped_game_processes_started": process_count,
+            # ReusableFullAppWorker owns one serial lane and closes a process before replacing it.
+            "maximum_live_process_count": min(process_count, 1),
+            "pck_bytes_hashed": sum(result.get("pck_fingerprint_bytes", 0) for result in results),
+            "pck_fingerprints": sum(result.get("pck_fingerprint_count", 0) for result in results),
+            "total_wall_seconds": total_wall_seconds,
+        }
+        one_process_evidence = complete_sample and entries_agree and process_count == 1 and bool(results) and (
+            performance["pck_fingerprints"] == 1
+            and performance["pck_bytes_hashed"] > 0
+            and len({result.get("pid") for result in results}) == 1
+            and all(
+                isinstance(result.get("pid"), int)
+                and result.get("process_entry_ordinal") == index + 1
+                and result.get("start_path") == ("menu" if index == 0 else "direct")
+                and result.get("warm") is (index > 0)
+                and result.get("process_mode") == "reuse"
+                and result.get("replacement_count") == 0
+                and all(
+                    isinstance(result.get(field), (int, float)) and result[field] >= 0
+                    for field in ("startup_seconds", "entry_seconds", "teardown_seconds")
+                )
+                and isinstance(result.get("teardown"), dict)
+                and result["teardown"].get("final_state") == "idle"
+                and type(result["teardown"].get("ended_generation")) is int
+                and result["teardown"]["ended_generation"] > (
+                    results[index - 1]["teardown"]["ended_generation"] if index > 0 else 0
+                )
+                and result["teardown"].get("driver_result") in ("abandoned", "cancelled")
+                and result["teardown"].get("parked_wait_released") is True
+                and isinstance(result["teardown"].get("reset_history_counts"), dict)
+                for index, result in enumerate(results)
+            )
+        )
+    document = {
+        "success": len(matched) == len(results) and coverage_agrees and entries_agree
+                   and (process_mode != "reuse-candidate" or one_process_evidence),
         "game_build": build,
         "sample": {
             "size": len(results),
@@ -530,6 +633,10 @@ def report(
         "mismatched": len(results) - len(matched),
         "results": results,
     }
+    if process_mode == "reuse-candidate":
+        document.update({"process_mode": process_mode, "performance": performance,
+                         "one_process_evidence": one_process_evidence})
+    return document
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -543,12 +650,18 @@ def main(argv: list[str] | None = None) -> int:
              "to re-drive the one that a dropped game process cost",
     )
     parser.add_argument("--report", type=Path, help="also write the report to this JSON file")
+    parser.add_argument("--reuse-candidate", action="store_true",
+                        help="collect one-process parity evidence with one reusable full-app worker")
     parser.add_argument(
         "--dump", type=Path,
         help="keep both observations and both projections of every sample that did not match, in this directory",
     )
     arguments = parser.parse_args(argv)
 
+    if arguments.reuse_candidate and (arguments.limit or arguments.only):
+        parser.error("--reuse-candidate requires the complete sixteen-entry sample")
+
+    wall_started = time.monotonic()
     samples = SAMPLE[: arguments.limit] if arguments.limit else SAMPLE
     if arguments.only:
         named = set(arguments.only)
@@ -563,14 +676,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Recorded on game build {build['assembly_sha256']}; now driving the shipped game.", flush=True)
 
         results: list[dict[str, Any]] = []
-        for offset, sample in enumerate(samples):
-            print(f"[{offset + 1}/{len(samples)}] launching a headless shipped game for {sample.label}...", flush=True)
-            result = _sample_result(sample, runs, arguments.worker_id + offset, arguments.dump)
-            results.append(result)
-            state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
-            print(f"    {sample.label}: {state}", flush=True)
+        if arguments.reuse_candidate:
+            with ReusableFullAppWorker(FullAppClientConfig(worker_id=arguments.worker_id, process_mode="reuse")) as worker:
+                for offset, sample in enumerate(samples):
+                    print(f"[{offset + 1}/{len(samples)}] reusing a shipped game for {sample.label}...", flush=True)
+                    result = _reuse_candidate_result(sample, runs, worker, arguments.dump)
+                    results.append(result)
+                    state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
+                    print(f"    {sample.label}: {state}", flush=True)
+        else:
+            for offset, sample in enumerate(samples):
+                print(f"[{offset + 1}/{len(samples)}] launching a headless shipped game for {sample.label}...", flush=True)
+                result = _sample_result(sample, runs, arguments.worker_id + offset, arguments.dump)
+                results.append(result)
+                state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
+                print(f"    {sample.label}: {state}", flush=True)
 
-    document = report(results, build, complete_sample=tuple(samples) == SAMPLE)
+    document = report(results, build, complete_sample=tuple(samples) == SAMPLE,
+                      process_mode="reuse-candidate" if arguments.reuse_candidate else "fresh",
+                      total_wall_seconds=time.monotonic() - wall_started)
     if arguments.report is not None:
         arguments.report.parent.mkdir(parents=True, exist_ok=True)
         arguments.report.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
