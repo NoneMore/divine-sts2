@@ -476,6 +476,10 @@ public static class FullAppBridgeServer
                 return new Dictionary<string, object?>
                 {
                     ["started"] = true,
+                    ["pid"] = System.Environment.ProcessId,
+                    ["process_mode"] = actualMode,
+                    ["process_entry_ordinal"] = Volatile.Read(ref _runsStarted),
+                    ["start_path"] = IsWarmRun ? "direct" : "menu",
                     ["seed"] = RequestedSeed,
                     ["character"] = RequestedCharacter,
                     ["ascension"] = RequestedAscension,
