@@ -498,9 +498,12 @@ def report(
     # was chosen for would otherwise report coverage it does not have.
     coverage_agrees = not complete_sample or set(covered) == set(NESTED_KINDS_COVERED)
     matched = [result for result in results if result.get("matched")]
+    entries_agree = not complete_sample or (
+        len(results) == len(SAMPLE) and {result["label"] for result in results} == {sample.label for sample in SAMPLE}
+    )
     exercised = sorted(set().union(*(result.get("exercised_fields", []) for result in results)))
     return {
-        "success": len(matched) == len(results) and coverage_agrees,
+        "success": len(matched) == len(results) and coverage_agrees and entries_agree,
         "game_build": build,
         "sample": {
             "size": len(results),

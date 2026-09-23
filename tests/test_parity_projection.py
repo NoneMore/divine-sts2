@@ -18,7 +18,7 @@ import pytest
 from sts2_native_sim import parity
 from sts2_native_sim import parity_projection as projection
 
-from tests.acceptance.parity_run_acceptance import report
+from tests.acceptance.parity_run_acceptance import SAMPLE, report
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "canonical-observations.json"
 #: A recorded fight from the shipped-game-backed worker: the shape a record's combat initial state
@@ -312,3 +312,35 @@ def test_the_oracle_reports_the_contract_it_compares() -> None:
         {"path": field.path, "reason": field.reason} for field in projection.EXCLUDED_FIELDS
     ]
     assert document["contract"]["optional_fields"] == sorted(projection.OPTIONAL_FIELDS)
+
+
+def test_complete_parity_report_requires_all_sixteen_comparisons() -> None:
+    """A complete run succeeds only when every fixed scenario has a field comparison."""
+    assert len(SAMPLE) == 16
+    assert {
+        sample.character for sample in SAMPLE if sample.seed == "ACTVAR1ANT07"
+    } == {"IRONCLAD", "DEFECT"}
+    results = [
+        {
+            "label": sample.label,
+            "character": sample.character,
+            "ascension": sample.ascension,
+            "seed": sample.seed,
+            "nested_kinds": ["card_choice"] if index == 0 else [],
+            "matched": True,
+            "compared_fields": 1,
+        }
+        for index, sample in enumerate(SAMPLE)
+    ]
+    build = {"version": "test", "assembly_sha256": "AA", "pck_sha256": "BB"}
+    complete = report(results, build, complete_sample=True)
+    assert complete["success"] is True
+    assert complete["sample"]["size"] == complete["matched"] == 16
+    assert complete["mismatched"] == 0
+    assert len(complete["results"]) == 16
+    assert "probes" not in complete
+
+    incomplete = report(results[:-1], build, complete_sample=True)
+    assert incomplete["success"] is False
+    duplicated = report(results[:-1] + [results[0]], build, complete_sample=True)
+    assert duplicated["success"] is False
