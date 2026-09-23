@@ -65,7 +65,11 @@ else:
         elif mode == "active_run" and run_active and request["method"] == "close":
             time.sleep(120)
         else:
-            writer.write(json.dumps({"id": request["id"], "result": {"status": "ready"}}) + "\n")
+            writer.write(json.dumps({"id": request["id"], "result": {
+                "status": "ready", "process_mode": (
+                    "reuse" if mode == "mismatched_mode" else os.environ["STS2_FULL_APP_BRIDGE_PROCESS_MODE"]
+                )
+            }}) + "\n")
             writer.flush()
 '''
 
@@ -145,6 +149,7 @@ def _assert_tree_dead(parent_pid: int, child_pid: int) -> None:
     ("no_listener", ConnectionError),
     ("broken_handshake", EOFError),
     ("failed_readiness", RuntimeError),
+    ("mismatched_mode", RuntimeError),
 ])
 def test_partial_launch_ends_parent_and_descendant(
     controlled_client, monkeypatch: pytest.MonkeyPatch, mode: str, error: type[Exception]

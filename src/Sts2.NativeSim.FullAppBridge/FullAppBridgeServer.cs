@@ -2,15 +2,21 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
+using Godot;
 using MegaCrit.Sts2.Core.AutoSlay;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Runs;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.FullAppBridge;
 
 public static class FullAppBridgeServer
 {
+    private enum WorkerState { Launching, Idle, Running, Ending, Poisoned, Closed }
+    private sealed class ProcessModeMismatchException(string message) : Exception(message);
+
     public const string UnlockPolicy = "all";
     private static readonly ProgressionReadiness ProgressReadiness = new();
     private static TcpListener? _listener;
@@ -20,6 +26,14 @@ public static class FullAppBridgeServer
     private static StreamReader? _reader;
     private static TaskCompletionSource<string>? _pendingActionTcs;
     private static TaskCompletionSource<bool>? _initialBoundaryTcs;
+    private static Task? _driverTask;
+    private static WorkerState _workerState = WorkerState.Launching;
+    private static long _generation;
+    private static long _boundaryGeneration;
+    private static string? _boundaryPhase;
+    private static int _staleRefusals;
+    private static int _lifecycleRequestBusy;
+    private static int _runsStarted;
 
     /// <summary>
     /// Serialises the decision boundaries, so one decision is live at a time and the caller's action
@@ -49,9 +63,37 @@ public static class FullAppBridgeServer
     public static int RequestedAscension { get; private set; } = 0;
     public static bool IsRunStarted { get; private set; }
 
-    public static void MarkProgressReady(string fingerprint) => ProgressReadiness.Complete(fingerprint);
+    public static void MarkProgressReady(string fingerprint)
+    {
+        ProgressReadiness.Complete(fingerprint);
+        lock (SyncLock)
+        {
+            if (_workerState == WorkerState.Launching) _workerState = WorkerState.Idle;
+        }
+    }
 
-    public static void MarkProgressFailed(Exception failure) => ProgressReadiness.Fail(failure);
+    public static void MarkProgressFailed(Exception failure)
+    {
+        ProgressReadiness.Fail(failure);
+        lock (SyncLock) _workerState = WorkerState.Poisoned;
+    }
+
+    public static void TrackDriver(Task task)
+    {
+        lock (SyncLock) _driverTask = task;
+        _ = task.ContinueWith(completed =>
+        {
+            lock (SyncLock)
+            {
+                if (_workerState != WorkerState.Running) return;
+                _workerState = WorkerState.Poisoned;
+                string reason = completed.Exception?.GetBaseException().Message
+                    ?? (completed.IsCanceled ? "Shipped driver was cancelled unexpectedly."
+                        : "Shipped driver exited before end_run.");
+                _initialBoundaryTcs?.TrySetException(new InvalidOperationException(reason));
+            }
+        }, TaskScheduler.Default);
+    }
 
     /// <summary>
     /// Whether a client is driving this worker. A prompt the game opens with nobody to answer it
@@ -73,7 +115,7 @@ public static class FullAppBridgeServer
 
     public static void Start(int preferredPort, string portFilePath)
     {
-        string forceChar = Environment.GetEnvironmentVariable("STS2_FORCE_CHARACTER") ?? "";
+        string forceChar = System.Environment.GetEnvironmentVariable("STS2_FORCE_CHARACTER") ?? "";
         if (!string.IsNullOrWhiteSpace(forceChar))
         {
             RequestedCharacter = forceChar;
@@ -101,14 +143,19 @@ public static class FullAppBridgeServer
                 TcpClient client = await _listener.AcceptTcpClientAsync();
                 lock (SyncLock)
                 {
-                    _client?.Dispose();
+                    if (_client is not null)
+                    {
+                        _workerState = WorkerState.Poisoned;
+                        client.Dispose();
+                        continue;
+                    }
                     _client = client;
                     _stream = client.GetStream();
                     _writer = new StreamWriter(_stream, new UTF8Encoding(false)) { AutoFlush = true };
                     _reader = new StreamReader(_stream, new UTF8Encoding(false));
                 }
 
-                _ = HandleClientAsync(_reader, _writer);
+                _ = HandleClientAsync(_reader!, _writer!);
             }
             catch
             {
@@ -128,24 +175,9 @@ public static class FullAppBridgeServer
                 if (line is null) break;
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                RpcRequest? request = null;
-                try
-                {
-                    request = FullAppBridgeWireAdapter.DecodeRequest(line);
-
-                    object? result = await DispatchRequestAsync(request.Method, request.Parameters);
-                    RpcResponse response = new(request.Id, true, result);
-                    string responseJson = FullAppBridgeWireAdapter.EncodeResponse(response);
-                    await writer.WriteLineAsync(responseJson);
-                }
-                catch (Exception ex)
-                {
-                    RpcResponse errorResponse = new(
-                        request?.Id ?? "0",
-                        false,
-                        Error: new ProtocolError("bridge_error", ex.Message));
-                    await writer.WriteLineAsync(FullAppBridgeWireAdapter.EncodeResponse(errorResponse));
-                }
+                // Keep reading while start/step waits for the game. An overlapping lifecycle request
+                // must be detected now, not silently queued until the first one has completed.
+                _ = ProcessRequestAsync(line, writer);
             }
         }
         finally
@@ -156,6 +188,7 @@ public static class FullAppBridgeServer
             {
                 if (ReferenceEquals(_reader, reader))
                 {
+                    if (_workerState is WorkerState.Running or WorkerState.Ending) _workerState = WorkerState.Poisoned;
                     _client?.Dispose();
                     _client = null;
                     _stream = null;
@@ -166,23 +199,221 @@ public static class FullAppBridgeServer
         }
     }
 
+    private static readonly SemaphoreSlim WriteGate = new(1, 1);
+
+    private static async Task ProcessRequestAsync(string line, StreamWriter writer)
+    {
+        RpcRequest? request = null;
+        RpcResponse response;
+        bool lifecycleRequest = false;
+        bool acquiredLifecycle = false;
+        try
+        {
+            request = FullAppBridgeWireAdapter.DecodeRequest(line);
+            lifecycleRequest = request.Method.ToLowerInvariant() is "start_run" or "end_run" or "step";
+            if (lifecycleRequest && Interlocked.CompareExchange(ref _lifecycleRequestBusy, 1, 0) != 0)
+            {
+                Poison();
+                throw new InvalidOperationException("Overlapping lifecycle requests poisoned the worker.");
+            }
+            acquiredLifecycle = lifecycleRequest;
+            object? result = await DispatchRequestAsync(request.Method, request.Parameters);
+            response = new RpcResponse(request.Id, true, result);
+        }
+        catch (Exception ex)
+        {
+            if (lifecycleRequest && ex is not ProcessModeMismatchException) Poison();
+            response = new RpcResponse(request?.Id ?? "0", false,
+                Error: new ProtocolError("bridge_error", ex.Message));
+        }
+        finally
+        {
+            if (acquiredLifecycle) Interlocked.Exchange(ref _lifecycleRequestBusy, 0);
+        }
+        await WriteGate.WaitAsync();
+        try { await writer.WriteLineAsync(FullAppBridgeWireAdapter.EncodeResponse(response)); }
+        catch (IOException) { Poison(); }
+        catch (ObjectDisposedException) { Poison(); }
+        finally { WriteGate.Release(); }
+    }
+
+    private static void Poison()
+    {
+        lock (SyncLock)
+        {
+            if (_workerState != WorkerState.Closed) _workerState = WorkerState.Poisoned;
+        }
+    }
+
+    private static string StateName(WorkerState state) => state.ToString().ToLowerInvariant();
+
+    private static void RequireState(WorkerState required, string method)
+    {
+        lock (SyncLock)
+        {
+            if (_workerState == required) return;
+            WorkerState old = _workerState;
+            if (old != WorkerState.Closed) _workerState = WorkerState.Poisoned;
+            throw new InvalidOperationException($"{method} requires {StateName(required)}; worker was {StateName(old)} and is now poisoned.");
+        }
+    }
+
+    private static async Task<object> EndRunAsync()
+    {
+        Stopwatch timer = Stopwatch.StartNew();
+        long endedGeneration;
+        string endingPhase;
+        Task driver;
+        TaskCompletionSource<string>? parked;
+        lock (SyncLock)
+        {
+            endedGeneration = _generation;
+            if (_boundaryPhase is null)
+            {
+                _workerState = WorkerState.Poisoned;
+                throw new InvalidOperationException("No stable decision boundary is parked.");
+            }
+            endingPhase = _boundaryPhase;
+            if (_boundaryGeneration != endedGeneration || _pendingActionTcs is null || _pendingActionTcs.Task.IsCompleted)
+            {
+                _workerState = WorkerState.Poisoned;
+                throw new InvalidOperationException("No stable decision boundary is parked.");
+            }
+            if (_driverTask is null)
+            {
+                _workerState = WorkerState.Poisoned;
+                throw new InvalidOperationException("Shipped driver task was not captured.");
+            }
+            driver = _driverTask;
+            parked = _pendingActionTcs;
+            _generation++;
+            _workerState = WorkerState.Ending;
+            _staleRefusals = 0;
+        }
+
+        bool released = false;
+        string driverResult = "unknown";
+        try
+        {
+            FullAppBridgeMod.StopDriver();
+            await CleanUpOnGameThreadAsync();
+            released = parked.TrySetResult("abandon_run");
+            Task completed = await Task.WhenAny(driver, Task.Delay(TimeSpan.FromSeconds(45)));
+            if (!ReferenceEquals(completed, driver))
+                throw new TimeoutException("Shipped driver did not exit within 45 seconds.");
+            try
+            {
+                await driver;
+                driverResult = "abandoned";
+            }
+            catch (OperationCanceledException)
+            {
+                driverResult = "cancelled";
+            }
+            if (RunManager.Instance?.DebugOnlyGetState() is not null)
+                throw new InvalidOperationException("Shipped run state survived cleanup.");
+
+            var historyCounts = new Dictionary<string, int>
+            {
+                ["actions"] = ActionHistory.Count,
+                ["state_hashes"] = StateHashHistory.Count,
+            };
+            CurrentObservation = null;
+            CurrentLegalActions = new();
+            ActionHistory.Clear();
+            StateHashHistory.Clear();
+            FullAppStateTracker.ResetRunState();
+            FullAppBridgeMod.ReleaseDriver();
+            _pendingActionTcs = null;
+            _initialBoundaryTcs = null;
+            _driverTask = null;
+            _boundaryPhase = null;
+            _boundaryGeneration = 0;
+            RequestedSeed = "A1B2C3D4E5";
+            RequestedCharacter = System.Environment.GetEnvironmentVariable("STS2_FORCE_CHARACTER") ?? "IRONCLAD";
+            RequestedAscension = 0;
+            IsRunStarted = false;
+            lock (SyncLock)
+            {
+                if (_workerState != WorkerState.Ending)
+                    throw new InvalidOperationException($"Worker became {StateName(_workerState)} during teardown.");
+                _workerState = WorkerState.Idle;
+            }
+            return new Dictionary<string, object?>
+            {
+                ["ended_generation"] = endedGeneration,
+                ["ending_phase"] = endingPhase,
+                ["parked_wait_released"] = released,
+                ["stale_continuation_refusals"] = _staleRefusals,
+                ["driver_result"] = driverResult,
+                ["reset_history_counts"] = historyCounts,
+                ["final_state"] = "idle",
+                ["duration_ms"] = timer.ElapsedMilliseconds,
+            };
+        }
+        catch
+        {
+            parked.TrySetResult("abandon_run");
+            Poison();
+            throw;
+        }
+    }
+
+    private static Task CleanUpOnGameThreadAsync()
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Callable.From(() =>
+        {
+            try
+            {
+                RunManager.Instance?.CleanUp();
+                completion.TrySetResult(true);
+            }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        }).CallDeferred();
+        return completion.Task;
+    }
+
     private static async Task<object?> DispatchRequestAsync(string method, JsonElement parameters)
     {
         switch (method.ToLowerInvariant())
         {
             case "hello":
                 ProgressionReadinessSnapshot readiness = ProgressReadiness.Snapshot();
-                return FullAppBridgeHandshake.CreateHello(
+                lock (SyncLock)
+                {
+                    if (_workerState is WorkerState.Poisoned or WorkerState.Closed)
+                        throw new InvalidOperationException(
+                            $"Worker is {StateName(_workerState)}; only close is accepted."
+                            + (readiness.State == ProgressionReadinessState.Failed
+                                ? $" Progression-complete baseline failed: {readiness.FailureMessage}"
+                                : ""));
+                }
+                var hello = new Dictionary<string, object?>(FullAppBridgeHandshake.CreateHello(
                     readiness,
                     // Hash the shipped build only after profile readiness, so an initializing hello
                     // remains prompt even though the PCK is large.
                     () => GameBuild.Current,
-                    Environment.ProcessId,
+                    System.Environment.ProcessId,
                     BoundPort,
-                    "fresh");
+                    FullAppBridgeMod.ReuseMode ? "reuse" : "fresh"));
+                lock (SyncLock) hello["worker_state"] = StateName(_workerState);
+                return hello;
 
             case "start_run":
+                string declaredMode = parameters.TryGetProperty("process_mode", out JsonElement processMode)
+                    ? processMode.ToString() : "";
+                string actualMode = FullAppBridgeMod.ReuseMode ? "reuse" : "fresh";
+                if (declaredMode != actualMode)
+                    throw new ProcessModeMismatchException(
+                        $"Client process mode {declaredMode} does not match worker mode {actualMode}.");
                 FullAppBridgeHandshake.EnsureCanStart(ProgressReadiness);
+                RequireState(WorkerState.Idle, "start_run");
+                if (FullAppBridgeMod.ReuseMode && _runsStarted > 0)
+                {
+                    Poison();
+                    throw new InvalidOperationException("Warm start is unavailable until the direct-start lifecycle is installed.");
+                }
                 if (parameters.TryGetProperty("seed", out JsonElement seed))
                     RequestedSeed = seed.ToString();
                 if (parameters.TryGetProperty("character", out JsonElement character))
@@ -194,6 +425,12 @@ public static class FullAppBridgeServer
                     throw new ArgumentOutOfRangeException("ascension", RequestedAscension, "Ascension must be between 0 and 10.");
 
                 _initialBoundaryTcs = new TaskCompletionSource<bool>();
+                lock (SyncLock)
+                {
+                    _generation++;
+                    _runsStarted++;
+                    _workerState = WorkerState.Running;
+                }
                 IsRunStarted = true;
 
                 // Wait until the game reaches the first decision boundary
@@ -213,12 +450,15 @@ public static class FullAppBridgeServer
                 };
 
             case "observe":
+                RequireState(WorkerState.Running, "observe");
                 return CurrentObservation;
 
             case "legal_actions":
+                RequireState(WorkerState.Running, "legal_actions");
                 return CurrentLegalActions;
 
             case "step":
+                RequireState(WorkerState.Running, "step");
                 string actionId = parameters.TryGetProperty("action_id", out JsonElement action)
                     ? action.ToString()
                     : "";
@@ -257,6 +497,7 @@ public static class FullAppBridgeServer
                 };
 
             case "history":
+                RequireState(WorkerState.Running, "history");
                 return new Dictionary<string, object?>
                 {
                     ["seed"] = RequestedSeed,
@@ -267,15 +508,26 @@ public static class FullAppBridgeServer
                     ["state_hashes"] = StateHashHistory,
                 };
 
+            case "end_run":
+                if (!FullAppBridgeMod.ReuseMode)
+                {
+                    Poison();
+                    throw new InvalidOperationException("end_run requires reuse process mode.");
+                }
+                RequireState(WorkerState.Running, "end_run");
+                return await EndRunAsync();
+
             case "close":
+                lock (SyncLock) _workerState = WorkerState.Closed;
                 _ = Task.Run(async () =>
                 {
                     await Task.Delay(50);
-                    Environment.Exit(0);
+                    System.Environment.Exit(0);
                 });
                 return new Dictionary<string, object?> { ["closed"] = true };
 
             default:
+                Poison();
                 throw new NotSupportedException($"Unknown RPC method: {method}");
         }
     }
@@ -286,6 +538,7 @@ public static class FullAppBridgeServer
         bool isVictory,
         object? contextObject = null)
     {
+        long generation = Volatile.Read(ref _generation);
         // The game can be waiting on two boundaries at once: the room's own loop re-reports the room
         // while the prompt an effect inside it opened is still open. Only one of them can be the
         // decision a caller answers, and a second boundary that published over the first would take
@@ -294,6 +547,7 @@ public static class FullAppBridgeServer
         await BoundaryGate.WaitAsync();
         try
         {
+            RefuseStale(generation);
             AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}");
             var (obs, actions) = FullAppStateTracker.CreateStateSnapshot(phase, isTerminal, isVictory, contextObject);
             CurrentObservation = obs;
@@ -304,17 +558,21 @@ public static class FullAppBridgeServer
                 StateHashHistory.Add(obs.StateHash);
             }
 
-            // Notify that a decision boundary has been reached
-            _initialBoundaryTcs?.TrySetResult(true);
-
             if (isTerminal)
             {
+                _initialBoundaryTcs?.TrySetResult(true);
                 // Run has finished; keep server alive for final observation/history inspections
                 return "terminal_halt";
             }
 
-            _pendingActionTcs = new TaskCompletionSource<string>();
+            _boundaryGeneration = generation;
+            _boundaryPhase = phase;
+            _pendingActionTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Publish only after the parked wait exists. A caller may immediately request end_run.
+            _initialBoundaryTcs?.TrySetResult(true);
             string chosenAction = await _pendingActionTcs.Task;
+            RefuseStale(generation);
+            _boundaryPhase = null;
             AutoSlayer.CurrentWatchdog?.Reset($"Bridge:{phase}:{chosenAction}");
             return chosenAction;
         }
@@ -322,6 +580,13 @@ public static class FullAppBridgeServer
         {
             BoundaryGate.Release();
         }
+    }
+
+    private static void RefuseStale(long generation)
+    {
+        if (generation == Volatile.Read(ref _generation)) return;
+        Interlocked.Increment(ref _staleRefusals);
+        throw new OperationCanceledException("A continuation from an abandoned run was refused.");
     }
 
     /// <summary>

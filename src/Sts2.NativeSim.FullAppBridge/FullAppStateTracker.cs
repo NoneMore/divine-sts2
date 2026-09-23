@@ -31,6 +31,8 @@ public static class FullAppStateTracker
     /// </summary>
     private static readonly CardIdentityRegistry CardIdentities = new();
 
+    public static void ResetRunState() => CardIdentities.Reset();
+
     public static (ObservationDto Observation, List<LegalAction> LegalActions) CreateStateSnapshot(
         string phase,
         bool isTerminal,

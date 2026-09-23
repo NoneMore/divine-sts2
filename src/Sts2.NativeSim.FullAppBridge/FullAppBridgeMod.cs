@@ -49,11 +49,16 @@ public static class FullAppBridgeMod
 {
     private static AutoSlayer? _autoSlayer;
     private static bool _initialized;
+    internal static bool ReuseMode { get; private set; }
 
     public static void Initialize()
     {
         if (_initialized) return;
         _initialized = true;
+        string mode = System.Environment.GetEnvironmentVariable("STS2_FULL_APP_BRIDGE_PROCESS_MODE") ?? "fresh";
+        if (mode is not ("fresh" or "reuse"))
+            throw new InvalidOperationException($"Unknown full-app process mode: {mode}");
+        ReuseMode = mode == "reuse";
 
         string portEnv = System.Environment.GetEnvironmentVariable("STS2_FULL_APP_BRIDGE_PORT") ?? "0";
         int.TryParse(portEnv, out int port);
@@ -93,6 +98,14 @@ public static class FullAppBridgeMod
         TryPatchPrefix(harmony, typeof(VictoryRoomHandler), nameof(VictoryRoomHandler.HandleAsync), nameof(HandleVictoryRoomAsync));
         TryPatchPrefix(harmony, typeof(GameOverScreenHandler), nameof(GameOverScreenHandler.HandleAsync), nameof(HandleGameOverAsync));
         TryPatchPrefix(harmony, typeof(AutoSlayer), "WaitForRewardsScreenAsync", nameof(HandleWaitForRewardsScreenAsync));
+
+        if (ReuseMode)
+        {
+            // Both seams are mandatory: a half-installed reusable driver could exit the process or
+            // leave teardown waiting on a task it cannot observe.
+            PatchRequiredPrefix(harmony, typeof(AutoSlayer), "QuitGame", [typeof(int)], nameof(SuppressDriverQuit));
+            PatchRequiredPostfix(harmony, typeof(AutoSlayer), "RunAsync", [typeof(string), typeof(CancellationToken)], nameof(TrackDriver));
+        }
 
         FullAppBridgeServer.Start(port, portFile);
     }
@@ -182,6 +195,14 @@ public static class FullAppBridgeMod
     {
         __result = StartAfterMainMenuAsync(__result);
     }
+
+    private static bool SuppressDriverQuit() => false;
+
+    private static void TrackDriver(Task __result) => FullAppBridgeServer.TrackDriver(__result);
+
+    internal static void StopDriver() => _autoSlayer?.Stop();
+
+    internal static void ReleaseDriver() => _autoSlayer = null;
 
     private static async Task StartAfterMainMenuAsync(Task startup)
     {

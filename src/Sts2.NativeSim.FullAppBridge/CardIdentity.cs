@@ -48,4 +48,11 @@ internal sealed class CardIdentityRegistry
         _ids[card] = id;
         return id;
     }
+
+    public void Reset()
+    {
+        _ids.Clear();
+        _fight = null;
+        _nextOrdinal = 0;
+    }
 }

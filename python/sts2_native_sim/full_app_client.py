@@ -87,8 +87,11 @@ class FullAppClientConfig:
     worker_id: int = 0
     port: int = 0
     timeout_seconds: float = 60.0
+    process_mode: str = "fresh"
 
     def __post_init__(self) -> None:
+        if self.process_mode not in ("fresh", "reuse"):
+            raise ValueError("process_mode must be 'fresh' or 'reuse'")
         if not self.sandbox_root:
             # A sandbox hard-links the install, so it defaults to the volume of
             # the game root this config names rather than a second discovery.
@@ -204,6 +207,7 @@ class FullAppBridgeClient:
         env["LOCALAPPDATA"] = str(self.sandbox_dir / "local_userdata")
         env["STS2_FULL_APP_BRIDGE_PORT"] = str(self.config.port)
         env["STS2_FULL_APP_BRIDGE_PORT_FILE"] = str(port_file)
+        env["STS2_FULL_APP_BRIDGE_PROCESS_MODE"] = self.config.process_mode
         env["STS2_FORCE_CHARACTER"] = requested_character
 
         args = [
@@ -276,6 +280,11 @@ class FullAppBridgeClient:
         readiness_started = time.time()
         while time.time() - readiness_started < self.config.timeout_seconds:
             hello = self.hello()
+            if hello.get("process_mode") != self.config.process_mode:
+                raise RuntimeError(
+                    f"Full-app process mode mismatch: requested {self.config.process_mode}, "
+                    f"worker reported {hello.get('process_mode')!r}"
+                )
             status = hello.get("status")
             if status == "ready":
                 return
@@ -313,7 +322,13 @@ class FullAppBridgeClient:
         return self.call("hello")
 
     def start_run(self, seed: str = "A1B2C3D4E5", character: str = "IRONCLAD", ascension: int = 0) -> Dict[str, Any]:
-        return self.call("start_run", {"seed": seed, "character": character, "ascension": ascension})
+        return self.call("start_run", {
+            "seed": seed, "character": character, "ascension": ascension,
+            "process_mode": self.config.process_mode,
+        })
+
+    def end_run(self) -> Dict[str, Any]:
+        return self.call("end_run")
 
     def observe(self) -> Dict[str, Any]:
         return self.call("observe")
