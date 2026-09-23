@@ -8,10 +8,11 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TextIO
 
 from .full_app_sandbox import SandboxLayout, share_install
 from .paths import find_game_root, find_sandbox_root
+from .process_tree import OwnedProcessTree
 
 
 def _package_dir(project_name: str) -> Path:
@@ -101,9 +102,10 @@ class FullAppBridgeClient:
         self.sandbox_dir = self.sandbox_root / f"worker_{config.worker_id}"
         self.sandbox_layout: Optional[SandboxLayout] = None
         self.process: Optional[subprocess.Popen[bytes]] = None
+        self._owned_process: Optional[OwnedProcessTree] = None
         self.sock: Optional[socket.socket] = None
-        self.file_reader = None
-        self.file_writer = None
+        self.file_reader: Optional[TextIO] = None
+        self.file_writer: Optional[TextIO] = None
         self.request_id = 0
         self.bound_port = 0
 
@@ -186,6 +188,8 @@ class FullAppBridgeClient:
         return self.sandbox_layout
 
     def launch(self, requested_character: str = "IRONCLAD") -> None:
+        if self._owned_process is not None:
+            raise RuntimeError("Full-app worker is already running")
         self.prepare_sandbox(requested_character=requested_character)
 
         port_file = self.sandbox_dir / "userdata" / "bridge_port.txt"
@@ -209,13 +213,23 @@ class FullAppBridgeClient:
             f"--log-file={log_path}",
         ]
 
-        self.process = subprocess.Popen(
-            args,
-            cwd=str(self.sandbox_dir),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            self._owned_process = OwnedProcessTree.spawn(
+                args,
+                cwd=str(self.sandbox_dir),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.process = self._owned_process.process
+            self._complete_launch(port_file)
+        except BaseException:
+            self._cleanup(send_close=False)
+            raise
+
+    def _complete_launch(self, port_file: Path) -> None:
+        process = self.process
+        assert process is not None
 
         # Wait for port file to appear and bind
         start_time = time.time()
@@ -229,8 +243,8 @@ class FullAppBridgeClient:
                         break
                 except Exception:
                     pass
-            if self.process.poll() is not None:
-                raise RuntimeError(f"Process terminated prematurely with code {self.process.returncode}")
+            if process.poll() is not None:
+                raise RuntimeError(f"Process terminated prematurely with code {process.returncode}")
             time.sleep(0.05)
 
         if bound_port == 0:
@@ -251,6 +265,9 @@ class FullAppBridgeClient:
                 connected = True
                 break
             except Exception:
+                if self.sock is not None:
+                    self.sock.close()
+                    self.sock = None
                 time.sleep(0.05)
 
         if not connected:
@@ -311,11 +328,21 @@ class FullAppBridgeClient:
         return self.call("history")
 
     def close(self) -> None:
+        self._cleanup(send_close=True)
+
+    def _cleanup(self, *, send_close: bool) -> None:
         try:
-            if self.sock is not None:
+            if send_close and self.sock is not None:
+                self.sock.settimeout(min(self.config.timeout_seconds, 0.5))
                 self.call("close")
         except Exception:
             pass
+
+        if self.sock is not None:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
         try:
             if self.file_writer is not None:
@@ -339,14 +366,10 @@ class FullAppBridgeClient:
         self.file_reader = None
         self.file_writer = None
 
-        if self.process is not None:
+        if self._owned_process is not None:
             try:
-                self.process.terminate()
-                self.process.wait(timeout=2.0)
-            except Exception:
-                try:
-                    self.process.kill()
-                    self.process.wait(timeout=2.0)
-                except Exception:
-                    pass
-            self.process = None
+                self._owned_process.close()
+            finally:
+                self._owned_process = None
+                self.process = None
+        self.bound_port = 0
