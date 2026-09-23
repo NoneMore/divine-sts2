@@ -105,6 +105,10 @@ public static class FullAppBridgeMod
             // leave teardown waiting on a task it cannot observe.
             PatchRequiredPrefix(harmony, typeof(AutoSlayer), "QuitGame", [typeof(int)], nameof(SuppressDriverQuit));
             PatchRequiredPostfix(harmony, typeof(AutoSlayer), "RunAsync", [typeof(string), typeof(CancellationToken)], nameof(TrackDriver));
+            PatchRequiredPrefix(harmony, typeof(AutoSlayer), "PlayMainMenuAsync", [typeof(CancellationToken)], nameof(StartWarmRunDirectly));
+            PatchRequiredPostfix(harmony, typeof(NGame), nameof(NGame.StartNewSingleplayerRun),
+                [typeof(CharacterModel), typeof(bool), typeof(IReadOnlyList<ActModel>), typeof(IReadOnlyList<ModifierModel>), typeof(string), typeof(GameMode), typeof(int), typeof(DateTimeOffset?)],
+                nameof(TrackShippedStart));
         }
 
         FullAppBridgeServer.Start(port, portFile);
@@ -200,9 +204,48 @@ public static class FullAppBridgeMod
 
     private static void TrackDriver(Task __result) => FullAppBridgeServer.TrackDriver(__result);
 
+    private static void TrackShippedStart(Task<RunState> __result) => FullAppBridgeServer.TrackShippedStart(__result);
+
     internal static void StopDriver() => _autoSlayer?.Stop();
 
     internal static void ReleaseDriver() => _autoSlayer = null;
+
+    internal static void StartWarmDriver()
+    {
+        // AutoSlayer's UI and NGame need the Godot thread. The server's RPC runs on a socket task.
+        Callable.From(() =>
+        {
+            try
+            {
+                StartDriver(FullAppBridgeServer.RequestedSeed);
+            }
+            catch (Exception error) { FullAppBridgeServer.FailDriverStart(error); }
+        }).CallDeferred();
+    }
+
+    private static bool StartWarmRunDirectly(CancellationToken ct, ref Task __result)
+    {
+        if (!FullAppBridgeServer.IsWarmRun) return true;
+        __result = StartWarmRunDirectlyAsync(ct);
+        return false;
+    }
+
+    private static async Task StartWarmRunDirectlyAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        NGame game = NGame.Instance ?? throw new InvalidOperationException("Game instance is unavailable for warm start.");
+        string requested = FullAppBridgeServer.RequestedCharacter;
+        CharacterModel character = FindCharacter(requested)
+            ?? throw new InvalidOperationException($"Unknown warm-start character: {requested}.");
+        string seed = FullAppBridgeServer.RequestedSeed;
+        Rng actRng = new((uint)StringHelper.GetDeterministicHashCode(seed), "act_selection");
+        List<ActModel> acts = ActModel.GetRandomList(
+            actRng, SaveManager.Instance.GenerateUnlockStateFromProgress(), isMultiplayer: false).ToList();
+        if (acts.Count == 0) throw new InvalidOperationException("Warm start resolved no acts.");
+        game.DebugSeedOverride = seed;
+        await game.StartNewSingleplayerRun(character, shouldSave: false, acts,
+            Array.Empty<ModifierModel>(), seed, GameMode.Standard, FullAppBridgeServer.RequestedAscension);
+    }
 
     private static async Task StartAfterMainMenuAsync(Task startup)
     {
@@ -212,12 +255,20 @@ public static class FullAppBridgeMod
             await Task.Delay(10);
         }
 
-        string seed = FullAppBridgeServer.RequestedSeed;
-        string logFile = Path.Combine(OS.GetUserDataDir(), $"autoplay_{seed}.log");
+        StartDriver(FullAppBridgeServer.RequestedSeed);
+    }
 
+    private static void StartDriver(string seed)
+    {
+        string logFile = Path.Combine(OS.GetUserDataDir(), $"autoplay_{seed}.log");
         _autoSlayer = new AutoSlayer();
         _autoSlayer.Start(seed, logFile);
     }
+
+    private static CharacterModel? FindCharacter(string requested) => ModelDb.AllCharacters.FirstOrDefault(c =>
+        c.Id.Entry.Equals(requested, StringComparison.OrdinalIgnoreCase)
+        || c.Id.Entry.Equals($"CHARACTER.{requested}", StringComparison.OrdinalIgnoreCase)
+        || c.Id.Entry.EndsWith(requested, StringComparison.OrdinalIgnoreCase));
 
     private static void OnBeginRunForAllPlayers(StartRunLobby __instance)
     {
@@ -231,10 +282,7 @@ public static class FullAppBridgeMod
         {
             try
             {
-                CharacterModel? targetChar = ModelDb.AllCharacters.FirstOrDefault(c =>
-                    c.Id.Entry.Equals(requested, StringComparison.OrdinalIgnoreCase) ||
-                    c.Id.Entry.Equals($"CHARACTER.{requested}", StringComparison.OrdinalIgnoreCase) ||
-                    c.Id.Entry.EndsWith(requested, StringComparison.OrdinalIgnoreCase));
+                CharacterModel? targetChar = FindCharacter(requested);
 
                 if (targetChar != null)
                 {

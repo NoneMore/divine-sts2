@@ -27,6 +27,7 @@ public static class FullAppBridgeServer
     private static TaskCompletionSource<string>? _pendingActionTcs;
     private static TaskCompletionSource<bool>? _initialBoundaryTcs;
     private static Task? _driverTask;
+    private static Task<RunState>? _shippedStartTask;
     private static WorkerState _workerState = WorkerState.Launching;
     private static long _generation;
     private static long _boundaryGeneration;
@@ -62,6 +63,13 @@ public static class FullAppBridgeServer
     public static string RequestedCharacter { get; private set; } = "IRONCLAD";
     public static int RequestedAscension { get; private set; } = 0;
     public static bool IsRunStarted { get; private set; }
+    internal static bool IsWarmRun => FullAppBridgeMod.ReuseMode && Volatile.Read(ref _runsStarted) > 1;
+
+    internal static void FailDriverStart(Exception error)
+    {
+        Poison();
+        _initialBoundaryTcs?.TrySetException(error);
+    }
 
     public static void MarkProgressReady(string fingerprint)
     {
@@ -91,6 +99,21 @@ public static class FullAppBridgeServer
                     ?? (completed.IsCanceled ? "Shipped driver was cancelled unexpectedly."
                         : "Shipped driver exited before end_run.");
                 _initialBoundaryTcs?.TrySetException(new InvalidOperationException(reason));
+            }
+        }, TaskScheduler.Default);
+    }
+
+    public static void TrackShippedStart(Task<RunState> task)
+    {
+        lock (SyncLock) _shippedStartTask = task;
+        _ = task.ContinueWith(completed =>
+        {
+            if (!completed.IsFaulted && !completed.IsCanceled) return;
+            lock (SyncLock)
+            {
+                if (_workerState != WorkerState.Running) return;
+                _initialBoundaryTcs?.TrySetException(completed.Exception?.GetBaseException()
+                    ?? new OperationCanceledException("Shipped run start was cancelled."));
             }
         }, TaskScheduler.Default);
     }
@@ -312,6 +335,16 @@ public static class FullAppBridgeServer
             }
             if (RunManager.Instance?.DebugOnlyGetState() is not null)
                 throw new InvalidOperationException("Shipped run state survived cleanup.");
+            if (!ReferenceEquals(_driverTask, driver)
+                || _shippedStartTask is null
+                || !_shippedStartTask.IsCompletedSuccessfully
+                || !ReferenceEquals(_pendingActionTcs, parked)
+                || !parked.Task.IsCompletedSuccessfully
+                || parked.Task.Result != "abandon_run"
+                || _initialBoundaryTcs is null
+                || !_initialBoundaryTcs.Task.IsCompletedSuccessfully
+                || _boundaryGeneration != endedGeneration)
+                throw new InvalidOperationException("Unsafe pending bridge state survived driver shutdown.");
 
             var historyCounts = new Dictionary<string, int>
             {
@@ -327,6 +360,7 @@ public static class FullAppBridgeServer
             _pendingActionTcs = null;
             _initialBoundaryTcs = null;
             _driverTask = null;
+            _shippedStartTask = null;
             _boundaryPhase = null;
             _boundaryGeneration = 0;
             RequestedSeed = "A1B2C3D4E5";
@@ -409,11 +443,6 @@ public static class FullAppBridgeServer
                         $"Client process mode {declaredMode} does not match worker mode {actualMode}.");
                 FullAppBridgeHandshake.EnsureCanStart(ProgressReadiness);
                 RequireState(WorkerState.Idle, "start_run");
-                if (FullAppBridgeMod.ReuseMode && _runsStarted > 0)
-                {
-                    Poison();
-                    throw new InvalidOperationException("Warm start is unavailable until the direct-start lifecycle is installed.");
-                }
                 if (parameters.TryGetProperty("seed", out JsonElement seed))
                     RequestedSeed = seed.ToString();
                 if (parameters.TryGetProperty("character", out JsonElement character))
@@ -433,8 +462,16 @@ public static class FullAppBridgeServer
                 }
                 IsRunStarted = true;
 
+                if (IsWarmRun) FullAppBridgeMod.StartWarmDriver();
+
                 // Wait until the game reaches the first decision boundary
                 await _initialBoundaryTcs.Task;
+                if (FullAppBridgeMod.ReuseMode)
+                {
+                    Task<RunState> startedTask = _shippedStartTask
+                        ?? throw new InvalidOperationException("Shipped run start task was not captured.");
+                    await startedTask;
+                }
 
                 return new Dictionary<string, object?>
                 {
@@ -586,7 +623,7 @@ public static class FullAppBridgeServer
     {
         if (generation == Volatile.Read(ref _generation)) return;
         Interlocked.Increment(ref _staleRefusals);
-        throw new OperationCanceledException("A continuation from an abandoned run was refused.");
+        throw new OperationCanceledException($"A continuation from abandoned generation {generation} was refused; current generation is {Volatile.Read(ref _generation)}.");
     }
 
     /// <summary>
