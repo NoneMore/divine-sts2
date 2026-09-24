@@ -56,8 +56,12 @@ _Avoid_: Map variant, act 1 variant (the map itself does not vary)
 A recorded run-start situation together with the choices that produced it, such that the shipped game can reproduce it from the same run seed.
 _Avoid_: Sample, fixture, seed dump
 
+**Scenario generation element**:
+One character, Ascension, and canonical run seed combination declared by a generation request. Its run's offered Ancient choices determine how many scenario or failure rows it produces.
+_Avoid_: Seed alone, Ancient choice
+
 **Failure row**:
-A row of a generated corpus standing in for one element the generator could not turn into a scenario: the stage the run stopped at, an error kind and message, and the recipe resolved so far — never a combat initial state.
+A row of a generated corpus standing in for an Ancient choice that did not produce a scenario, or for a scenario generation element whose Ancient offer could not be read. It records the stage, error kind and message, and recipe resolved so far, never a combat initial state.
 _Avoid_: Error record, dropped seed, skipped element
 
 **Corpus shard**:

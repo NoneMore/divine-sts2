@@ -174,6 +174,10 @@ class RunWorker(RunStepWorker, Protocol):
 
     def run_reset(self, state: dict[str, Any]) -> dict[str, Any]: ...
 
+    def fork(self) -> str: ...
+
+    def restore(self, state_handle: str) -> dict[str, Any]: ...
+
 
 class CorpusWorker(RunWorker, Protocol):
     """What a corpus needs of a worker beyond driving one element of a request.

@@ -357,52 +357,83 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
 def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, Any]]:
     """Every row one element of the request produces: one per Ancient choice its run offers.
 
-    The first drive of the run both records its first Ancient choice and says how many choices
-    the run offers; each remaining choice is then taken by driving the run again from its start,
-    so a row is the record of the drive that made *its* choice rather than a projection of the
-    first drive's state.
-
-    A drive that stops is that element's failure row and is never retried — the element that
-    failed is one row of the corpus, not a reason to try again — and the choices after it are still
-    driven, because the offer they belong to was read before the drive stopped. Only a first drive
-    that stops before reading the offer leaves nothing to enumerate: how many choices the run
-    offers is exactly what that failure prevented learning, so the element owes one failure row.
+    The run starts once, then its Ancient offer is forked before taking any choice. A failed
+    choice gets its own failure row, and the next choice restores the same offered state.
     """
     build = worker.build
     attempted = _Recipe(element, build)
-    first = _drive_safely(attempted, 0, worker)
-    if attempted.offered is None:
-        return [_element_row(attempted, first)]
+    try:
+        choices = _open_ancient(attempted, worker)
+        checkpoint = worker.fork()
+    except Exception as error:  # noqa: BLE001
+        if attempted.offered is None:
+            return [_failure_row(attempted, error)]
+        return [
+            _failure_row(
+                _Recipe(element, build, stage=STAGE_ANCIENT_CHOICE,
+                        act_variant=attempted.act_variant, ancient_choice=choice),
+                error,
+            )
+            for choice in attempted.offered
+        ]
 
-    rows = [_element_row(attempted, first)]
-    for choice_index in range(1, len(attempted.offered)):
+    assert attempted.offered is not None
+    rows: list[dict[str, Any]] = []
+    for choice_index, (identity, action) in enumerate(choices):
         recipe = _Recipe(
             element,
             build,
             act_variant=attempted.act_variant,
-            ancient_choice=attempted.offered[choice_index],
+            ancient_choice=identity,
         )
-        rows.append(_element_row(recipe, _drive_safely(recipe, choice_index, worker)))
+        outcome = _drive_safely(recipe, action, attempted.offered, worker, checkpoint if choice_index else None)
+        rows.append(_element_row(recipe, outcome))
     return rows
 
 
-def _drive_safely(recipe: _Recipe, choice_index: int, worker: RunWorker) -> _DrivenRun | _Stopped:
+def _open_ancient(recipe: _Recipe, worker: RunWorker) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    recipe.stage = STAGE_RUN_START
+    state = worker.run_reset(_reset_state(recipe.element))
+    recipe.act_variant = state["observation"]["run"]["act_variant"]
+    recipe.stage = STAGE_ANCIENT_ROOM
+    ancient = ancient_action(state)
+    if ancient is None:
+        raise ScenarioGenerationError(STAGE_ANCIENT_ROOM, "the run does not start on the act's Ancient node")
+    state = worker.run_step(ancient["action_id"])
+    recipe.stage = STAGE_ANCIENT_CHOICE
+    choices = _offered_choices(state)
+    if not choices:
+        raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, "the Ancient room offers no choice to take")
+    recipe.offered = [identity for identity, _ in choices]
+    return choices
+
+
+def _drive_safely(
+    recipe: _Recipe,
+    choice: dict[str, Any],
+    offered: list[dict[str, Any]],
+    worker: RunWorker,
+    checkpoint: str | None,
+) -> _DrivenRun | _Stopped:
     """Drive one run, handing back the failure instead of raising it.
 
-    Whatever goes wrong is this element's failure, not the batch's: it is recorded — stage, kind
-    and message — rather than raised, so a caller counts it instead of losing the request.
+    Whatever goes wrong is this Ancient choice's failure, not the batch's: it is recorded —
+    stage, kind and message — rather than raised, so the caller keeps the rest of the offer.
     """
     try:
-        return _drive_to_first_fight(recipe, choice_index, worker)
+        recipe.stage = STAGE_ANCIENT_CHOICE
+        if checkpoint is not None:
+            worker.restore(checkpoint)
+        return _drive_to_first_fight(recipe, choice, offered, worker)
     except Exception as error:  # noqa: BLE001
         return _Stopped(error)
 
 
 def _element_row(recipe: _Recipe, outcome: _DrivenRun | _Stopped) -> dict[str, Any]:
-    """One element's row: the scenario its drive reached, or the failure that stopped it.
+    """One Ancient choice's row: the scenario its drive reached, or the failure that stopped it.
 
     Recording the scenario can fail too — a nested selection the prompt does not report is a
-    failure of that element's record — and that is a failure row like any other.
+    failure of that choice's record — and that is a failure row like any other.
     """
     if isinstance(outcome, _Stopped):
         return _failure_row(recipe, outcome.error)
@@ -412,35 +443,18 @@ def _element_row(recipe: _Recipe, outcome: _DrivenRun | _Stopped) -> dict[str, A
         return _failure_row(recipe, error)
 
 
-def _drive_to_first_fight(recipe: _Recipe, choice_index: int, worker: RunWorker) -> _DrivenRun:
-    """Drive one run from its start to its first fight, taking the Ancient choice at `choice_index`.
+def _drive_to_first_fight(
+    recipe: _Recipe,
+    choice: dict[str, Any],
+    offered: list[dict[str, Any]],
+    worker: RunWorker,
+) -> _DrivenRun:
+    """Drive one Ancient choice from its offered state to the first fight.
 
     The recipe is stamped before every phase, so a failure that names no stage of its own — a
     worker's error, or a bug — is still attributed to the phase the drive was in.
     """
-    recipe.stage = STAGE_RUN_START
-    state = worker.run_reset(_reset_state(recipe.element))
-    recipe.act_variant = state["observation"]["run"]["act_variant"]
-
-    recipe.stage = STAGE_ANCIENT_ROOM
-    ancient = ancient_action(state)
-    if ancient is None:
-        raise ScenarioGenerationError(STAGE_ANCIENT_ROOM, "the run does not start on the act's Ancient node")
-    state = worker.run_step(ancient["action_id"])
-
     recipe.stage = STAGE_ANCIENT_CHOICE
-    choices = _offered_choices(state)
-    if not choices:
-        raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, "the Ancient room offers no choice to take")
-    offered = [option for option, _ in choices]
-    recipe.offered = offered
-    if choice_index >= len(choices):
-        raise ScenarioGenerationError(
-            STAGE_ANCIENT_CHOICE,
-            f"the Ancient room offers {len(choices)} choices, so there is no choice {choice_index}",
-        )
-    choice = choices[choice_index][1]
-    recipe.ancient_choice = choices[choice_index][0]
     try:
         driven = drive_choice(worker, choice)
     except ValueError as error:
@@ -600,7 +614,7 @@ def _row(recipe: _Recipe, walk: _DrivenRun) -> dict[str, Any]:
     row["combat_initial_state"] = copy.deepcopy(walk.observation)
     row["state_hash"] = walk.state_hash
     # A row is refused here rather than where it is written, because this is the last moment a
-    # quantity the record cannot carry is still this element's failure instead of a dead batch.
+    # quantity the record cannot carry is still this choice's failure instead of a dead batch.
     _refuse_floats(row)
     return row
 
