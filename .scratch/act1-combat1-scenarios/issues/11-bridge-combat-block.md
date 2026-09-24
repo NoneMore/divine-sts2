@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A combat observation names its encounter, so a parity check has something to compare and an audit can identify a fight.
 - [x] A combat observation distinguishes the granular turn phase rather than only a turn number, and its phase words map onto the simulator's decision kinds through one explicit, documented mapping.

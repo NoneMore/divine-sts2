@@ -187,7 +187,7 @@
 7. **没有任何 C# 测试工程**（架构评审候选 13 该条仍成立）；桥接/导出器的形状完全靠 Python 正则读 C# 源来锚定，重命名私有成员即可静默失效。
 8. **`bridge_card_select_acceptance.py`、`bridge_combat_observation_acceptance.py`、`scenario_record_acceptance.py`、ticket 16 之后的若干 acceptance 重跑，都没有留存的输出文件**；`issues/15` 引用的一些哈希只存在于 ticket 正文。
 9. **证据可追溯性弱**：`.scratch/*.log` 与 `artifacts/**` 都被 gitignore（`.gitignore:26,46`），不随修订入库；`parity-run.json` 内部无 timestamp/commit。因此"某次运行通过"只能靠 mtime + game build 指纹归属。
-10. **文档陈旧/自相矛盾**：`issues/11-bridge-combat-block.md:7` 状态仍是 `ready-for-agent`（但 checklist 全 `[x]`、`：21` 已写"implemented"）；`spec.md:159` 仍说"no field-by-field comparison has run yet"（已被 `parity-findings.md:219,299` 推翻）；`parity-findings.md:7` 说 "51 contract fields per scenario" 而同文件 `:283` 与代码都说 50（`CONTRACT_FIELDS` 长度 50，逐样本 `compared_fields` 是 134–172 个叶子）。
+10. **文档陈旧/自相矛盾**：`issues/11-bridge-combat-block.md:7` 状态仍是 `ready-for-agent`（但 checklist 全 `[x]`、`：21` 已写"implemented"）；`spec.md:159` 仍说"no field-by-field comparison has run yet"（已被 `parity-findings.md:219,299` 推翻）；`parity-findings.md:7` 说 "51 contract fields per scenario" 而同文件 `:283` 与代码都说 50（`CONTRACT_FIELDS` 长度 50，逐样本 `compared_fields` 是 134–172 个叶子）。**已在后续修复：** 本条记录的三处矛盾与 `spec.md:3` 的 "draft" 状态、以及 `issue-tracker.md:11` 引用而不存在的 `triage-labels.md`，均已于 2026-09-25 修复（`issues/11` → `Status: done`；`spec.md` 顶部改为 implemented、末尾 "Evidence and its limits" 改写；`parity-findings.md:7` 改为 50 条声明字段路径，与 `CONTRACT_FIELDS` 实测长度 50 一致；新建 `docs/agents/triage-labels.md`）。
 
 ---
 
