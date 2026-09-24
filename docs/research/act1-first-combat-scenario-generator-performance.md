@@ -1,5 +1,10 @@
 # 第一战场景生成器的性能开销
 
+> 本文是 `2083a109` 版本的历史测量；该版本每个 Ancient 选项都 reset 一次。
+> 当前生成器已改为每个元素 reset 一次、其余选项 restore，并复用进入 Ancient
+> 时返回的 `state_handle`。当前实测与旧新 native 差分见
+> [handle 复用测量](act1-first-combat-scenario-handle-reuse.md)。
+
 **调查版本：** `2083a1097ce736e0a726cb350d70adc0d9435931`（2026-09-24）。本文把源码可确定的成本、已有测量和本次实测分开；耗时归因均需以本次实测为准。
 
 ## 结论

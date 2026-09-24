@@ -112,7 +112,6 @@ class FakeRunWorker:
         crash_on: dict[str, BaseException] | None = None,
         crash_on_resets: dict[int, BaseException] | None = None,
         crash_on_restores: dict[int, BaseException] | None = None,
-        crash_on_fork: BaseException | None = None,
         die_on: dict[str, BaseException] | None = None,
         delay_seconds: float = 0.0,
         float_quantity: bool = False,
@@ -134,7 +133,6 @@ class FakeRunWorker:
         self.crash_on = dict(crash_on or {})
         self.crash_on_resets = dict(crash_on_resets or {})
         self.crash_on_restores = dict(crash_on_restores or {})
-        self.crash_on_fork = crash_on_fork
         #: The action ids this worker *dies* on: it fails the same way, and then reports itself
         #: dead, which is what a batch replaces a worker for. And the seconds it takes before
         #: every run it starts, which is how a deliberately late worker is built.
@@ -148,7 +146,6 @@ class FakeRunWorker:
         self.dead = False
         self.closed = False
         self.resets = 0
-        self.forks = 0
         self.restores = 0
         #: The build every run this worker plays is on, as `NativeWorker.hello` reports it.
         self.build: dict[str, Any] = copy.deepcopy(CAPTURES["run_combat_action"]["game_build"])
@@ -156,7 +153,7 @@ class FakeRunWorker:
         self.steps: list[str] = []
         self.last_hash: str | None = None
         self._routes: dict[str, dict[str, Any]] = {}
-        self._checkpoint: dict[str, Any] | None = None
+        self._checkpoints: dict[str, dict[str, Any]] = {}
 
     # -- the seam the generator uses -----------------------------------------------------
 
@@ -167,6 +164,7 @@ class FakeRunWorker:
         if self.resets in self.crash_on_resets:
             raise self.crash_on_resets[self.resets]
         self.reset_request = copy.deepcopy(state)
+        self._checkpoints.clear()
         observation = copy.deepcopy(CAPTURES["run_map_choice"])
         observation["run"]["seed"] = state["seed"]
         observation["run"]["ascension"] = state["ascension"]
@@ -201,20 +199,12 @@ class FakeRunWorker:
             raise self.crash_on[action_id]
         return self._next(self._routes[action_id])
 
-    def fork(self) -> str:
-        assert self._current_observation["decision"]["kind"] == "event_choice"
-        self.forks += 1
-        if self.crash_on_fork is not None:
-            raise self.crash_on_fork
-        self._checkpoint = copy.deepcopy(self._current_observation)
-        return "ancient-offer"
-
     def restore(self, state_handle: str) -> dict[str, Any]:
-        assert state_handle == "ancient-offer" and self._checkpoint is not None
+        assert state_handle in self._checkpoints
         self.restores += 1
         if self.restores in self.crash_on_restores:
             raise self.crash_on_restores[self.restores]
-        return self._next(copy.deepcopy(self._checkpoint))
+        return self._next(copy.deepcopy(self._checkpoints[state_handle]))
 
     def alive(self) -> bool:
         """Whether this worker is still usable, as a batch asks before replacing one."""
@@ -236,9 +226,10 @@ class FakeRunWorker:
         # A hash is a function of the state, so the same capture hashes alike across drives —
         # which is what makes "the recorded hash is the fight's own" observable.
         digest = hashlib.sha256(json.dumps(observation, sort_keys=True).encode("utf-8")).hexdigest()[:16].upper()
-        self._current_observation = copy.deepcopy(observation)
         self.last_hash = f"state-hash-{digest}"
-        return _result(observation, self.last_hash)
+        result = _result(observation, self.last_hash)
+        self._checkpoints[result["state_handle"]] = copy.deepcopy(observation)
+        return result
 
     def _patched(self, name: str) -> dict[str, Any]:
         observation = copy.deepcopy(CAPTURES[name])
@@ -591,13 +582,12 @@ def test_each_scenario_generation_element_resets_once_for_all_ancient_choices() 
     assert worker.resets == 2
 
 
-def test_ancient_choices_fork_once_before_selection_and_restore_for_later_choices() -> None:
+def test_ancient_choices_reuse_the_offered_state_handle() -> None:
     worker = FakeRunWorker()
 
     rows = _rows(worker=worker)
 
     assert [row["record_type"] for row in rows] == [SCENARIO_RECORD] * 3
-    assert worker.forks == 1
     assert worker.restores == 2
 
 
@@ -1012,17 +1002,6 @@ def test_a_failed_restore_names_its_choice_and_leaves_later_choices_recorded() -
     assert stopped["stage"] == "ancient_choice"
     assert stopped["recipe"]["ancient_choice"] == {"option_index": 1, "relic_model_id": RECORDED_OFFER[1]}
     assert "combat_initial_state" not in stopped
-    assert worker.resets == 1
-
-
-def test_a_failed_fork_records_every_offered_choice_as_a_failure() -> None:
-    worker = FakeRunWorker(crash_on_fork=WORKER_CRASH)
-
-    rows = _rows(worker=worker)
-
-    assert [row["record_type"] for row in rows] == [FAILURE_RECORD] * len(RECORDED_OFFER)
-    assert [row["recipe"]["ancient_choice"]["option_index"] for row in rows] == [0, 1, 2]
-    assert {row["stage"] for row in rows} == {"ancient_choice"}
     assert worker.resets == 1
 
 

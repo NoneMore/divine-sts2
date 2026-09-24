@@ -357,14 +357,13 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
 def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, Any]]:
     """Every row one element of the request produces: one per Ancient choice its run offers.
 
-    The run starts once, then its Ancient offer is forked before taking any choice. A failed
-    choice gets its own failure row, and the next choice restores the same offered state.
+    The run starts once, then its Ancient offer's returned handle is kept before taking any
+    choice. A failed choice gets its own failure row, and the next choice restores that state.
     """
     build = worker.build
     attempted = _Recipe(element, build)
     try:
-        choices = _open_ancient(attempted, worker)
-        checkpoint = worker.fork()
+        choices, checkpoint = _open_ancient(attempted, worker)
     except Exception as error:  # noqa: BLE001
         if attempted.offered is None:
             return [_failure_row(attempted, error)]
@@ -391,7 +390,7 @@ def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, An
     return rows
 
 
-def _open_ancient(recipe: _Recipe, worker: RunWorker) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def _open_ancient(recipe: _Recipe, worker: RunWorker) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], str]:
     recipe.stage = STAGE_RUN_START
     state = worker.run_reset(_reset_state(recipe.element))
     recipe.act_variant = state["observation"]["run"]["act_variant"]
@@ -405,7 +404,7 @@ def _open_ancient(recipe: _Recipe, worker: RunWorker) -> list[tuple[dict[str, An
     if not choices:
         raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, "the Ancient room offers no choice to take")
     recipe.offered = [identity for identity, _ in choices]
-    return choices
+    return choices, state["state_handle"]
 
 
 def _drive_safely(
