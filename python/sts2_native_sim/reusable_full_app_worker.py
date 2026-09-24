@@ -47,18 +47,25 @@ class ReusableFullAppWorker:
     it must finish at a stable decision boundary so the worker can call ``end_run``.
     """
 
-    def __init__(self, config: FullAppClientConfig, *, max_entries: int = 16) -> None:
+    def __init__(self, config: FullAppClientConfig, *, max_entries: int = 16,
+                 capture_profile: bool = False) -> None:
         if config.process_mode != "reuse":
             raise ValueError("Reusable worker requires reuse process mode")
         if max_entries < 1:
             raise ValueError("max_entries must be positive")
         self.config = config
         self.max_entries = max_entries
+        self.capture_profile = capture_profile
+        self.profile_at_readiness: dict[str, str] | None = None
+        self.game_build: dict[str, Any] | None = None
+        self.lifecycle_protocol_revision: str | None = None
+        self.progression_policy_revision: str | None = None
         self._client: FullAppBridgeClient | None = None
         self._ordinal = 0
         self._last_generation = 0
         self._launches = 0
         self._profile_fingerprint: str | None = None
+        self.profile_baseline: str | None = None
         self._lock = threading.Lock()
         self._closed = False
 
@@ -66,6 +73,7 @@ class ReusableFullAppWorker:
         self,
         entry: RunEntry,
         drive: Callable[[FullAppBridgeClient, dict[str, Any]], T],
+        *, after_teardown: Callable[[FullAppBridgeClient], None] | None = None,
     ) -> WorkerEntryResult[T]:
         with self._lock:
             if self._closed:
@@ -130,6 +138,12 @@ class ReusableFullAppWorker:
                     if self._profile_fingerprint is not None and fingerprint != self._profile_fingerprint:
                         raise RuntimeError("Replacement sandbox profile fingerprint changed")
                     self._profile_fingerprint = fingerprint
+                    self.profile_baseline = fingerprint
+                    self.game_build = build
+                    self.lifecycle_protocol_revision = hello.get("lifecycle_protocol_revision")
+                    self.progression_policy_revision = hello.get("progression_policy")
+                    if self.capture_profile:
+                        self.profile_at_readiness = active_client.call("profile_snapshot")
                     pid = hello.get("pid")
                     if not isinstance(pid, int) or active_client.process is None or pid != active_client.process.pid:
                         raise RuntimeError(
@@ -175,6 +189,8 @@ class ReusableFullAppWorker:
                     teardown_seconds = time.monotonic() - ended_at
                 if self._closed:
                     raise RuntimeError("Reusable worker closed during entry")
+                if after_teardown is not None:
+                    after_teardown(client)
                 completed = result(True, value, None)
                 if self._ordinal >= self.max_entries:
                     self._discard()

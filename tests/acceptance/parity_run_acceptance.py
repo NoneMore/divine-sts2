@@ -61,6 +61,7 @@ the install, so a sandbox on another volume would copy 11 GB instead.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -194,6 +195,10 @@ SAMPLE: tuple[Sample, ...] = (
     Sample("IRONCLAD", 0, "ANC1ENT01", 0, "BOOMING_CONCH"),
 )
 
+SCENARIO_SET_REVISION = "act1-combat1-v1-" + hashlib.sha256(
+    json.dumps([[sample.label, sample.relic] for sample in SAMPLE], separators=(",", ":")).encode("utf-8")
+).hexdigest()[:16]
+
 
 def _check(condition: bool, message: str) -> None:
     if not condition:
@@ -243,7 +248,8 @@ def _record_for(sample: Sample, runs: dict[Run, _RecordedRun]) -> _Record:
 
 
 def _answer_card_select(
-    client: FullAppBridgeClient, nested: list[dict[str, Any]], cursor: int
+    client: FullAppBridgeClient, nested: list[dict[str, Any]], cursor: int,
+    capture: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int, dict[str, Any]]:
     """Answer one flat card-set prompt the way the record's own nested choice answered it.
 
@@ -270,6 +276,7 @@ def _answer_card_select(
     wanted, selected, first_report = len(choice["selected_option_ids"]), 0, None
     while True:
         actions = client.legal_actions()
+        current_observation = client.observe() if capture is not None else None
         cards = [action for action in actions if action.get("action_type") == CARD_SELECT_ACTION]
         if first_report is None:
             details = (client.observe().get("room") or {}).get("details") or {}
@@ -284,8 +291,12 @@ def _answer_card_select(
                 any(action["action_id"] == CARD_SELECT_FINISH for action in actions),
                 f"the prompt offers no way to leave it with the {wanted} card(s) the record selected",
             )
+            if capture is not None and current_observation is not None:
+                _capture_boundary(capture, current_observation, actions, CARD_SELECT_FINISH)
             return client.step(CARD_SELECT_FINISH)["observation"], cursor + 1, first_report
         _check(bool(cards), f"the prompt offers no card to select with {selected} of {wanted} chosen")
+        if capture is not None and current_observation is not None:
+            _capture_boundary(capture, current_observation, actions, cards[0]["action_id"])
         observation = client.step(cards[0]["action_id"])["observation"]
         selected += 1
         if str(observation.get("phase")) != CARD_SELECT_STAGE:
@@ -295,6 +306,7 @@ def _answer_card_select(
 
 def _drive_to_the_fight(
     client: FullAppBridgeClient, sample: Sample, record: _Record, started: dict[str, Any] | None = None,
+    capture: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Drive the shipped game to the fight the record describes, and hand back what it saw.
 
@@ -308,6 +320,12 @@ def _drive_to_the_fight(
     if started is None:
         started = client.start_run(seed=recipe["seed"], character=sample.character, ascension=sample.ascension)
     observation = started["observation"]
+    if capture is not None:
+        hello = client.hello()
+        capture.update(game_build=hello.get("game_build"), pid=hello.get("pid"),
+                       process_mode=hello.get("process_mode"),
+                       initial_history=client.history(), initial_state_hash=observation.get("state_hash"),
+                       boundary_trace=[])
     _check(
         str(observation.get("phase")) == "event",
         f"the shipped run opened at {observation.get('phase')!r}, not in the act's Ancient room",
@@ -326,10 +344,13 @@ def _drive_to_the_fight(
     # as a legal action in offer order, so taking the first one would silently compare a different
     # record's situation — which is why the choice is taken here and not by the loop below.
     action = f"choose_event:{sample.option_index}"
+    initial_actions = client.legal_actions()
     _check(
-        any(candidate["action_id"] == action for candidate in client.legal_actions()),
+        any(candidate["action_id"] == action for candidate in initial_actions),
         f"the Ancient room does not offer {action!r} among its choices",
     )
+    if capture is not None:
+        _capture_boundary(capture, observation, initial_actions, action)
     stages: list[str] = [str(observation.get("phase"))]
     observation = client.step(action)["observation"]
 
@@ -342,18 +363,37 @@ def _drive_to_the_fight(
                 cursor == len(nested),
                 f"the fight arrived with {len(nested) - cursor} recorded nested choice(s) unanswered",
             )
+            if capture is not None:
+                _capture_boundary(capture, observation, client.legal_actions(), None)
+                capture["projection"] = project_bridge(observation)
             return observation, stages, prompts
         stage = str(observation.get("phase"))
         stages.append(stage)
         if stage == CARD_SELECT_STAGE:
-            observation, cursor, prompt = _answer_card_select(client, nested, cursor)
+            observation, cursor, prompt = _answer_card_select(client, nested, cursor, capture)
             prompts.append(prompt)
             continue
         actions = client.legal_actions()
         _check(bool(actions), f"the shipped run stalled in {stage!r} with no legal action at all; stages seen {stages}")
+        if capture is not None:
+            _capture_boundary(capture, observation, actions, actions[0]["action_id"])
         observation = client.step(actions[0]["action_id"])["observation"]
 
     raise AssertionError(f"no fight within {MAX_STEPS} decisions; stages seen {stages}")
+
+
+def _capture_boundary(capture: dict[str, Any], observation: dict[str, Any],
+                      actions: list[dict[str, Any]], chosen: str | None) -> None:
+    """Record legal decision semantics without comparing minted card instance ids."""
+    def semantic(action: dict[str, Any]) -> str:
+        if action.get("action_type") == CARD_SELECT_ACTION:
+            metadata = action.get("metadata") or {}
+            return f"{CARD_SELECT_ACTION}:{metadata.get('card_index')}:{metadata.get('card_id')}"
+        return str(action.get("action_id"))
+
+    selected = next((semantic(action) for action in actions if action.get("action_id") == chosen), None)
+    capture["boundary_trace"].append({"phase": observation.get("phase"),
+                                       "legal": [semantic(action) for action in actions], "chosen": selected})
 
 
 def _compare(record: _Record, observation: dict[str, Any]) -> dict[str, Any]:
@@ -470,7 +510,8 @@ def _record_metadata(record: _Record) -> dict[str, Any]:
 
 
 def _sample_result(
-    sample: Sample, runs: dict[Run, _RecordedRun], worker_id: int, dump_dir: Path | None = None
+    sample: Sample, runs: dict[Run, _RecordedRun], worker_id: int, dump_dir: Path | None = None,
+    *, certify: bool = False,
 ) -> dict[str, Any]:
     """Drive one sample's shipped run and compare it, or report why it could not be compared.
 
@@ -482,17 +523,21 @@ def _sample_result(
     client = FullAppBridgeClient(FullAppClientConfig(worker_id=worker_id))
     observation: dict[str, Any] | None = None
     record: _Record | None = None
+    capture: dict[str, Any] | None = {} if certify else None
     try:
         record = _record_for(sample, runs)
         result.update(_record_metadata(record))
         client.launch(requested_character=sample.character)
-        observation, stages, prompts = _drive_to_the_fight(client, sample, record)
+        observation, stages, prompts = _drive_to_the_fight(client, sample, record, capture=capture)
         result.update({"stages": stages, "card_prompts": prompts})
         result.update(_compare(record, observation))
     except Exception as error:  # noqa: BLE001 — any failure is this sample's, and the run continues
         result.update({"matched": False, "difference": None, "failure": f"{type(error).__name__}: {error}"})
     finally:
         client.close()
+    if capture is not None:
+        result.update(capture)
+        result["start_path"] = "menu"
     if dump_dir is not None and not result.get("matched") and observation is not None and record is not None:
         _dump(sample, record, observation, dump_dir)
     return result
@@ -501,6 +546,7 @@ def _sample_result(
 def _reuse_candidate_result(
     sample: Sample, runs: dict[Run, _RecordedRun], worker: ReusableFullAppWorker,
     dump_dir: Path | None = None,
+    *, certify: bool = False, after_teardown: Any = None,
 ) -> dict[str, Any]:
     """Compare one entry using the same drive and projection as fresh parity."""
     result = _result_header(sample)
@@ -512,7 +558,9 @@ def _reuse_candidate_result(
         return result
 
     entry = RunEntry(seed=record.recipe["seed"], character=sample.character, ascension=sample.ascension)
-    executed = worker.run_entry(entry, lambda client, started: _drive_to_the_fight(client, sample, record, started))
+    capture: dict[str, Any] | None = {} if certify else None
+    executed = worker.run_entry(entry, lambda client, started: _drive_to_the_fight(
+        client, sample, record, started, capture), after_teardown=after_teardown)
     result.update({
         "pid": executed.pid,
         "process_entry_ordinal": executed.process_entry_ordinal,
@@ -529,6 +577,8 @@ def _reuse_candidate_result(
     })
     if not executed.succeeded or executed.value is None:
         result.update({"matched": False, "difference": None, "failure": executed.error or "worker returned no observation"})
+        if capture is not None:
+            result.update(capture)
         return result
     observation, stages, prompts = executed.value
     result.update({"stages": stages, "card_prompts": prompts})
@@ -536,6 +586,8 @@ def _reuse_candidate_result(
         result.update(_compare(record, observation))
     except Exception as error:  # noqa: BLE001 - comparison failure belongs to this entry
         result.update({"matched": False, "difference": None, "failure": f"{type(error).__name__}: {error}"})
+    if capture is not None:
+        result.update(capture)
     if dump_dir is not None and not result.get("matched"):
         _dump(sample, record, observation, dump_dir)
     return result

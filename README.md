@@ -86,6 +86,22 @@ Record reproducible act-1 opening scenarios into deterministic corpus shards:
 python -m sts2_native_sim.cli scenario --character IRONCLAD --seed A1B2C3D4E5 --workers 1 --output-dir artifacts/scenarios/quickstart
 ```
 
+### 5. Certify full-app process reuse
+
+Build the Release full-app bridge package. The scenario recorder uses the Debug native host, so after
+Core changes also run `pwsh scripts/build-persistent-server.ps1 -Configuration Debug` as described in
+`docs/agents/dev-environment.md`. Then run the dedicated shipped-game gate from a shell with
+`STS2_GAME_ROOT` configured:
+
+```powershell
+python -m tests.acceptance.certify_full_app_reuse
+```
+
+It runs sixteen independent fresh menu starts, then seventeen entries in one reusable process. The
+last entry repeats the first scenario. Complete evidence goes to the ignored
+`artifacts/reuse-certification/report.json`; a passing gate writes the compact
+`certifications/full-app-reuse.json` for commit. Ordinary parity runs never write that certificate.
+
 ---
 
 ## Gymnasium Vector Environment

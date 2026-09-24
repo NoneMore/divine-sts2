@@ -8,6 +8,8 @@ using MegaCrit.Sts2.Core.AutoSlay;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Saves.Validation;
 using Sts2.NativeSim.Protocol;
 
 namespace Sts2.NativeSim.FullAppBridge;
@@ -433,6 +435,36 @@ public static class FullAppBridgeServer
                     FullAppBridgeMod.ReuseMode ? "reuse" : "fresh"));
                 lock (SyncLock) hello["worker_state"] = StateName(_workerState);
                 return hello;
+
+            case "profile_snapshot":
+            {
+                // The certification gate reads this at readiness and once after the sentinel.
+                // Reading the persisted file independently catches drift masked by the live object.
+                RequireState(WorkerState.Idle, "profile_snapshot");
+                FullAppBridgeHandshake.EnsureCanStart(ProgressReadiness);
+                SaveManager saveManager = SaveManager.Instance;
+                // The shipped save store addresses progress through Godot's user:// namespace.
+                // Path.Combine/GetFullPath on Windows rewrites that virtual URI into an invalid
+                // local path, so keep its virtual spelling through the Godot file API.
+                string path = $"{UserDataPathProvider.GetAccountScopedBasePath(null)}/"
+                    + $"{UserDataPathProvider.GetProfileDir(saveManager.CurrentProfileId).Replace('\\', '/')}/"
+                    + $"{UserDataPathProvider.SavesDir}/progress.save";
+                using Godot.FileAccess persistedFile = Godot.FileAccess.Open(path, Godot.FileAccess.ModeFlags.Read)
+                    ?? throw new InvalidOperationException("Cannot open persisted progress for certification.");
+                ReadSaveResult<SerializableProgress> stored = SaveManager.FromJson<SerializableProgress>(
+                    persistedFile.GetAsText());
+                if (!stored.Success || stored.SaveData is null)
+                    throw new InvalidOperationException($"Cannot read persisted progress for certification: {stored.Status}");
+                var context = new DeserializationContext();
+                ProgressState persisted = ProgressState.FromSerializable(stored.SaveData, context);
+                if (context.HasFatal)
+                    throw new InvalidOperationException("Persisted progress has fatal deserialization errors.");
+                return new Dictionary<string, object?>
+                {
+                    ["in_memory"] = ProgressionCompletePolicy.Fingerprint(ShippedProgressionProfile.Snapshot(saveManager.Progress)),
+                    ["persisted"] = ProgressionCompletePolicy.Fingerprint(ShippedProgressionProfile.Snapshot(persisted)),
+                };
+            }
 
             case "start_run":
                 string declaredMode = parameters.TryGetProperty("process_mode", out JsonElement processMode)

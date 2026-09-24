@@ -1,0 +1,11 @@
+{
+  "identity": {
+    "assembly_sha256": "A1F9E653F1E28E4076558FEE1E60D218619CB7E057B887C6417F62C62C6D7A52",
+    "lifecycle_protocol_revision": "full-app-reuse-v1",
+    "pck_sha256": "42520EB8B0911C6C0F0BD102D92B33F41ABD4D26B83489817D0A6DBD7DD48587",
+    "profile_policy_revision": "progression-complete-v1",
+    "scenario_set_revision": "act1-combat1-v1-2c682258b6a290e0"
+  },
+  "passed_at_utc": "2026-09-24T05:40:52.692463+00:00",
+  "report_sha256": "e6c2a4024045a5f29e0b626656c04740381d42de9fad488939814607e523ea1d"
+}

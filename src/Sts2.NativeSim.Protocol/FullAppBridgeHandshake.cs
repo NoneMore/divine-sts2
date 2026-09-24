@@ -3,6 +3,8 @@ namespace Sts2.NativeSim.Protocol;
 /// <summary>The progression-gated portion of the full-app bridge's public RPC surface.</summary>
 public static class FullAppBridgeHandshake
 {
+    public const string LifecycleProtocolRevision = "full-app-reuse-v1";
+
     public static IReadOnlyDictionary<string, object?> CreateHello(
         ProgressionReadinessSnapshot readiness,
         Func<object> gameBuild,
@@ -18,6 +20,7 @@ public static class FullAppBridgeHandshake
             ["unlock_policy"] = "all",
             ["progression_policy"] = ProgressionCompletePolicy.Revision,
             ["process_mode"] = processMode,
+            ["lifecycle_protocol_revision"] = LifecycleProtocolRevision,
         };
         if (readiness.State == ProgressionReadinessState.Ready)
         {
