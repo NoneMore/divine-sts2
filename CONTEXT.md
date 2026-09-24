@@ -60,6 +60,14 @@ _Avoid_: Sample, fixture, seed dump
 One character, Ascension, and canonical run seed combination declared by a generation request. Its run's offered Ancient choices determine how many scenario or failure rows it produces.
 _Avoid_: Seed alone, Ancient choice
 
+**Element throughput**:
+The rate at which a generation request's scenario generation elements are driven to completion, counted in elements per second and reported beside a row rate. It is a batch's throughput unit rather than a row rate, because one element yields one row per Ancient choice its run offers, and a failure row contributes no combat initial state.
+_Avoid_: Rows per second when used as the batch's unit, records per second, seeds per second
+
+**Reference request**:
+A generation request fixed by name together with its exact dimension sets, so that a batch's element throughput is measured and compared on the same workload every time. Two scales are kept: a small one, whose per-shard worker startup is a large share of its wall time, and a large one, on which that startup is negligible.
+_Avoid_: Test request, sample request, benchmark corpus
+
 **Failure row**:
 A row of a generated corpus standing in for an Ancient choice that did not produce a scenario, or for a scenario generation element whose Ancient offer could not be read. It records the stage, error kind and message, and recipe resolved so far, never a combat initial state.
 _Avoid_: Error record, dropped seed, skipped element
