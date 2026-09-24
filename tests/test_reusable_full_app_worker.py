@@ -144,6 +144,8 @@ def test_healthy_worker_recycles_only_for_entry_after_default_cap(controlled_wor
     assert all(result.pid == launches[0].pid for result in results[:16])
     assert results[16].pid == launches[1].pid
     assert results[0].startup_seconds > 0 and results[1].startup_seconds == 0
+    assert all(result.close_seconds == 0 for result in results[:15])
+    assert results[15].close_seconds > 0
     assert all(result.entry_seconds >= 0 and result.teardown_seconds >= 0 for result in results)
     assert all(result.teardown and result.teardown["final_state"] == "idle" for result in results)
     assert launches[0].poll() is not None

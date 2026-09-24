@@ -434,6 +434,8 @@ public static class FullAppBridgeServer
                     BoundPort,
                     FullAppBridgeMod.ReuseMode ? "reuse" : "fresh"));
                 lock (SyncLock) hello["worker_state"] = StateName(_workerState);
+                if (readiness.State == ProgressionReadinessState.Ready)
+                    hello["pck_fingerprint_seconds"] = GameBuild.PckHashSeconds;
                 return hello;
 
             case "profile_snapshot":

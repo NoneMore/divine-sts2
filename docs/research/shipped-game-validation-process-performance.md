@@ -207,3 +207,32 @@ driver-task 和 profile-isolation 机制可以作为适配依据。
 可以在不改变隔离语义的情况下降低 wall time。跨样本复用进程已有 sibling 实现和 38-entry 运行证据，
 潜在收益更大；当前仓库需要把该生命周期适配到重构后的模块，并完成 fresh-vs-reused 全量等价性 gate，
 而不能直接复用现有 `start_run()` 或原样复制旧 bridge 文件。
+
+## 2026-09-24 后续验证
+
+上文是修订 `801f7dea` 的历史调查。现在默认 parity 已有经过认证的复用生命周期，16 个样本共用
+1 个游戏进程。native worker pool 也由父进程只计算一次 PCK SHA-256，再把结果传给各 worker；
+worker 校验绝对路径、文件 ID、大小、修改时间和创建时间，不匹配时自行重算。独立创建的单个
+`NativeWorker` 仍自行哈希。
+
+同一台 Windows 主机、同一游戏 build、同一 16-entry 样本上，新隔离沙箱的完整运行结果如下。
+两份完整 JSON 留在本机被 git 忽略的 `artifacts/parity-run/fresh-timing-baseline.json` 和
+`artifacts/parity-run/reuse-timing-baseline.json`。
+
+| 指标 | fresh | reuse |
+| --- | ---: | ---: |
+| 字段匹配 | 16/16 | 16/16 |
+| 总 wall time | 289.76 秒 | 81.60 秒 |
+| 游戏进程启动 | 16 | 1 |
+| 游戏侧 PCK 哈希 | 16 次 / 30.42 GB | 1 次 / 1.90 GB |
+| native 侧 PCK 哈希 | 1 次 / 1.90 GB，3 个 worker 命中共享结果 | 同左 |
+| 游戏进程 ready | 71.05 秒 | 4.21 秒 |
+| 游戏侧 PCK 哈希计算 | 22.62 秒 | 1.39 秒 |
+| `start_run` 合计 | 167.05 秒 | 30.97 秒 |
+| 游戏内 drive 合计 | 34.94 秒 | 32.15 秒 |
+
+这次 reuse 的 wall time 比 fresh 少 208.16 秒，约 71.8%。它们是各运行一次的同机对照，
+不是多轮统计基准；fresh 用 16 个新沙箱，reuse 用已有且通过 baseline 校验的沙箱。
+`process_ready_seconds` 包含游戏侧 PCK 哈希，`native_pool_start_seconds` 包含 native 共享哈希；
+这些分项相互嵌套，不能直接相加。报告还记录 sandbox、teardown、close、native pool 启动、
+native 哈希次数与时间、每个 entry 的启动及 drive 时间，以便后续定位回归。

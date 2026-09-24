@@ -380,11 +380,12 @@ def test_reuse_candidate_report_requires_one_process_and_complete_teardown_evide
     assert complete["success"] is True
     assert complete["one_process_evidence"] is True
     assert complete["performance"] == {
-        "shipped_game_processes_started": 1,
-        "maximum_live_process_count": 1,
-        "pck_bytes_hashed": 1234,
-        "pck_fingerprints": 1,
-        "total_wall_seconds": 42.0,
+        "native_pool_start_seconds": 0.0, "record_seconds": 0.0, "native_pck": None,
+        "sandbox_seconds": 0.0, "process_ready_seconds": 0.0,
+        "full_app_pck_fingerprint_seconds": 0.0, "start_run_seconds": 0.0,
+        "drive_seconds": 0.0, "teardown_seconds": 8.0, "close_seconds": 0.0,
+        "shipped_game_processes_started": 1, "maximum_live_process_count": 1,
+        "pck_bytes_hashed": 1234, "pck_fingerprints": 1, "total_wall_seconds": 42.0,
     }
 
     replacement = [dict(result) for result in results]

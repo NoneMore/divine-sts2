@@ -19,6 +19,7 @@ namespace Sts2.NativeSim.FullAppBridge;
 public static class GameBuild
 {
     private static readonly Lazy<GameBuildDto> Fingerprint = new(Measure, LazyThreadSafetyMode.ExecutionAndPublication);
+    public static double PckHashSeconds { get; private set; }
 
     /// <summary>The build this process is running.</summary>
     public static GameBuildDto Current => Fingerprint.Value;
@@ -33,11 +34,14 @@ public static class GameBuild
         string dataDirectory = Path.GetDirectoryName(assemblyPath)!;
         string pckPath = Path.Combine(Directory.GetParent(dataDirectory)!.FullName, "SlayTheSpire2.pck");
 
+        Stopwatch pckTimer = Stopwatch.StartNew();
+        string pckHash = HashFile(pckPath);
+        PckHashSeconds = pckTimer.Elapsed.TotalSeconds;
         return new GameBuildDto
         {
             Version = FileVersionInfo.GetVersionInfo(assemblyPath).ProductVersion ?? "unknown",
             AssemblySha256 = HashFile(assemblyPath),
-            PckSha256 = HashFile(pckPath),
+            PckSha256 = pckHash,
         };
     }
 

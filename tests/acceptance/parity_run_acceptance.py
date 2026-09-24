@@ -535,14 +535,35 @@ def _sample_result(
     try:
         record = _record_for(sample, runs)
         result.update(_record_metadata(record))
-        client.launch(requested_character=sample.character)
-        observation, stages, prompts = _drive_to_the_fight(client, sample, record, capture=capture)
+        launch_at = time.monotonic()
+        try:
+            client.launch(requested_character=sample.character)
+        finally:
+            result["startup_seconds"] = time.monotonic() - launch_at
+        result.update(client.launch_timings)
+        result["pck_fingerprint_seconds"] = float(client.ready_hello.get("pck_fingerprint_seconds", 0.0))
+        result["pck_fingerprint_count"] = 1
+        result["pck_fingerprint_bytes"] = (Path(client.config.game_root) / "SlayTheSpire2.pck").stat().st_size
+        started_at = time.monotonic()
+        try:
+            started = client.start_run(seed=record.recipe["seed"], character=sample.character,
+                                       ascension=sample.ascension)
+        finally:
+            result["start_run_seconds"] = time.monotonic() - started_at
+        drive_at = time.monotonic()
+        try:
+            observation, stages, prompts = _drive_to_the_fight(client, sample, record, started, capture)
+        finally:
+            result["drive_seconds"] = time.monotonic() - drive_at
         result.update({"stages": stages, "card_prompts": prompts})
         result.update(_compare(record, observation))
     except Exception as error:  # noqa: BLE001 — any failure is this sample's, and the run continues
         result.update({"matched": False, "difference": None, "failure": f"{type(error).__name__}: {error}"})
     finally:
         client.close()
+        result.update(client.launch_timings)
+        result["processes_started"] = client.processes_started
+        result["close_seconds"] = client.last_close_seconds
     if capture is not None:
         result.update(capture)
         result["start_path"] = "menu"
@@ -576,8 +597,14 @@ def _reuse_candidate_result(
         "warm": executed.start_path == "direct" if executed.start_path is not None else None,
         "process_mode": executed.process_mode,
         "startup_seconds": executed.startup_seconds,
+        "sandbox_seconds": executed.sandbox_seconds,
+        "process_ready_seconds": executed.process_ready_seconds,
+        "pck_fingerprint_seconds": executed.pck_fingerprint_seconds,
+        "start_run_seconds": executed.start_run_seconds,
+        "drive_seconds": executed.drive_seconds,
         "entry_seconds": executed.entry_seconds,
         "teardown_seconds": executed.teardown_seconds,
+        "close_seconds": executed.close_seconds,
         "replacement_count": executed.replacement_count,
         "pck_fingerprint_bytes": executed.pck_fingerprint_bytes,
         "pck_fingerprint_count": executed.pck_fingerprint_count,
@@ -605,6 +632,9 @@ def report(
     results: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool,
     *, process_mode: str = "fresh", total_wall_seconds: float = 0.0,
     certification: dict[str, Any] | None = None,
+    native_pck: dict[str, float | int] | None = None,
+    native_pool_start_seconds: float = 0.0,
+    record_seconds: float = 0.0, full_app_close_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """The run as a document: what was compared, what was covered, and what happened per sample.
 
@@ -626,19 +656,39 @@ def report(
     )
     exercised = sorted(set().union(*(result.get("exercised_fields", []) for result in results)))
     one_process_evidence = False
-    performance = None
+    performance = {
+        # Nested measurements are not additive: process readiness includes the game's
+        # PCK hash, and native pool startup includes the shared native hash.
+        "native_pool_start_seconds": native_pool_start_seconds,
+        "record_seconds": record_seconds,
+        "native_pck": native_pck,
+        "sandbox_seconds": sum(result.get("sandbox_seconds", 0.0) for result in results),
+        "process_ready_seconds": sum(result.get("process_ready_seconds", 0.0) for result in results),
+        "full_app_pck_fingerprint_seconds": sum(result.get("pck_fingerprint_seconds", 0.0) for result in results),
+        "start_run_seconds": sum(result.get("start_run_seconds", 0.0) for result in results),
+        "drive_seconds": sum(result.get("drive_seconds", 0.0) for result in results),
+        "teardown_seconds": sum(result.get("teardown_seconds", 0.0) for result in results),
+        "close_seconds": (full_app_close_seconds if process_mode == "reuse" else
+                          sum(result.get("close_seconds", 0.0) for result in results)),
+        "pck_bytes_hashed": sum(result.get("pck_fingerprint_bytes", 0) for result in results),
+        "pck_fingerprints": sum(result.get("pck_fingerprint_count", 0) for result in results),
+        "total_wall_seconds": total_wall_seconds,
+    }
     reuse_mode = process_mode == "reuse"
     if reuse_mode:
         process_count = max((result["replacement_count"] for result in results
                              if "replacement_count" in result), default=-1) + 1
-        performance = {
+        performance.update({
             "shipped_game_processes_started": process_count,
             # ReusableFullAppWorker owns one serial lane and closes a process before replacing it.
             "maximum_live_process_count": min(process_count, 1),
-            "pck_bytes_hashed": sum(result.get("pck_fingerprint_bytes", 0) for result in results),
-            "pck_fingerprints": sum(result.get("pck_fingerprint_count", 0) for result in results),
-            "total_wall_seconds": total_wall_seconds,
-        }
+        })
+    else:
+        performance.update({
+            "shipped_game_processes_started": sum(result.get("processes_started", 0) for result in results),
+            "maximum_live_process_count": min(sum(result.get("processes_started", 0) for result in results), 1),
+        })
+    if reuse_mode:
         one_process_evidence = complete_sample and entries_agree and process_count == 1 and bool(results) and (
             performance["pck_fingerprints"] == 1
             and performance["pck_bytes_hashed"] > 0
@@ -697,9 +747,9 @@ def report(
         "mismatched": len(results) - len(matched),
         "results": results,
     }
+    document.update({"performance": performance})
     if reuse_mode:
-        document.update({"performance": performance,
-                         "one_process_evidence": one_process_evidence})
+        document["one_process_evidence"] = one_process_evidence
     return document
 
 
@@ -733,10 +783,14 @@ def main(argv: list[str] | None = None) -> int:
         samples = tuple(sample for sample in SAMPLE if sample.label in named)
         if not samples:
             parser.error(f"no sample is labelled {sorted(named)}")
+    pool_started = time.monotonic()
     with NativeWorkerPool(arguments.workers) as pool:
+        native_pool_start_seconds = time.monotonic() - pool_started
         runs_to_record = len({sample.run for sample in samples})
         print(f"Recording {runs_to_record} runs with {arguments.workers} native workers...", flush=True)
+        record_started = time.monotonic()
         runs = _records(pool, samples)
+        record_seconds = time.monotonic() - record_started
         build = pool.workers[0].build
         try:
             identity = current_certification_identity(build, SCENARIO_SET_REVISION)
@@ -759,21 +813,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Recorded on game build {build['assembly_sha256']}; now driving the shipped game.", flush=True)
 
         results: list[dict[str, Any]] = []
+        full_app_close_seconds = 0.0
         if arguments.process_mode == "reuse":
+            identity_checked = False
             with ReusableFullAppWorker(FullAppClientConfig(worker_id=arguments.worker_id, process_mode="reuse")) as worker:
                 for offset, sample in enumerate(samples):
                     print(f"[{offset + 1}/{len(samples)}] reusing a shipped game for {sample.label}...", flush=True)
                     result = _reuse_candidate_result(sample, runs, worker, arguments.dump)
                     results.append(result)
-                    if offset == 0 and (
-                        worker.game_build != build
-                        or worker.lifecycle_protocol_revision != identity["lifecycle_protocol_revision"]
-                        or worker.progression_policy_revision != identity["profile_policy_revision"]
-                    ):
-                        raise CertificationError("Running bridge identity differs from certification; "
-                                                 "run the dedicated certify_full_app_reuse gate or select --process-mode fresh.")
+                    if not identity_checked and worker.game_build is not None:
+                        if (worker.game_build != build
+                            or worker.lifecycle_protocol_revision != identity["lifecycle_protocol_revision"]
+                            or worker.progression_policy_revision != identity["profile_policy_revision"]):
+                            raise CertificationError("Running bridge identity differs from certification; "
+                                                     "run the dedicated certify_full_app_reuse gate or select --process-mode fresh.")
+                        identity_checked = True
                     state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
                     print(f"    {sample.label}: {state}", flush=True)
+            full_app_close_seconds = worker.close_seconds_total
         else:
             for offset, sample in enumerate(samples):
                 print(f"[{offset + 1}/{len(samples)}] launching a headless shipped game for {sample.label}...", flush=True)
@@ -781,11 +838,14 @@ def main(argv: list[str] | None = None) -> int:
                 results.append(result)
                 state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
                 print(f"    {sample.label}: {state}", flush=True)
+        native_pck = getattr(pool, "fingerprint_summary", lambda: None)()
 
     document = report(results, build, complete_sample=tuple(samples) == SAMPLE,
                       process_mode=arguments.process_mode,
                       total_wall_seconds=time.monotonic() - wall_started,
-                      certification=certification)
+                      certification=certification, native_pck=native_pck,
+                      native_pool_start_seconds=native_pool_start_seconds,
+                      record_seconds=record_seconds, full_app_close_seconds=full_app_close_seconds)
     if arguments.report is not None:
         arguments.report.parent.mkdir(parents=True, exist_ok=True)
         arguments.report.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

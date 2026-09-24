@@ -31,8 +31,14 @@ class WorkerEntryResult(Generic[T]):
     start_path: str | None
     process_mode: str
     startup_seconds: float
+    sandbox_seconds: float
+    process_ready_seconds: float
+    pck_fingerprint_seconds: float
+    start_run_seconds: float
+    drive_seconds: float
     entry_seconds: float
     teardown_seconds: float
+    close_seconds: float
     replacement_count: int
     pck_fingerprint_bytes: int
     pck_fingerprint_count: int
@@ -68,6 +74,7 @@ class ReusableFullAppWorker:
         self.profile_baseline: str | None = None
         self._lock = threading.Lock()
         self._closed = False
+        self.close_seconds_total = 0.0
 
     def run_entry(
         self,
@@ -79,8 +86,14 @@ class ReusableFullAppWorker:
             if self._closed:
                 raise RuntimeError("Reusable worker is closed")
             startup_seconds = 0.0
+            sandbox_seconds = 0.0
+            process_ready_seconds = 0.0
+            pck_fingerprint_seconds = 0.0
+            start_run_seconds = 0.0
+            drive_seconds = 0.0
             entry_seconds = 0.0
             teardown_seconds = 0.0
+            close_seconds = 0.0
             pck_bytes = 0
             pck_count = 0
             pid: int | None = None
@@ -101,8 +114,14 @@ class ReusableFullAppWorker:
                     start_path=start_path,
                     process_mode="reuse",
                     startup_seconds=startup_seconds,
+                    sandbox_seconds=sandbox_seconds,
+                    process_ready_seconds=process_ready_seconds,
+                    pck_fingerprint_seconds=pck_fingerprint_seconds,
+                    start_run_seconds=start_run_seconds,
+                    drive_seconds=drive_seconds,
                     entry_seconds=entry_seconds,
                     teardown_seconds=teardown_seconds,
+                    close_seconds=close_seconds,
                     replacement_count=max(0, self._launches - 1),
                     pck_fingerprint_bytes=pck_bytes,
                     pck_fingerprint_count=pck_count,
@@ -151,6 +170,9 @@ class ReusableFullAppWorker:
                         )
                     pck_bytes = (Path(self.config.game_root) / "SlayTheSpire2.pck").stat().st_size
                     pck_count = 1
+                    sandbox_seconds = active_client.launch_timings.get("sandbox_seconds", 0.0)
+                    process_ready_seconds = active_client.launch_timings.get("process_ready_seconds", 0.0)
+                    pck_fingerprint_seconds = float(hello.get("pck_fingerprint_seconds", 0.0))
                     startup_seconds = time.monotonic() - launched_at
                 else:
                     active_client = self._client
@@ -164,7 +186,11 @@ class ReusableFullAppWorker:
                 expected_path = "menu" if ordinal == 1 else "direct"
                 entered_at = time.monotonic()
                 try:
-                    started = client.start_run(entry.seed, entry.character, entry.ascension)
+                    start_at = time.monotonic()
+                    try:
+                        started = client.start_run(entry.seed, entry.character, entry.ascension)
+                    finally:
+                        start_run_seconds = time.monotonic() - start_at
                     if (
                         not isinstance(started, dict)
                         or started.get("started") is not True
@@ -176,7 +202,11 @@ class ReusableFullAppWorker:
                         raise RuntimeError(f"Illegal start_run response: {started!r}")
                     start_path = expected_path
                     self._ordinal = ordinal
-                    value = drive(client, started)
+                    drive_at = time.monotonic()
+                    try:
+                        value = drive(client, started)
+                    finally:
+                        drive_seconds = time.monotonic() - drive_at
                 finally:
                     entry_seconds = time.monotonic() - entered_at
                 ended_at = time.monotonic()
@@ -191,16 +221,23 @@ class ReusableFullAppWorker:
                     raise RuntimeError("Reusable worker closed during entry")
                 if after_teardown is not None:
                     after_teardown(client)
-                completed = result(True, value, None)
                 if self._ordinal >= self.max_entries:
+                    close_before = self.close_seconds_total
                     self._discard()
-                return completed
+                    close_seconds = self.close_seconds_total - close_before
+                return result(True, value, None)
             except Exception as exc:  # noqa: BLE001 - any driver or lifecycle exception poisons this process
                 if launched_at is not None and startup_seconds == 0:
                     startup_seconds = time.monotonic() - launched_at
+                if active_client is not None:
+                    sandbox_seconds = active_client.launch_timings.get("sandbox_seconds", sandbox_seconds)
+                    process_ready_seconds = active_client.launch_timings.get("process_ready_seconds", process_ready_seconds)
                 if active_client is not None and self._client is not active_client:
                     active_client.close()
+                    close_seconds += active_client.last_close_seconds
+                close_before = self.close_seconds_total
                 self._discard()
+                close_seconds += self.close_seconds_total - close_before
                 return result(False, None, f"{type(exc).__name__}: {exc}")
 
     def _discard(self) -> None:
@@ -209,6 +246,7 @@ class ReusableFullAppWorker:
         self._last_generation = 0
         if client is not None:
             client.close()
+            self.close_seconds_total += client.last_close_seconds
 
     def _valid_teardown(self, teardown: Any) -> bool:
         if not isinstance(teardown, dict):

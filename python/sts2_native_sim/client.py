@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import copy
+import json
 import os
 import queue
 import subprocess
 import threading
 import time
 import uuid
-from collections import deque, OrderedDict
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .paths import REPOSITORY_ROOT, find_game_assembly, find_godot
-
+from .pck_fingerprint import ENV_NAME as PCK_FINGERPRINT_ENV
+from .pck_fingerprint import PckFingerprint
 
 _windows_spawn_lock = threading.Lock()
 _SEM_FAILCRITICALERRORS = 0x0001
@@ -85,9 +86,11 @@ class NativeWorker:
         project: str | Path | None = None,
         assembly: str | Path | None = None,
         request_timeout: float | None = None,
+        pck_fingerprint: PckFingerprint | None = None,
     ):
         default_godot, default_project, default_assembly = _defaults()
         self.command = [str(godot or default_godot), "--headless", "--path", str(project or default_project), "--", "--server", str(assembly or default_assembly)]
+        self._pck_fingerprint = pck_fingerprint
         self._lock = threading.Lock()
         self._logs: deque[str] = deque(maxlen=100)
         self._stdout_lines: queue.Queue[str | None] = queue.Queue()
@@ -101,7 +104,9 @@ class NativeWorker:
         self.process: subprocess.Popen[str]
         self._start()
         try:
-            self.build = self.hello()["game_build"]
+            hello = self.hello()
+            self.build = hello["game_build"]
+            self.pck_fingerprint = hello.get("pck_fingerprint", {})
         except Exception as startup_error:
             try:
                 self.close()
@@ -117,6 +122,11 @@ class NativeWorker:
     def _start(self) -> None:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         environment = os.environ.copy()
+        environment.pop(PCK_FINGERPRINT_ENV, None)
+        if self._pck_fingerprint is not None and self._pck_fingerprint.is_current():
+            hint = self._pck_fingerprint.worker_hint()
+            if hint:
+                environment[PCK_FINGERPRINT_ENV] = hint
         dotnet_root = REPOSITORY_ROOT / ".tools" / "dotnet9"
         if dotnet_root.is_dir():
             environment["DOTNET_ROOT"] = str(dotnet_root)
@@ -361,13 +371,43 @@ class NativeWorkerPool:
     """Fixed pool of isolated persistent workers with crash replacement."""
 
     def __init__(self, workers: int = 4, **worker_options: Any):
-        self.worker_options = worker_options
-        self.workers = [NativeWorker(**worker_options) for _ in range(workers)]
+        self.worker_options = worker_options.copy()
+        self._shared_pck: PckFingerprint | None = None
+        self._shared_measurements: list[PckFingerprint] = []
+        if workers > 1 and os.name == "nt" and "pck_fingerprint" not in self.worker_options:
+            assembly = Path(self.worker_options.get("assembly") or find_game_assembly())
+            pck = assembly.resolve().parent.parent / "SlayTheSpire2.pck"
+            self._shared_pck = PckFingerprint.measure(pck)
+            self._shared_measurements.append(self._shared_pck)
+        self.workers = [self._new_worker() for _ in range(workers)]
+        self._all_workers = list(self.workers)
         self._executor = ThreadPoolExecutor(max_workers=workers)
+
+    def _new_worker(self) -> NativeWorker:
+        if self._shared_pck is not None and not self._shared_pck.is_current():
+            self._shared_pck = PckFingerprint.measure(self._shared_pck.path)
+            self._shared_measurements.append(self._shared_pck)
+        options = self.worker_options.copy()
+        if self._shared_pck is not None:
+            options["pck_fingerprint"] = self._shared_pck
+        return NativeWorker(**options)
+
+    def fingerprint_summary(self) -> dict[str, float | int]:
+        measured = [worker.pck_fingerprint for worker in self._all_workers]
+        return {
+            "hashes": len(self._shared_measurements)
+                      + sum(int(row.get("bytes_hashed", 0) > 0) for row in measured),
+            "bytes_hashed": sum(item.size for item in self._shared_measurements)
+                            + sum(int(row.get("bytes_hashed", 0)) for row in measured),
+            "seconds": sum(item.seconds for item in self._shared_measurements)
+                       + sum(float(row.get("seconds", 0.0)) for row in measured),
+            "worker_cache_hits": sum(row.get("source") == "pool" for row in measured),
+        }
 
     def _replace_if_dead(self, index: int) -> NativeWorker:
         if self.workers[index].process.poll() is not None:
-            self.workers[index] = NativeWorker(**self.worker_options)
+            self.workers[index] = self._new_worker()
+            self._all_workers.append(self.workers[index])
         return self.workers[index]
 
     def map(self, operation: Callable[[NativeWorker, Any], Any], values: Iterable[Any]) -> list[Any]:

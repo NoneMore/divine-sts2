@@ -111,6 +111,10 @@ class FullAppBridgeClient:
         self.file_writer: Optional[TextIO] = None
         self.request_id = 0
         self.bound_port = 0
+        self.launch_timings: dict[str, float] = {}
+        self.last_close_seconds = 0.0
+        self.ready_hello: dict[str, Any] = {}
+        self.processes_started = 0
 
     def prepare_sandbox(self, requested_character: str = "IRONCLAD") -> SandboxLayout:
         game_root = Path(self.config.game_root).resolve()
@@ -193,7 +197,11 @@ class FullAppBridgeClient:
     def launch(self, requested_character: str = "IRONCLAD") -> None:
         if self._owned_process is not None:
             raise RuntimeError("Full-app worker is already running")
-        self.prepare_sandbox(requested_character=requested_character)
+        launched_at = time.monotonic()
+        try:
+            self.prepare_sandbox(requested_character=requested_character)
+        finally:
+            self.launch_timings = {"sandbox_seconds": time.monotonic() - launched_at}
 
         port_file = self.sandbox_dir / "userdata" / "bridge_port.txt"
         if port_file.exists():
@@ -225,9 +233,12 @@ class FullAppBridgeClient:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            self.processes_started += 1
             self.process = self._owned_process.process
             self._complete_launch(port_file)
+            self.launch_timings["process_ready_seconds"] = time.monotonic() - launched_at - self.launch_timings["sandbox_seconds"]
         except BaseException:
+            self.launch_timings["process_ready_seconds"] = time.monotonic() - launched_at - self.launch_timings["sandbox_seconds"]
             self._cleanup(send_close=False)
             raise
 
@@ -287,6 +298,7 @@ class FullAppBridgeClient:
                 )
             status = hello.get("status")
             if status == "ready":
+                self.ready_hello = hello
                 return
             if status == "failed":
                 raise RuntimeError(f"Full-app progression baseline failed: {hello.get('error', 'unknown failure')}")
@@ -343,7 +355,11 @@ class FullAppBridgeClient:
         return self.call("history")
 
     def close(self) -> None:
-        self._cleanup(send_close=True)
+        started = time.monotonic()
+        try:
+            self._cleanup(send_close=True)
+        finally:
+            self.last_close_seconds = time.monotonic() - started
 
     def _cleanup(self, *, send_close: bool) -> None:
         try:

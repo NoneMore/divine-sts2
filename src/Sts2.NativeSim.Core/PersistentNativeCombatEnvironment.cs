@@ -54,6 +54,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private bool _isPoisoned;
 #pragma warning restore CS0649
     private string _hash = "";
+    private readonly NativePckFingerprintResult _pckFingerprint;
     private bool _runServicesInitialized;
     private bool MapResetActive => _resetRecipe?.Kind == NativeResetKind.Map;
     private bool RewardResetActive => _resetRecipe?.Kind == NativeResetKind.Reward;
@@ -93,7 +94,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             throw new InvalidOperationException("PersistentNativeCombatEnvironment is a process singleton; an active instance already exists.");
         assemblyPath = Path.GetFullPath(assemblyPath);
         _assemblyHash = ReflectionTools.HashFile(assemblyPath);
-        _pckHash = ReflectionTools.HashFile(pckPath);
+        _pckFingerprint = NativePckFingerprint.Read(pckPath);
+        _pckHash = _pckFingerprint.Sha256;
         _productVersion = FileVersionInfo.GetVersionInfo(assemblyPath).ProductVersion ?? "unknown";
         _context = new(assemblyPath);
         InitializeOnce();
@@ -105,6 +107,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         unlock_policy = UnlockPolicy,
         server = "sts2-native-sim-godot", persistent = true, certifying = false,
         game_build = new { version = _productVersion, assembly_sha256 = _assemblyHash, pck_sha256 = _pckHash },
+        pck_fingerprint = new { source = _pckFingerprint.Source, seconds = _pckFingerprint.Seconds,
+            bytes_hashed = _pckFingerprint.BytesHashed },
         methods = new[] { "hello", "catalog", "reset", "run_reset", "map_reset", "reward_reset", "item_reward_reset", "custom_reward_reset", "rest_reset", "event_reset", "observe", "run_observe", "map_observe", "reward_observe", "custom_reward_observe", "rest_observe", "event_observe", "legal_actions", "step", "run_step", "map_step", "reward_step", "custom_reward_step", "rest_step", "event_step", "fork", "restore", "diagnostics", "close" },
         supported_subset = new { characters = "native CharacterModel entries", encounters = "native EncounterModel entries", cards = "base/upgraded cards plus asynchronous native card, bundle, and relic choices", actions = new[] { "play_card", "use_potion", "discard_potion", "end_turn", "choose_cards", "choose_option", "choose_map", "choose_reward", "choose_rest", "choose_event", "open_treasure", "choose_treasure", "buy_shop", "choose_custom_reward", "skip_custom_rewards", "advance_act" }, potions = true, map = "native deterministic routing graph with composed combat, rest, event, treasure, shop, and inter-act transitions", events = "native model initialization, option continuations, nested event-created combats, blocking custom/linked rewards, and the final victory event" }
     };
