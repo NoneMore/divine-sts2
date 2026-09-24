@@ -119,6 +119,11 @@ internal sealed class NativeRunAdapter : INativeRunAdapter
             value.GetProperty("replayed_actions").GetInt32(),
             value.TryGetProperty("resident_prefix_hit", out JsonElement resident)
                 ? resident.GetBoolean()
+                : null,
+            // Only a profiled restore carries one, so a worker that was not asked to time itself
+            // reports no profile rather than a profile of zeroes.
+            value.TryGetProperty("profile", out JsonElement profile) && profile.ValueKind == JsonValueKind.Object
+                ? profile.Deserialize<RestoreProfile>()
                 : null);
     }
 }

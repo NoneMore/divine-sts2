@@ -32,6 +32,59 @@ public sealed class NativeRunCoordinatorTests
     }
 
     [Fact]
+    public async Task Restore_reports_where_its_time_went_to_the_caller()
+    {
+        ScriptedNativeRunAdapter adapter = ScenarioScript();
+        adapter.NextRestoreProfile = new()
+        {
+            ResidentCheckMs = 0.25,
+            RunRebuildMs = 120.5,
+            MapRebuildMs = 80.25,
+            ReplayMs = 9.0,
+            CaptureMs = 4.75,
+            TotalMs = 215.0,
+            UnattributedMs = 0.25,
+        };
+        adapter.NextRestoreResidentPrefixHit = false;
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+        await coordinator.StepAsync("ancient-door");
+        string branch = coordinator.Fork();
+        await coordinator.StepAsync("ancient-choice-2");
+
+        EnvironmentResult restored = await coordinator.RestoreAsync(branch);
+        JsonElement transition = JsonSerializer.SerializeToElement(restored.Transition);
+        JsonElement profile = transition.GetProperty("profile");
+
+        Assert.False(transition.GetProperty("resident_prefix_hit").GetBoolean());
+        Assert.Equal(0.25, profile.GetProperty("resident_check_ms").GetDouble());
+        Assert.Equal(120.5, profile.GetProperty("run_rebuild_ms").GetDouble());
+        Assert.Equal(80.25, profile.GetProperty("map_rebuild_ms").GetDouble());
+        Assert.Equal(9.0, profile.GetProperty("replay_ms").GetDouble());
+        Assert.Equal(4.75, profile.GetProperty("capture_ms").GetDouble());
+        Assert.Equal(215.0, profile.GetProperty("total_ms").GetDouble());
+        Assert.Equal(0.25, profile.GetProperty("unattributed_ms").GetDouble());
+    }
+
+    [Fact]
+    public async Task Restore_reports_no_profile_when_the_environment_did_not_time_it()
+    {
+        ScriptedNativeRunAdapter adapter = ScenarioScript();
+        NativeRunCoordinator coordinator = new(adapter);
+        coordinator.RunReset(Request());
+        EnvironmentResult ancient = await coordinator.StepAsync("ancient-door");
+        string branch = coordinator.Fork();
+        await coordinator.StepAsync("ancient-choice-2");
+
+        EnvironmentResult restored = await coordinator.RestoreAsync(branch);
+        JsonElement transition = JsonSerializer.SerializeToElement(restored.Transition);
+
+        Assert.Equal(ancient.StateHash, restored.StateHash);
+        Assert.False(transition.TryGetProperty("profile", out _));
+        Assert.False(transition.TryGetProperty("resident_prefix_hit", out _));
+    }
+
+    [Fact]
     public async Task Invalid_action_does_not_reach_the_native_port_or_mutate_state()
     {
         ScriptedNativeRunAdapter adapter = ScenarioScript();

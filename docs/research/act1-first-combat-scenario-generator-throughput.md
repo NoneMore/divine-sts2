@@ -1,13 +1,13 @@
 # 第一战场景生成器的吞吐诊断
 
-**测量日期：** 2026-09-25，`feat/first-combat-generator`（HEAD `193e51c`）。本文把**实测**与**推断**分开标出：标"实测"的数字来自本次运行，标"推断"的是由实测外推或由源码读出的结论，两者的可信度不同。原始产物在本机 gitignored 的 `artifacts/scenario-performance/` 下。
+**测量日期：** 2026-09-25，`feat/first-combat-generator`（HEAD `193e51c`）。本文把**实测**与**推断**分开标出：标"实测"的数字来自本次运行，标"推断"的是由实测外推或由源码读出的结论，两者的可信度不同。原始产物在本机 gitignored 的 `artifacts/scenario-performance/` 下。文末另有一处**补测**：同日晚在 HEAD `0432993` 上测了 `restore` 的逐部件构成与快路径命中数，它把 Q13 的条件 (ii) 从悬置改为满足；那一节的数字同样标为实测。
 
 ## 结论
 
 1. **记录中的基线在本机today 精确复现**（热 worker 中位 4.033 s / 2.975 行每秒，记录值 4.049 / 2.963），因此后续比较有可靠基准，不需要重新建立基线。
 2. **但那个基线不代表批量成本。** 它的请求只有 4 个 element，被 worker 启动与首次驱动的预热吃掉大部分。实测同一 worker 在 64 个 element 上的稳态成本是 **0.406 s/element**，而 4-element 请求是 **1.008 s/element** —— 差 **2.5 倍**。参考请求 B（512 element / 8 worker）端到端 **41.3 s，即 12.4 element/秒、37.2 行/秒**，是参考请求 A 的 1 worker 行速率的 **20 倍**。
 3. **按 spec 的规模，这个生成器已经够快。** spec 的第一刀是"a few thousand records"：3000 行按实测的 37.2 行/秒约 **81 秒**；就是 spec 列为 out of scope 的 10⁵ 行，线性外推约 **45 分钟**。真正的账不是"太慢"，而是**之前的数字测错了对象**。
-4. **成本确实集中在 native 侧**：实测单 worker 稳态下 `restore` 占生成时间 **46.9%**、`run_reset` **31.3%**、`run_step` **21.3%**。**Q13 门槛的条件 (i) 与 (iii) 满足；条件 (ii) 悬于一个尚未测量的事实**，见下文"仍然待查的一件事"。
+4. **成本确实集中在 native 侧**：实测单 worker 稳态下 `restore` 占生成时间 **46.9%**、`run_reset` **31.3%**、`run_step` **21.3%**。**Q13 门槛的三个条件现在都满足**：条件 (i) 与 (iii) 由本次运行满足，条件 (ii) 由文末的补测回答——参考请求 A 的 8 次 `restore` 里 resident-prefix 快路径命中 **0 次**，每次 restore 中位 163 ms（均值 206 ms）中 **95.3% 是重建 run 的 act（Reset + 房间 + 地图）**，重放只占 **3.7%**。
 5. **唯一存活下来的便宜改动是共享 PCK 指纹**：实测每 worker 省 **1.393 s**（启动的 54.7%）——占参考请求 A 的 **21%**，占参考请求 B 的 **3–7%**。机制早已存在（`NativeWorkerPool` 会测量一次并全池共享），只是 corpus 路径没接线。
 6. **一个已实测的缺陷比任何微优化都重要**：种子 `200150` 的一个 element 花 **66.79 s** 并产 1 条失败行、换掉 1 个 worker——是正常 element 的 **164 倍**，单次代价约等于整个 512-element 批量的 **1.6 倍**。
 7. **两条被证伪的假设**：`numpy`（经 `gym`）的导入开销可忽略（实测包导入 0.344 s、`pkg+gym` 0.337 s），此前把它当作内循环成本的说法不成立；以及"加 worker 就能线性加速"——参考请求 A 上 4 worker 相对 1 worker 只有 1.15 倍。
@@ -39,6 +39,9 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; $s = foreach ($n in 1..128) { 
 
 # 单 worker 稳态探针（漂移 + RPC 构成 + PCK 指纹对照）
 pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/experiments/scenario_diagnosis_probe.py --elements 64 --seeds-per-chunk 2 --out artifacts/scenario-performance/diag-probe.json'
+
+# 补测：参考请求 A 的每次 restore 花在哪（worker 需先建成 Godot worker 读的 Debug 配置）
+pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/experiments/scenario_restore_profile.py --rounds 3 --out artifacts/scenario-performance/restore-profile.json'
 ```
 
 ## 环境复现（实测）
@@ -147,21 +150,36 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 | 条件 | 判定 | 依据 |
 | --- | --- | --- |
 | (i) 单一原因占批量墙钟 ≥25% | **满足** | `restore` ≥41%（稳健下界），`run_reset` ≈28–29%（推断） |
-| (ii) 移除它可信地带来 ≥1.5× | **未决** | 上界：仅去 `restore` 为 1/(1−0.42)=**1.72×**；去 `restore`+`run_reset`（0.42+0.29）为 **3.4×**。但"能否移除"未证 |
+| (ii) 移除它可信地带来 ≥1.5× | **满足** | 补测证明那 ~200 ms 花在**重建**（95.3%）而不是重放（3.7%），且重建的是"一步之前还在同一进程里"的状态；最窄改动与验收见下。上界：仅去 `restore` 为 1/(1−0.42)=**1.72×** |
 | (iii) 过字节同一 + 真机差分双门 | **可满足** | 本次 9 对分片/summary 字节同一；[`scenario_handle_reuse_acceptance.py`](../../tests/acceptance/scenario_handle_reuse_acceptance.py) 是现成的 native 差分 |
 
-**结论：按 Q13 规则，现在不进入实现，先解决决定条件 (ii) 的那一个事实。** 该事实是一个有界的代码问题，不是新特性。
+**结论（2026-09-25 补测后更新）：Q13 三个条件全部满足，"移除 `restore`"值得做。** 本文原来悬着的那一个事实已测——重建是真的，而且重建的正是重放解释不了的那部分开销；实现按此判定另开一张票。
 
-### 仍然待查的一件事
+### 待查的那件事：已测（2026-09-25 补测，基线 HEAD `0432993`，测的是本票改动的构建）
 
-`restore` 昂贵的原因按源码是：run-mode 的分支不持有 combat 快照（[`PersistentNativeCombatEnvironment.cs:3321-3326`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs#L3321-L3326)），故 `RestoreAsync` 落入 `ReconstructAsync`（[`:674`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs#L674)、[`:794-821`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs#L794-L821)）= 重建 run + 重跑地图 + 重放动作历史。**但同一份源码里存在一个 resident-prefix 快路径**，命中时 `restore` 的 `elapsed_ms` 直接报 `0.0`（[`NativeRunCoordinator.cs:342-344`](../../src/Sts2.NativeSim.Core/NativeRunCoordinator.cs#L342-L344)）。
+原问题只有两种答案，这一次补测把它分辨开：参考请求 A 的 8 次 `restore` 里快路径命中几次，以及那 ~215 ms 落在哪几个部件上。为此给 native 侧加了**开关式**逐部件计时（`STS2_RESTORE_PROFILE=1`，默认关闭；计时只随该次 `restore` 的 `transition` 回到调用方，不进任何 corpus），并用 [`python/experiments/scenario_restore_profile.py`](../../python/experiments/scenario_restore_profile.py) 驱动参考请求 A 三轮，逐次记录 RPC 墙钟与 worker 自报的部件耗时。分不清的归因不算数，所以每个数都来自打点，而不是由总数相减或推断。
 
-实测这 8 次 `restore` 花 1.720 s（每次约 215 ms），**说明快路径基本没有命中——或者命中了，215 ms 花在别处**。二者指向完全不同的结论：
+**实测：命中 0/8。** 三轮各 8 次 `restore`，共 24 次，**resident-prefix 快路径命中 0 次**；每次重放的历史长度都是 **1**（进入 Ancient 房间的那一步 `choose_map`），即这 24 次全部走了 `ReconstructAsync`。
 
-- 若不命中且可修 ⇒ `restore` 接近免费，**门槛 (ii) 通过，值得做**；
-- 若已命中、其余 215 ms 是重放本身不可省 ⇒ `restore` 近乎不可压缩，**门槛 (ii) 不通过，应当停**。
+**实测：那 ~200 ms 是重建，不是重放。** 24 次 `restore` 的 worker 自报合计 4932.9 ms：
 
-这是一个可在 native 侧计时的单一问题（例如分别给"快路径命中"与"重放"两条路径打点，跑参考请求 A 即可分辨），**建议作为下一张票的唯一内容**。
+| 部件 | 合计 | 占比 | 单次（中位 / 最小–最大） |
+| --- | ---: | ---: | ---: |
+| `resident_check_ms`（resident-prefix 比较本身） | 0.5 ms | 0.01% | 0.0006 / 0.0004–0.16 |
+| `run_rebuild_ms`（`Construct`：角色、牌组、遗物、run） | 44.1 ms | 0.9% | 1.40 / 1.20–4.41 |
+| `map_rebuild_ms`（`InitializeRunMap` → `RunManager.Reset` + `GenerateRooms` + `GenerateMap`） | 4699.6 ms | **95.3%** | 154.6 / 37.6–379.1 |
+| `replay_ms`（重放 checkpoint 的动作历史） | 182.8 ms | 3.7% | 7.38 / 6.83–9.29 |
+| `capture_ms`（重建后的观察、合法动作与 hash） | 2.8 ms | 0.06% | 0.11 / 0.08–0.22 |
+| 未被命名部件覆盖 | 3.1 ms | 0.06% | 0.006 / 0.004–0.99 |
+| `total_ms`（每次 restore 的全部） | 4932.9 ms | 100% | 163.4 / 45.7–388.8 |
+
+每 restore 的分布是偏的：总量除以 24 得**均值 205.5 ms**，而中位是 **163.4 ms**，两者都要读，不要拿一个当另一个。按 RPC 墙钟，单次 `restore` 为**中位 164.2 ms / 均值 209.1 ms**（46.5–401.0），24 次合计 **5.017 s**；worker 之外的部分（管道、协调器的投影与 hash）合计 **84.4 ms**，占 **1.7%**——协议开销不是成本，成本在 native 的重建里。本文件记录的参考请求 A `restore` ×8 = **1.720 s** 是三轮中位数，补测三轮各自为 **1.541 / 1.731 / 1.745 s**，与之吻合。
+
+**判定：重建是真的，而且它重建的正是重放解释不了的那部分开销。** 原问题的第二种可能（"已经命中快路径，剩下的 215 ms 是重放本身不可省"）被两条实测排除：命中 0/8，重放占 3.7%。开销的 95.3% 是重跑这个 run 的 act——一个打点里的 `RunManager.Reset` + `GenerateRooms`（为**每个** act 抽事件与遭遇池）+ `GenerateMap`；三者没有被分开计时，所以这一条只能说"act 的重建占 95.3%"，不能说其中哪一段最多。同一个 element 里，act 因此被生成**三次**（一次 `run_reset` + 两次 `restore`），而三次生成的是同一个 run 的同一个 act。
+
+**最窄的改动：把 combat 分支早就有的快照给 run-mode 分支。** `CaptureCombatSnapshot` 对 run-mode 的 recipe 直接返回 null（[`PersistentNativeCombatEnvironment.cs:3343-3348`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs#L3343-L3348)），所以 run-mode 的 checkpoint 只能重建；而 combat 分支靠自己的快照跳过 `ReconstructAsync` 与重放（[`:649-682`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs#L649-L682)）。两者的差就是这次测到的 ~200 ms：要恢复的状态一步之前还在同一进程里，重建只是把已经存在的东西再推导一遍。因此最窄的改动是让 `Branch` 的 checkpoint 也携带 run-mode 状态：在取 checkpoint 处捕获，在 `RestoreAsync` 里应用到活着的 run 上，而不是 `Construct` + `InitializeRunMap` + 重放，并照旧由 `ExpectedHash` 的分歧检查兜底。shipped game 自带这一类恢复路径（`SetUpSavedSingleplayer` / `SerializableActMap` 经 `SavedMapsToLoad` 重建 run 与地图，**不**重跑 `GenerateRooms`），是这条改动最省新表面的落点。
+
+**验收：现成的两道门，补测都跑过。** [`scenario_handle_reuse_acceptance.py`](../../tests/acceptance/scenario_handle_reuse_acceptance.py) 是 native 差分（同 build 上逐行、逐编码字节等于 native fork 参考），补测通过：6 element / 18 行 / 12 次 `restore`，与参考计数一致。corpus 的字节同一（`corpus_differential: byte_identical: true`）是第二道：同一请求在 `STS2_RESTORE_PROFILE` 开与关下写出的 `worker-00.jsonl.gz` 与 `summary.json` 的 SHA-256 完全相同。这一条要说清它能证明什么：驱动从不读 `transition`（[`_scenario_driver.py:425`](../../python/sts2_native_sim/_scenario_driver.py#L425)），所以计时本来就没有进入行的路径，字节同一证明的是"开着开关跑出来的批量与关着时逐字节无法区分"，而不是"差点就漏进去了"。
 
 ## 建议
 
@@ -169,21 +187,22 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 
 1. **把共享 PCK 指纹接到 corpus 路径**：在 `_native_worker` / `scenarios.py` 的默认工厂里，对整个批量测量一次 `PckFingerprint` 并下传。实测省 1.393 s/worker。离线测试用假 worker，不受影响；真机验收可用"分片字节同一"断言。
 2. **先修超时缺陷再谈规模化**：单次 66.8 s 且换 worker，发生率未知。在它被理解之前，任何长批量（如 spec 的 10⁵ 行）的墙钟都不可预测。这属于缺陷诊断，不属于本方案。
+3. **补上 run-mode checkpoint 的快照**：这是补测之后**唯一**越过 Q13 门槛的 native 改动——`restore` 占批量墙钟 ≥41%，而其中 95.3% 是重建一个一步之前还在进程里的 run（见上文"待查的那件事：已测"）。它比第 1 条贵得多，所以先用 native 差分与分片字节同一两道门把改动框住。
 
 **建议不做：**
 
-3. **不要为参考请求 A 优化。** 它的每 element 成本是稳态的 2.5 倍、是参考请求 B 每行成本的 20 倍；优化它等于优化预热。
-4. **不追**已测掉的捷径：handle 复用（已做，+1.9%）、native batch RPC（1.03–1.05×）、以及完全绕过 shipped run 的 fast compiler（需 34×–101×，原型 2288 个叶字段只对上 6 个）。
-5. **如果目标就是 spec 的"a few thousand records"，做到第 1、2 条即可停。** 实测 37.2 行/秒意味着 3000 行约 81 秒。
+4. **不要为参考请求 A 优化。** 它的每 element 成本是稳态的 2.5 倍、是参考请求 B 每行成本的 20 倍；优化它等于优化预热。
+5. **不追**已测掉的捷径：handle 复用（已做，+1.9%）、native batch RPC（1.03–1.05×）、以及完全绕过 shipped run 的 fast compiler（需 34×–101×，原型 2288 个叶字段只对上 6 个）。
+6. **如果目标就是 spec 的"a few thousand records"，做到第 1、2 条即可停。** 实测 37.2 行/秒意味着 3000 行约 81 秒；第 3 条是给批量尺度上更快的余量，不是达标的前提。
 
 **已被本次测量否证的假设：**
 
-6. **`numpy`/`gym` 的导入时间开销**：实测 `pass` 0.053 s、`import sts2_native_sim` 0.344 s、`import sts2_native_sim.gym` 0.337 s、CLI 模块 0.524 s。gym 相对包本体**测不出额外时间成本**，故"懒加载 gym 能加快 CLI 启动"这条理由不成立。注意这只否证了**时间**：此前"父进程约 508 MiB 常驻来自 numpy"说的是**内存**，本文没有测量内存，该说法既未被证实也未被否证。
+7. **`numpy`/`gym` 的导入时间开销**：实测 `pass` 0.053 s、`import sts2_native_sim` 0.344 s、`import sts2_native_sim.gym` 0.337 s、CLI 模块 0.524 s。gym 相对包本体**测不出额外时间成本**，故"懒加载 gym 能加快 CLI 启动"这条理由不成立。注意这只否证了**时间**：此前"父进程约 508 MiB 常驻来自 numpy"说的是**内存**，本文没有测量内存，该说法既未被证实也未被否证。
 
 ## 限制
 
 - 参考请求 B 只有**两次**运行（41.487 / 41.033 s），不足以给出范围；参考请求 A 为三轮。
 - 成本份额在**单 worker 无争用**下测得，搬到 8 worker 批量是推断，本文已标出稳健下界。
 - 探针的每 element 漂移显示成本**随种子**变化（0.21–0.79 s）；本次未按 Ancient 选项数分层。
-- 未做 CPU/内存 profiling，未测争用系数，未测 `restore` 快路径命中率。
+- 未做 CPU/内存 profiling，未测争用系数；`restore` 的快路径命中率与逐部件构成由文末补测回答（24 次全不命中），但补测只在单 worker、参考请求 A 上做，没有在 8 worker 争用下重测。
 - `artifacts/scenario-performance/` 被 gitignore，原始 JSON 与 corpus 目录不在 checkout 内；可复现的结论以本文表格为准。

@@ -634,27 +634,41 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         ThrowIfPoisoned();
         if (!_branches.TryGetValue(id, out Branch? branch)) throw new ProtocolException("unknown_state_handle", id);
         List<string> branchHistory = ResolveBranchHistory(branch);
-        if (StringComparer.Ordinal.Equals(_hash, branch.ExpectedHash) && _history.SequenceEqual(branchHistory, StringComparer.Ordinal))
+        RestoreProfile? profile = RestoreProfile.Begin();
+        long startedAt = RestoreProfile.Tick();
+        long residentCheckStartedAt = RestoreProfile.Tick();
+        bool residentPrefix = StringComparer.Ordinal.Equals(_hash, branch.ExpectedHash)
+            && _history.SequenceEqual(branchHistory, StringComparer.Ordinal);
+        profile?.RecordResidentCheck(residentCheckStartedAt);
+        if (residentPrefix)
         {
             _currentBranchHandle = id;
-            return Capture(new { kind = "restore", replayed_actions = 0, resident_prefix_hit = true, elapsed_ms = 0.0 });
+            EnvironmentResult resident = Capture(new { kind = "restore", replayed_actions = 0, resident_prefix_hit = true, elapsed_ms = 0.0, profile });
+            // Closed after the capture so that a hit's total measures the same span as a
+            // reconstruction's. This transition holds the very instance, so what it reports is what
+            // the profile says by the time the caller reads it.
+            profile?.Close(startedAt);
+            return resident;
         }
         QuiesceOutstandingTransition();
         Stopwatch timer = Stopwatch.StartNew();
 
+        long snapshotStartedAt = RestoreProfile.Tick();
         if (branch.CombatSnapshot is not null)
         {
             if (RestoreCombatSnapshot(branch.CombatSnapshot))
             {
+                profile?.RecordSnapshot(snapshotStartedAt);
                 _history.Clear();
                 _history.AddRange(branchHistory);
                 _currentBranchHandle = id;
-                EnvironmentResult snapResult = Capture(null);
+                EnvironmentResult snapResult = CaptureRestored(profile);
                 if (StringComparer.Ordinal.Equals(snapResult.StateHash, branch.ExpectedHash))
                 {
                     timer.Stop();
                     _lastSnapshotDebug = "snapshot_success";
-                    return snapResult with { Transition = new { kind = "snapshot_restore", replayed_actions = 0, elapsed_ms = timer.Elapsed.TotalMilliseconds } };
+                    profile?.Close(startedAt);
+                    return snapResult with { Transition = new { kind = "snapshot_restore", replayed_actions = 0, elapsed_ms = timer.Elapsed.TotalMilliseconds, profile } };
                 }
                 else
                 {
@@ -671,7 +685,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             _lastSnapshotDebug = "snapshot_was_null";
         }
 
-        await ReconstructAsync(branch.ResetRecipe).ConfigureAwait(false);
+        await ReconstructAsync(branch.ResetRecipe, profile).ConfigureAwait(false);
+        long replayStartedAt = RestoreProfile.Tick();
         foreach (string actionId in branchHistory)
         {
             LegalAction action = BuildActions().Single(candidate => candidate.ActionId == actionId);
@@ -784,14 +799,29 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             }
             _history.Add(actionId);
         }
+        profile?.RecordReplay(replayStartedAt);
         _currentBranchHandle = id;
-        EnvironmentResult result = Capture(null);
+        EnvironmentResult result = CaptureRestored(profile);
         if (!StringComparer.Ordinal.Equals(result.StateHash, branch.ExpectedHash))
             throw new ProtocolException("replay_divergence", $"Expected {branch.ExpectedHash}, obtained {result.StateHash}.", new { history_length = branchHistory.Count });
-        timer.Stop(); return result with { Transition = new { kind = "restore", replayed_actions = branchHistory.Count, elapsed_ms = timer.Elapsed.TotalMilliseconds } };
+        timer.Stop();
+        profile?.Close(startedAt);
+        return result with { Transition = new { kind = "restore", replayed_actions = branchHistory.Count, elapsed_ms = timer.Elapsed.TotalMilliseconds, profile } };
     }
 
-    private async Task ReconstructAsync(NativeResetRecipe recipe)
+    /// <summary>
+    /// Captures the state a restore has just reached, timing the capture as its own part: building
+    /// the observation, its legal actions and its hash is work the restore did and the profile names.
+    /// </summary>
+    private EnvironmentResult CaptureRestored(RestoreProfile? profile)
+    {
+        long startedAt = RestoreProfile.Tick();
+        EnvironmentResult result = Capture(null);
+        profile?.RecordCapture(startedAt);
+        return result;
+    }
+
+    private async Task ReconstructAsync(NativeResetRecipe recipe, RestoreProfile? profile)
     {
         _reset = recipe.State;
         _resetRecipe = recipe;
@@ -810,8 +840,14 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         _customRewardKinds = recipe.CustomRewardKinds ?? [];
         _customRewardsLinked = recipe.CustomRewardsLinked;
         _rewardSets.Clear();
+        long runRebuildStartedAt = RestoreProfile.Tick();
         Construct(recipe.State);
+        profile?.RecordRunRebuild(runRebuildStartedAt);
 
+        // The room a recipe stands in is rebuilt by the recipe's own kind, so the part it is timed
+        // as is named for what the kind actually does: a run stands on a generated act map, and the
+        // other resets construct their room.
+        long modeInitStartedAt = RestoreProfile.Tick();
         switch (recipe.Kind)
         {
             case NativeResetKind.Combat:
@@ -837,6 +873,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
             default:
                 throw new UnreachableException();
         }
+        if (recipe.Kind == NativeResetKind.Run) profile?.RecordMapRebuild(modeInitStartedAt);
+        else profile?.RecordModeInit(modeInitStartedAt);
     }
 
     private void InitializeOnce()

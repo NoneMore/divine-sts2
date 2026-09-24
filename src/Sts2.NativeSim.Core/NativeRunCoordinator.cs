@@ -345,6 +345,11 @@ public sealed class NativeRunCoordinator
             };
             if (metadata.ResidentPrefixHit is { } resident)
                 transition["resident_prefix_hit"] = resident;
+            // Where the restore spent its time, timed by the environment that did it. Only a
+            // profiling worker reports one, and it is reported to this caller rather than written
+            // anywhere a corpus owns (ADR-0008).
+            if (metadata.Profile is { } profile)
+                transition["profile"] = profile;
             return Project(restored.Frame, transition);
         }
         finally

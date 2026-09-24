@@ -51,7 +51,8 @@ internal sealed record NativeDecisionCapture(
 internal sealed record NativeRestore(
     string Kind,
     int ReplayedActions,
-    bool? ResidentPrefixHit = null);
+    bool? ResidentPrefixHit = null,
+    RestoreProfile? Profile = null);
 
 /// <summary>
 /// Serial implementation of the active-run interface. Its action table is built

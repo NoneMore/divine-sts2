@@ -62,6 +62,20 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
     public int ItemRewardResetCount { get; private set; }
     public int CustomRewardResetCount { get; private set; }
 
+    /// <summary>
+    /// The timing the next restore reports, as the environment reports one when it is profiling. A
+    /// double that reports none is the environment with profiling off, which is not the same answer
+    /// as a restore that took no time.
+    /// </summary>
+    public RestoreProfile? NextRestoreProfile { get; set; }
+
+    /// <summary>
+    /// The resident-prefix outcome the next restore reports, as the environment reports one: true
+    /// when the state asked for was already resident, false when it had to be reached, and null when
+    /// this double does not say.
+    /// </summary>
+    public bool? NextRestoreResidentPrefixHit { get; set; }
+
     public ScriptedNativeRunAdapter Frame(string name, string observation, params LegalAction[] actions)
     {
         using JsonDocument document = JsonDocument.Parse(observation);
@@ -604,7 +618,17 @@ internal sealed class ScriptedNativeRunAdapter : INativeRunAdapter
         _suspendedRewardParents.Clear();
         for (int index = 0; index < restored.SuspendedRewardDepth; index++)
             _suspendedRewardParents.Push(new());
-        return Task.FromResult(Capture());
+        NativeDecisionCapture captured = Capture();
+        return Task.FromResult(NextRestoreProfile is null && NextRestoreResidentPrefixHit is null
+            ? captured
+            : captured with
+            {
+                Restore = new NativeRestore(
+                    "restore",
+                    0,
+                    NextRestoreResidentPrefixHit,
+                    NextRestoreProfile)
+            });
     }
 
     private NativeDecisionCapture Result(ScriptedFrame frame)
