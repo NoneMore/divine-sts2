@@ -8,8 +8,15 @@ import json
 from pathlib import Path
 
 import pytest
+from sts2_native_sim import reuse_certification
 from sts2_native_sim.parity_projection import project_record
-from sts2_native_sim.reuse_certification import evaluate, issue_certificate
+from sts2_native_sim.reuse_certification import (
+    CertificationError,
+    current_certification_identity,
+    evaluate,
+    issue_certificate,
+    require_certificate,
+)
 
 from tests.acceptance.parity_run_acceptance import SAMPLE
 
@@ -102,3 +109,61 @@ def test_only_complete_report_issues_a_path_free_certificate(tmp_path):
     assert certificate["report_sha256"] == hashlib.sha256(report_path.read_bytes()).hexdigest()
     assert json.loads(certificate_path.read_text()) == certificate
     assert str(tmp_path) not in certificate_path.read_text()
+
+
+def test_matching_certificate_authorizes_reuse_and_checks_local_evidence(tmp_path):
+    report_path = tmp_path / "report.json"
+    report_path.write_text('{"success": true}\n', encoding="utf-8")
+    identity = {"assembly_sha256": "A" * 64, "pck_sha256": "B" * 64,
+                "lifecycle_protocol_revision": "reuse-v1", "profile_policy_revision": "profile-v1",
+                "scenario_set_revision": "scenarios-v1"}
+    certificate = {"identity": identity, "passed_at_utc": "2026-09-24T00:00:00+00:00",
+                   "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest()}
+    certificate_path = tmp_path / "certificate.json"
+    certificate_path.write_text(json.dumps(certificate), encoding="utf-8")
+
+    assert require_certificate(identity, certificate_path, report_path) == certificate
+    report_path.unlink()
+    assert require_certificate(identity, certificate_path, report_path) == certificate
+
+
+def test_missing_malformed_stale_and_digest_mismatched_certification_fails_closed(tmp_path):
+    path = tmp_path / "certificate.json"
+    report_path = tmp_path / "report.json"
+    identity = {"assembly_sha256": "A" * 64, "pck_sha256": "B" * 64,
+                "lifecycle_protocol_revision": "reuse-v1", "profile_policy_revision": "profile-v1",
+                "scenario_set_revision": "scenarios-v1"}
+    certificate = {"identity": identity, "passed_at_utc": "2026-09-24T00:00:00+00:00",
+                   "report_sha256": hashlib.sha256(b"valid evidence").hexdigest()}
+    with pytest.raises(CertificationError, match="missing.*--process-mode fresh"):
+        require_certificate(identity, path, report_path)
+
+    path.write_text("{bad json", encoding="utf-8")
+    with pytest.raises(CertificationError, match="cannot be read"):
+        require_certificate(identity, path, report_path)
+    for invalid in (dict(certificate, report_sha256="wrong"), dict(certificate, passed_at_utc="yesterday")):
+        path.write_text(json.dumps(invalid), encoding="utf-8")
+        with pytest.raises(CertificationError, match="malformed"):
+            require_certificate(identity, path, report_path)
+
+    for key in identity:
+        stale = copy.deepcopy(certificate)
+        stale["identity"][key] = "C" * 64 if key.endswith("sha256") else "changed-v2"
+        path.write_text(json.dumps(stale), encoding="utf-8")
+        with pytest.raises(CertificationError, match=f"stale.*{key}"):
+            require_certificate(identity, path, report_path)
+
+    path.write_text(json.dumps(certificate), encoding="utf-8")
+    report_path.write_bytes(b"tampered evidence")
+    with pytest.raises(CertificationError, match="digest differs"):
+        require_certificate(identity, path, report_path)
+
+
+def test_stale_built_bridge_revision_blocks_identity_before_reuse(monkeypatch):
+    class BuiltRevision:
+        stdout = json.dumps({"lifecycle_protocol_revision": "old-reuse-v0",
+                             "profile_policy_revision": "progression-complete-v1"})
+
+    monkeypatch.setattr(reuse_certification.subprocess, "run", lambda *_args, **_kwargs: BuiltRevision())
+    with pytest.raises(CertificationError, match="Built bridge.*source"):
+        current_certification_identity(BUILD, "scenarios-v1")

@@ -37,10 +37,10 @@ branch in the shipped game, as ticket 14 measured, and a *reward set* is not dri
 all. So nothing here claims complete Ancient-choice coverage; it claims the choices it names and the
 nested kinds it actually drove.
 
-The default run launches one fresh menu-start process per sample. ``--reuse-candidate`` instead runs
-the complete fixed set through one serial reusable worker and one sandbox: the first entry uses the
-menu path, and subsequent entries use direct warm starts. Its report includes lifecycle and process
-evidence but does not issue reuse certification.
+The default run requires certification and executes the complete fixed set through one serial reusable
+worker and sandbox: the first entry uses the menu path, and subsequent entries use direct warm starts.
+``--process-mode fresh`` starts one menu-path process per entry, including on uncertified builds.
+Ordinary parity reads certification but never issues it.
 
 Both Act variants are ordinary compared scenarios. The full-app sandbox materializes every Act as
 discovered before it becomes ready, so ``ActModel.GetRandomList`` follows the run seed instead of the
@@ -83,7 +83,13 @@ from sts2_native_sim.parity_projection import (
     project_record,
     shape_paths,
 )
+from sts2_native_sim.paths import REPOSITORY_ROOT
 from sts2_native_sim.reusable_full_app_worker import ReusableFullAppWorker, RunEntry
+from sts2_native_sim.reuse_certification import (
+    CertificationError,
+    current_certification_identity,
+    require_certificate,
+)
 from sts2_native_sim.scenarios import SCENARIO_RECORD, ScenarioRequest, generate_rows
 
 #: The stage word the bridge reports while a flat card-set prompt is open, the action type that
@@ -198,6 +204,8 @@ SAMPLE: tuple[Sample, ...] = (
 SCENARIO_SET_REVISION = "act1-combat1-v1-" + hashlib.sha256(
     json.dumps([[sample.label, sample.relic] for sample in SAMPLE], separators=(",", ":")).encode("utf-8")
 ).hexdigest()[:16]
+CERTIFICATE_PATH = REPOSITORY_ROOT / "certifications" / "full-app-reuse.json"
+CERTIFICATION_REPORT_PATH = REPOSITORY_ROOT / "artifacts" / "reuse-certification" / "report.json"
 
 
 def _check(condition: bool, message: str) -> None:
@@ -596,6 +604,7 @@ def _reuse_candidate_result(
 def report(
     results: list[dict[str, Any]], build: dict[str, Any], complete_sample: bool,
     *, process_mode: str = "fresh", total_wall_seconds: float = 0.0,
+    certification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The run as a document: what was compared, what was covered, and what happened per sample.
 
@@ -618,7 +627,8 @@ def report(
     exercised = sorted(set().union(*(result.get("exercised_fields", []) for result in results)))
     one_process_evidence = False
     performance = None
-    if process_mode == "reuse-candidate":
+    reuse_mode = process_mode == "reuse"
+    if reuse_mode:
         process_count = max((result["replacement_count"] for result in results
                              if "replacement_count" in result), default=-1) + 1
         performance = {
@@ -658,7 +668,9 @@ def report(
         )
     document = {
         "success": len(matched) == len(results) and coverage_agrees and entries_agree
-                   and (process_mode != "reuse-candidate" or one_process_evidence),
+                   and (not reuse_mode or one_process_evidence),
+        "process_mode": process_mode,
+        "certification": certification,
         "game_build": build,
         "sample": {
             "size": len(results),
@@ -685,8 +697,8 @@ def report(
         "mismatched": len(results) - len(matched),
         "results": results,
     }
-    if process_mode == "reuse-candidate":
-        document.update({"process_mode": process_mode, "performance": performance,
+    if reuse_mode:
+        document.update({"performance": performance,
                          "one_process_evidence": one_process_evidence})
     return document
 
@@ -702,16 +714,17 @@ def main(argv: list[str] | None = None) -> int:
              "to re-drive the one that a dropped game process cost",
     )
     parser.add_argument("--report", type=Path, help="also write the report to this JSON file")
-    parser.add_argument("--reuse-candidate", action="store_true",
-                        help="collect one-process parity evidence with one reusable full-app worker")
+    parser.add_argument("--process-mode", choices=("reuse", "fresh"), default="reuse",
+                        help="reuse (default) requires a matching certification; fresh starts one menu-path game "
+                             "process per entry and works without certification")
     parser.add_argument(
         "--dump", type=Path,
         help="keep both observations and both projections of every sample that did not match, in this directory",
     )
     arguments = parser.parse_args(argv)
 
-    if arguments.reuse_candidate and (arguments.limit or arguments.only):
-        parser.error("--reuse-candidate requires the complete sixteen-entry sample")
+    if arguments.process_mode == "reuse" and (arguments.limit or arguments.only):
+        parser.error("reuse requires the complete sixteen-entry sample; select --process-mode fresh for a subset")
 
     wall_started = time.monotonic()
     samples = SAMPLE[: arguments.limit] if arguments.limit else SAMPLE
@@ -725,15 +738,40 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Recording {runs_to_record} runs with {arguments.workers} native workers...", flush=True)
         runs = _records(pool, samples)
         build = pool.workers[0].build
+        try:
+            identity = current_certification_identity(build, SCENARIO_SET_REVISION)
+        except CertificationError as error:
+            if arguments.process_mode == "reuse":
+                parser.error(str(error))
+            identity = {"assembly_sha256": build.get("assembly_sha256"),
+                        "pck_sha256": build.get("pck_sha256"),
+                        "scenario_set_revision": SCENARIO_SET_REVISION}
+        if arguments.process_mode == "reuse":
+            try:
+                certificate = require_certificate(identity, CERTIFICATE_PATH, CERTIFICATION_REPORT_PATH)
+            except CertificationError as error:
+                parser.error(str(error))
+            certification = {"status": "matched", "identity": identity,
+                             "passed_at_utc": certificate["passed_at_utc"],
+                             "report_sha256": certificate["report_sha256"]}
+        else:
+            certification = {"status": "not_required", "identity": identity}
         print(f"Recorded on game build {build['assembly_sha256']}; now driving the shipped game.", flush=True)
 
         results: list[dict[str, Any]] = []
-        if arguments.reuse_candidate:
+        if arguments.process_mode == "reuse":
             with ReusableFullAppWorker(FullAppClientConfig(worker_id=arguments.worker_id, process_mode="reuse")) as worker:
                 for offset, sample in enumerate(samples):
                     print(f"[{offset + 1}/{len(samples)}] reusing a shipped game for {sample.label}...", flush=True)
                     result = _reuse_candidate_result(sample, runs, worker, arguments.dump)
                     results.append(result)
+                    if offset == 0 and (
+                        worker.game_build != build
+                        or worker.lifecycle_protocol_revision != identity["lifecycle_protocol_revision"]
+                        or worker.progression_policy_revision != identity["profile_policy_revision"]
+                    ):
+                        raise CertificationError("Running bridge identity differs from certification; "
+                                                 "run the dedicated certify_full_app_reuse gate or select --process-mode fresh.")
                     state = "matched" if result.get("matched") else ("FAILED" if result.get("failure") else "MISMATCH")
                     print(f"    {sample.label}: {state}", flush=True)
         else:
@@ -745,8 +783,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {sample.label}: {state}", flush=True)
 
     document = report(results, build, complete_sample=tuple(samples) == SAMPLE,
-                      process_mode="reuse-candidate" if arguments.reuse_candidate else "fresh",
-                      total_wall_seconds=time.monotonic() - wall_started)
+                      process_mode=arguments.process_mode,
+                      total_wall_seconds=time.monotonic() - wall_started,
+                      certification=certification)
     if arguments.report is not None:
         arguments.report.parent.mkdir(parents=True, exist_ok=True)
         arguments.report.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")

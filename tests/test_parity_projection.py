@@ -376,7 +376,7 @@ def test_reuse_candidate_report_requires_one_process_and_complete_teardown_evide
         }
         for index, sample in enumerate(SAMPLE)
     ]
-    complete = report(results, build, complete_sample=True, process_mode="reuse-candidate", total_wall_seconds=42.0)
+    complete = report(results, build, complete_sample=True, process_mode="reuse", total_wall_seconds=42.0)
     assert complete["success"] is True
     assert complete["one_process_evidence"] is True
     assert complete["performance"] == {
@@ -390,22 +390,22 @@ def test_reuse_candidate_report_requires_one_process_and_complete_teardown_evide
     replacement = [dict(result) for result in results]
     replacement[-1]["pid"] = 456
     replacement[-1]["replacement_count"] = 1
-    assert report(replacement, build, True, process_mode="reuse-candidate")["success"] is False
+    assert report(replacement, build, True, process_mode="reuse")["success"] is False
 
     missing_teardown = [dict(result) for result in results]
     missing_teardown[3]["teardown"] = None
-    assert report(missing_teardown, build, True, process_mode="reuse-candidate")["success"] is False
+    assert report(missing_teardown, build, True, process_mode="reuse")["success"] is False
 
     stale_generation = [dict(result) for result in results]
     stale_generation[3]["teardown"] = dict(results[3]["teardown"], ended_generation=3)
-    assert report(stale_generation, build, True, process_mode="reuse-candidate")["success"] is False
+    assert report(stale_generation, build, True, process_mode="reuse")["success"] is False
 
     unrecorded = [
         {"label": sample.label, "character": sample.character, "ascension": sample.ascension,
          "nested_kinds": [], "matched": False, "failure": "scenario generation failed"}
         for sample in SAMPLE
     ]
-    no_launch = report(unrecorded, build, True, process_mode="reuse-candidate")
+    no_launch = report(unrecorded, build, True, process_mode="reuse")
     assert no_launch["success"] is False
     assert no_launch["performance"]["shipped_game_processes_started"] == 0
     assert no_launch["performance"]["maximum_live_process_count"] == 0

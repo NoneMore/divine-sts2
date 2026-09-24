@@ -4,9 +4,113 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .full_app_client import protocol_package_dir
+from .paths import REPOSITORY_ROOT
+
+IDENTITY_FIELDS = ("assembly_sha256", "pck_sha256", "lifecycle_protocol_revision",
+                   "profile_policy_revision", "scenario_set_revision")
+
+
+class CertificationError(ValueError):
+    """The requested reuse identity has no valid certification."""
+
+
+def current_certification_identity(build: dict[str, Any], scenario_set_revision: str) -> dict[str, str]:
+    """Read the contract revisions declared by the bridge and bind them to the current game."""
+    declarations = (
+        ("lifecycle_protocol_revision", "Sts2.NativeSim.Protocol/FullAppBridgeHandshake.cs",
+         "LifecycleProtocolRevision"),
+        ("profile_policy_revision", "Sts2.NativeSim.Protocol/ProgressionCompletePolicy.cs", "Revision"),
+    )
+    assembly, pck = build.get("assembly_sha256"), build.get("pck_sha256")
+    if not isinstance(assembly, str) or not isinstance(pck, str):
+        raise CertificationError("Current game build identity is incomplete; reuse cannot be authorized.")
+    identity = {"assembly_sha256": assembly, "pck_sha256": pck,
+                "scenario_set_revision": scenario_set_revision}
+    for field, source, name in declarations:
+        try:
+            contents = (REPOSITORY_ROOT / "src" / source).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise CertificationError(f"Cannot read current {field}; reuse cannot be authorized.") from error
+        matches = re.findall(rf'\bconst\s+string\s+{name}\s*=\s*"([^"]+)"\s*;', contents)
+        if len(matches) != 1:
+            raise CertificationError(f"Cannot determine current {field}; reuse cannot be authorized.")
+        identity[field] = matches[0]
+    script = (
+        '$ErrorActionPreference = "Stop"; '
+        '$assembly = [Reflection.Assembly]::LoadFrom($args[0]); '
+        '$lifecycle = $assembly.GetType("Sts2.NativeSim.Protocol.FullAppBridgeHandshake")'
+        '.GetField("LifecycleProtocolRevision").GetRawConstantValue(); '
+        '$profile = $assembly.GetType("Sts2.NativeSim.Protocol.ProgressionCompletePolicy")'
+        '.GetField("Revision").GetRawConstantValue(); '
+        '@{ lifecycle_protocol_revision = $lifecycle; profile_policy_revision = $profile } '
+        '| ConvertTo-Json -Compress'
+    )
+    try:
+        completed = subprocess.run(
+            ["pwsh", "-NoProfile", "-CommandWithArgs", script,
+             str(protocol_package_dir() / "Sts2.NativeSim.Protocol.dll")],
+            check=True, capture_output=True, text=True,
+        )
+        built = json.loads(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        raise CertificationError("Cannot read built bridge revisions; reuse cannot be authorized.") from error
+    if not isinstance(built, dict) or any(built.get(key) != identity[key] for key in (
+        "lifecycle_protocol_revision", "profile_policy_revision"
+    )):
+        raise CertificationError("Built bridge revisions differ from source; reuse cannot be authorized.")
+    if any(not isinstance(value, str) or not value for value in identity.values()):
+        raise CertificationError("Current game or bridge identity is incomplete; reuse cannot be authorized.")
+    return identity
+
+
+def require_certificate(identity: dict[str, str], certificate_path: Path,
+                        report_path: Path) -> dict[str, Any]:
+    """Authorize reuse from the committed record, checking local full evidence when available."""
+    remedy = "Run the dedicated certify_full_app_reuse gate and commit its certificate, or select --process-mode fresh."
+    try:
+        certificate = json.loads(certificate_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise CertificationError(f"Reuse certification is missing. {remedy}") from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise CertificationError(f"Reuse certification cannot be read. {remedy}") from error
+
+    fields = certificate.get("identity") if isinstance(certificate, dict) else None
+    timestamp = certificate.get("passed_at_utc") if isinstance(certificate, dict) else None
+    digest = certificate.get("report_sha256") if isinstance(certificate, dict) else None
+    try:
+        if not isinstance(timestamp, str):
+            raise TypeError("missing pass time")
+        passed_at = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError) as error:
+        raise CertificationError(f"Reuse certification is malformed. {remedy}") from error
+    if (set(certificate) != {"identity", "passed_at_utc", "report_sha256"}
+            or not isinstance(fields, dict) or set(fields) != set(IDENTITY_FIELDS)
+            or any(not isinstance(fields[key], str) or not fields[key] for key in IDENTITY_FIELDS)
+            or any(len(fields[key]) != 64 or any(char not in "0123456789abcdefABCDEF" for char in fields[key])
+                   for key in ("assembly_sha256", "pck_sha256"))
+            or passed_at.utcoffset() is None
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(char not in "0123456789abcdefABCDEF" for char in digest)):
+        raise CertificationError(f"Reuse certification is malformed. {remedy}")
+    if fields != identity:
+        changed = ", ".join(key for key in IDENTITY_FIELDS if fields[key] != identity.get(key))
+        raise CertificationError(f"Reuse certification is stale ({changed}). {remedy}")
+    try:
+        evidence = report_path.read_bytes()
+    except FileNotFoundError:
+        evidence = None  # The full report is an untracked artifact, not part of the portable trust record.
+    except OSError as error:
+        raise CertificationError(f"Reuse certification evidence cannot be read. {remedy}") from error
+    if evidence is not None and hashlib.sha256(evidence).hexdigest().lower() != digest.lower():
+        raise CertificationError(f"Reuse certification evidence digest differs. {remedy}")
+    return certificate
 
 
 def _clean_initial_history(row: dict[str, Any]) -> bool:
