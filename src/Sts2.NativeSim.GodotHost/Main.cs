@@ -212,6 +212,12 @@ public partial class Main : Node
                     "catalog" => environment.Catalog(),
                     "reset" => runCoordinator.CombatReset(Read<ResetRequest>(request.Parameters)),
                     "run_reset" => runCoordinator.RunReset(Read<ResetRequest>(request.Parameters)),
+                    #if DEBUG
+                    // RESEARCH PROTOTYPE: one-seed in-worker scenario batch.
+                    "generate_first_combat_scenarios_probe" => await runCoordinator.GenerateFirstCombatScenariosProbeAsync(
+                        Read<ResetRequest>(request.Parameters.GetProperty("state")),
+                        request.Parameters.GetProperty("light").GetBoolean()),
+                    #endif
                     "map_reset" => runCoordinator.MapReset(Read<ResetRequest>(request.Parameters)),
                     "reward_reset" => runCoordinator.RewardReset(Read<ResetRequest>(request.Parameters)),
                     "item_reward_reset" => runCoordinator.ItemRewardReset(Read<ItemRewardResetRequest>(request.Parameters)),

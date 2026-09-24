@@ -207,6 +207,97 @@ public sealed class NativeRunCoordinator
         }
     }
 
+    #if DEBUG
+    // RESEARCH PROTOTYPE: keep the native decision loop but omit coordinator projections for
+    // intermediate actions. The adapter still captures the full legacy observation and hash.
+    private async Task<DecisionFrame> StepFrameForScenarioProbeAsync(string actionId)
+    {
+        await _serial.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await Session.ApplyAsync(actionId).ConfigureAwait(false);
+            return Session.Current;
+        }
+        finally
+        {
+            _serial.Release();
+        }
+    }
+
+    // RESEARCH PROTOTYPE: one request per seed. This deliberately returns only the final
+    // combat projection, allowing an exact observation/hash comparison with generate_rows.
+    public async Task<object> GenerateFirstCombatScenariosProbeAsync(ResetRequest request, bool light)
+    {
+        Stopwatch timer = Stopwatch.StartNew();
+        Dictionary<string, double> phaseMs = new(StringComparer.Ordinal);
+        void Add(string phase, long started)
+        {
+            double elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            phaseMs[phase] = phaseMs.GetValueOrDefault(phase) + elapsed;
+        }
+        long tick = Stopwatch.GetTimestamp();
+        EnvironmentResult reset = RunReset(request);
+        Add("reset", tick);
+        LegalAction ancient = reset.LegalActions.First(action =>
+            action.Kind == "choose_map" && Convert.ToString(action.Parameters["point_type"]) == "Ancient");
+        tick = Stopwatch.GetTimestamp();
+        EnvironmentResult offered = await StepAsync(ancient.ActionId).ConfigureAwait(false);
+        Add("enter_ancient", tick);
+        string checkpoint = offered.StateHandle;
+        LegalAction[] choices = offered.LegalActions.Where(action => action.Kind == "choose_event").ToArray();
+        List<object> rows = [];
+        for (int i = 0; i < choices.Length; i++)
+        {
+            if (i > 0)
+            {
+                tick = Stopwatch.GetTimestamp();
+                await RestoreAsync(checkpoint).ConfigureAwait(false);
+                Add("restore", tick);
+            }
+            tick = Stopwatch.GetTimestamp();
+            DecisionFrame frame = await ProbeStepAsync(choices[i].ActionId, light).ConfigureAwait(false);
+            Add("choose_ancient", tick);
+            List<object> nested = [];
+            for (int step = 0; step < 64 && !frame.LegalActions.Any(action => action.Kind == "leave_event"); step++)
+            {
+                LegalAction pick = frame.LegalActions.First();
+                nested.Add(new { observation = frame.Observation, action = pick });
+                tick = Stopwatch.GetTimestamp();
+                frame = await ProbeStepAsync(pick.ActionId, light).ConfigureAwait(false);
+                Add("nested", tick);
+            }
+            if (!frame.LegalActions.Any(action => action.Kind == "leave_event"))
+                throw new ProtocolException("invalid_state", "Ancient choice did not finish within 64 nested steps.");
+            tick = Stopwatch.GetTimestamp();
+            frame = await ProbeStepAsync("leave_event", light).ConfigureAwait(false);
+            Add("leave_ancient", tick);
+            LegalAction node = frame.LegalActions.First(action => action.Kind == "choose_map");
+            tick = Stopwatch.GetTimestamp();
+            frame = await ProbeStepAsync(node.ActionId, light).ConfigureAwait(false);
+            Add("enter_combat", tick);
+            rows.Add(new
+            {
+                choice = choices[i],
+                nested,
+                node,
+                observation = frame.Observation,
+                state_hash = ComputeStateHash(frame)
+            });
+        }
+        timer.Stop();
+        return new { elapsed_ms = timer.Elapsed.TotalMilliseconds, phase_ms = phaseMs,
+            reset_observation = reset.Observation,
+            offered_observation = offered.Observation, rows };
+    }
+
+    private async Task<DecisionFrame> ProbeStepAsync(string actionId, bool light)
+    {
+        if (light) return await StepFrameForScenarioProbeAsync(actionId).ConfigureAwait(false);
+        await StepAsync(actionId).ConfigureAwait(false);
+        return Session.Current;
+    }
+    #endif
+
     public string Fork()
     {
         _serial.Wait();
