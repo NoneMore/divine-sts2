@@ -44,6 +44,12 @@ from .ancient import (
 from .client import RESET_MODE_RUN
 from .schema import validate_observation
 
+_UNSUPPORTED_INTERACTIVE_FIRST_COMBAT_RELICS = frozenset({"GAMBLING_CHIP"})
+
+
+class UnsupportedInteractiveFirstCombatRelic(RuntimeError):
+    """A held relic opens a first-combat decision the scenario recipe cannot record."""
+
 
 class CombatEpisode:
     """A live first combat reached by replaying a Generated scenario."""
@@ -473,6 +479,16 @@ def _drive_to_first_fight(
         raise ScenarioGenerationError(STAGE_ROW_ONE_NODE, "the map after the Ancient room offers no node to travel to")
     node = nodes[0]
     recipe.stage = STAGE_FIRST_COMBAT
+    # A map observation has no inventory; the worker's scoring features report the full
+    # held set after the Ancient, including relics the selected option granted indirectly.
+    held_relics = (state.get("scoring_features") or {}).get("relics")
+    if not isinstance(held_relics, list) or any(not isinstance(relic, str) for relic in held_relics):
+        raise ScenarioGenerationError(STAGE_FIRST_COMBAT, "the map result does not report the final relic set")
+    unsupported = sorted(set(held_relics) & _UNSUPPORTED_INTERACTIVE_FIRST_COMBAT_RELICS)
+    if unsupported:
+        raise UnsupportedInteractiveFirstCombatRelic(
+            f"unsupported interactive first-combat relics: {', '.join(unsupported)}"
+        )
     combat = worker.run_step(node["action_id"])
     observation = combat["observation"]
     if observation["decision"]["kind"] != COMBAT_ACTION:

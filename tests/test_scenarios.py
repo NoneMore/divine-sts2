@@ -115,6 +115,7 @@ class FakeRunWorker:
         die_on: dict[str, BaseException] | None = None,
         delay_seconds: float = 0.0,
         float_quantity: bool = False,
+        relics_after_choice: dict[int, tuple[str, ...]] | None = None,
     ) -> None:
         self.offer = list(offer)
         #: The offered relics that also have a legal action. The event reports every one of
@@ -143,6 +144,8 @@ class FakeRunWorker:
         #: record is forced rather than assumed impossible — and it is a state a schema check
         #: accepts, because `1.0` is an integer to JSON Schema.
         self.float_quantity = float_quantity
+        self.relics_after_choice = relics_after_choice or {}
+        self.selected_choice: int | None = None
         self.dead = False
         self.closed = False
         self.resets = 0
@@ -197,6 +200,16 @@ class FakeRunWorker:
             raise self.die_on[action_id]
         if action_id in self.crash_on:
             raise self.crash_on[action_id]
+        if action_id.startswith("choose_event:"):
+            self.selected_choice = int(action_id.split(":", 2)[1])
+        if action_id == "leave_event":
+            result = self._next(self._routes[action_id])
+            relics = self.relics_after_choice.get(
+                self.selected_choice,
+                (self.offer[self.selected_choice],) if self.selected_choice is not None else (),
+            )
+            result["scoring_features"] = {"relics": list(relics)}
+            return result
         return self._next(self._routes[action_id])
 
     def restore(self, state_handle: str) -> dict[str, Any]:
@@ -916,6 +929,40 @@ def test_the_record_stores_no_state_handle_and_no_portable_branch() -> None:
 # -- failure rows ------------------------------------------------------------------------
 
 
+def test_an_indirect_first_combat_relic_is_excluded_before_entering_the_fight() -> None:
+    worker = FakeRunWorker(
+        offer=("GOLDEN_PEARL", "NEOWS_TORMENT", "LARGE_CAPSULE"),
+        relics_after_choice={2: ("BURNING_BLOOD", "LARGE_CAPSULE", "GAMBLING_CHIP", "MERCURY_HOURGLASS")},
+    )
+
+    rows = _rows(worker)
+
+    assert [row["record_type"] for row in rows] == [SCENARIO_RECORD, SCENARIO_RECORD, FAILURE_RECORD]
+    excluded = rows[2]
+    assert excluded["recipe"]["ancient_choice"] == {"option_index": 2, "relic_model_id": "LARGE_CAPSULE"}
+    assert excluded["stage"] == "first_combat"
+    assert excluded["error"]["kind"] == "unsupported_interactive_first_combat_relic"
+    assert "GAMBLING_CHIP" in excluded["error"]["message"]
+    assert "combat_initial_state" not in excluded and "state_hash" not in excluded
+    assert worker.steps.count(FIRST_ROW_ONE_ACTION) == 2
+
+
+def test_excluding_a_relic_after_an_ancient_nested_choice_preserves_later_choices() -> None:
+    worker = FakeRunWorker(
+        offer=("GAMBLING_CHIP", "GOLDEN_PEARL", "LARGE_CAPSULE"),
+        nested=(_card_choice("choose_cards:first", "choose_cards:second"),),
+        relics_after_choice={0: ("BURNING_BLOOD", "GAMBLING_CHIP")},
+    )
+
+    rows = _rows(worker)
+
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD]
+    assert rows[0]["stage"] == "first_combat"
+    assert rows[0]["error"]["kind"] == "unsupported_interactive_first_combat_relic"
+    assert rows[0]["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": "GAMBLING_CHIP"}
+    assert worker.steps.count(FIRST_ROW_ONE_ACTION) == 2
+
+
 def _choice_crash(offer: tuple[str, ...], index: int) -> dict[str, BaseException]:
     """A crash on one offered choice's own action, and on nothing else."""
     return {_choice_action(index, offer[index]): WORKER_CRASH}
@@ -1374,6 +1421,37 @@ def test_a_crashed_worker_is_replaced_and_the_replacement_is_visible_in_the_summ
     assert rows[0]["error"]["kind"] == "worker_crashed"
     assert _shard_rows(corpus_root, "worker-01.jsonl.gz") == generate_rows(request, FakeRunWorker())[6:]
     assert summary["complete"] is True
+
+
+def test_excluded_first_combat_relic_keeps_the_corpus_worker_and_bytes_reproducible(
+    corpus_roots: Callable[[], Path],
+) -> None:
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1", "SEED2"))
+    first, second = corpus_roots(), corpus_roots()
+    created: list[FakeRunWorker] = []
+
+    def worker_factory(_shard: int) -> FakeRunWorker:
+        worker = FakeRunWorker(
+            offer=("GOLDEN_PEARL", "NEOWS_TORMENT", "LARGE_CAPSULE"),
+            relics_after_choice={2: ("BURNING_BLOOD", "LARGE_CAPSULE", "GAMBLING_CHIP")},
+        )
+        created.append(worker)
+        return worker
+
+    first_summary = generate_corpus(request, 1, first, worker_factory=worker_factory)
+    second_summary = generate_corpus(request, 1, second, worker_factory=worker_factory)
+
+    assert len(created) == 2
+    assert [worker.resets for worker in created] == [2, 2]
+    assert all(worker.alive() for worker in created)
+    assert first_summary["rows"] == {SCENARIO_RECORD: 4, FAILURE_RECORD: 2}
+    assert first_summary["worker_replacements"] == 0
+    assert first_summary == second_summary
+    assert _corpus_files(first) == _corpus_files(second)
+    assert [row["record_type"] for row in _read_corpus(first)] == [
+        SCENARIO_RECORD, SCENARIO_RECORD, FAILURE_RECORD,
+        SCENARIO_RECORD, SCENARIO_RECORD, FAILURE_RECORD,
+    ]
 
 
 def test_a_batch_with_more_workers_than_elements_still_writes_one_shard_per_worker(corpus_root: Path) -> None:

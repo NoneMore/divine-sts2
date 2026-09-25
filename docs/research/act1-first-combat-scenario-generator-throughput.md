@@ -148,6 +148,20 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 
 **交给 [工单 03](../../.scratch/scenario-generation-throughput/issues/03-repair-first-combat-element-timeout.md) 的决定。** 采用 **native 侧过渡续接修复**：让地图入战的异步执行沿用现有 `StartTransitionAsync` / `ResumeChoiceAsync` 协议，在首回合遗物打开卡牌选择时返回可操作提示，并在选择后继续到稳定的战斗决策。随后由场景驱动明确处理这个首战提示及其可复现 recipe；若当前 row 格式无法忠实表达选择，就迅速生成该 Ancient 选项的 failure 行，保持 worker 可复用。**不**用全局短超时或盲重试掩盖这个确定性等待：短超时仍会杀 worker，重试会重复相同分支。fake worker 可离线验证生成器对「入战时出现卡牌提示」的 row/failure 行为与 worker 复用，但无法复现 shipped game 中 `GAMBLING_CHIP` 的异步等待；native 修复还需本 seed 的真机验收。观察到的发生率仍只有参考请求 B 的 **512/512 element 无失败**与请求外的 **1 个已知复现 element**，不能由此估计总体概率。
 
+### 工单 03 的排除策略验收（2026-09-25）
+
+工单 03 后来收敛为明确的排除策略，上段 native 续接建议是当时的诊断交接，不是本次实施方向。真机 `leave_event` 返回的**地图 observation 不含 relic inventory**；同一结果的 `scoring_features.relics` 列出 Ancient 结束后的完整持有集合，第三分支实测为 `BURNING_BLOOD`、`LARGE_CAPSULE`、`GAMBLING_CHIP`、`MERCURY_HOURGLASS`。生成器据此在发送第一战的地图节点动作前排除已知不支持的 `GAMBLING_CHIP`，写 `first_combat` / `unsupported_interactive_first_combat_relic` failure 行。没有缩短请求超时，也没有重试或改动 native 入战路径。
+
+同一 Windows host 上，`IRONCLAD`、A0、run seed `200150`、单 worker 的端到端 corpus 结果：
+
+| | 排除前（原基线） | 排除后（本票工作树） |
+| --- | ---: | ---: |
+| 墙钟 | **66.792 s** | **3.892 s** |
+| scenario / failure 行 | 2 / 1（`request_timeout`） | 2 / 1（显式排除） |
+| worker replacement | 1 | 0 |
+
+墙钟约缩短 **17.2 倍**。排除后的单次运行由 [`scenario_interactive_relic_exclusion_acceptance.py`](../../tests/acceptance/scenario_interactive_relic_exclusion_acceptance.py) 通过 shipped game 的 corpus 公共接口验证；原基线是在较早的 `e0948364` 上测得，因此倍数是同机前后对照，不把两次 HEAD 之间的其他变更单独归因给本票。fake-worker 测试另行验证了间接授予遗物、后续 Ancient 选项与 element、零 replacement，以及相同请求的分片和 summary 字节同一。
+
 ## 成本归因：实测与推断的分界
 
 **实测（单 worker、无争用、份额以生成为分母）：** `restore` 46.9%、`run_reset` 31.3%、`run_step` 21.3%，三者合计 99.5%。
