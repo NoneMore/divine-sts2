@@ -136,6 +136,18 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 
 **发生率未知：** 参考请求 B 的 512 个 element（种子 1–128）为 0 失败，本次只确认了 1 个可复现种子。历史记录在[长批量试验](act1-first-combat-scenario-generator-memory.md#L55)中于第 150 个 element 遇到同一形态（`run_step` 60 s 超时，换新 worker 仍复现）。
 
+### 种子 `200150` 的定位补测（2026-09-25，HEAD `e0948364`）
+
+**实测。** 用全新 Godot worker 通过现有 `generate_rows` 驱动 `IRONCLAD` / A0 / `200150`，在每个 RPC 前后记录时间，并在客户端杀掉超时 worker **之前**读取 `process.poll()` 和 worker 的 stderr 尾部。前两个 Ancient 选项分别为 `GOLDEN_PEARL`、`NEOWS_TORMENT`，都进入首战并生成 scenario 行；第三个为 `LARGE_CAPSULE`，其 `choose_event` 在 0.010 s 内返回 `event_complete`，`leave_event` 在 0.001 s 内返回 `map_choice`，但首个 Monster 节点 `choose_map:0:1` 的 `run_step` 等待完整 60.0 s，最后生成 `stage: "first_combat"`、`kind: "request_timeout"`、`message: "run_step did not respond within 60.0 seconds"` 的 failure 行。该次探针从进程启动到失败行为 63.687 s，其中首战请求从 3.674 s 挂到 63.684 s；这不是新的 corpus 端到端基准，不能与上表的 66.792 s 混用。
+
+超时即将触发客户端的 `_reap_process()` 时，`process.poll()` 为 `None`，即 worker **仍在运行但没有答复**；客户端随后杀掉它，`poll()` 变为退出码 1。worker 自己的 stderr 尾部只有 Godot 启动信息、迁移与语言加载信息，以及 `glam.png`、`energy_ironclad.tres` 两条资源缓存警告，没有异常、退出记录或入战进度。因而本次观测区分出「活着但沉默」，不能把客户端主动杀掉后的退出码误判为 worker 先崩溃。60 s 的等待也只能证明它没有在请求期限内完成，不能证明它永远不会完成。
+
+**选择对照（实测）。** 同一 seed 的三个选项均被上次新 worker 运行选过。另开一个全新 worker，**只**取第三项，不经过前两项或 `restore`：`LARGE_CAPSULE` 正常返回 `event_complete`，打开的 Ancient 嵌套提示数为 0，离开房间后仍在 `choose_map:0:1` 卡住；10 s 的独立诊断期限内进程同样存活且日志无新异常。第三项在进战前持有 `BURNING_BLOOD`、`LARGE_CAPSULE`、`GAMBLING_CHIP`、`MERCURY_HOURGLASS`。故行为属于此 seed 的 **`LARGE_CAPSULE` 分支进入首战**，不是 Ancient offer 的生成、Ancient 嵌套提示或前两项遗留的 restore 状态。10 s 探针只作定位，不是建议的生产超时值。
+
+**源码归因（由实测状态和代码推断，尚未以 native 堆栈证实）。** Shipped game 的 `GamblingChip.AfterPlayerTurnStart` 在第一回合调用 `CardSelectCmd.FromHandForDiscard`，等待一个卡牌选择。当前 [`EnterMapPointAsync`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs) 直接 `await EnterRunMapCoordAsync`；后者进入 Monster 房间后直接 `await StartCombatInternal`。卡牌 selector 会建立待决选择及未完成的 `TaskCompletionSource`，但只有 [`StartTransitionAsync`](../../src/Sts2.NativeSim.Core/PersistentNativeCombatEnvironment.cs) 会在 native transition 与选择出现之间等待并把提示送回客户端。地图入战没有经过这层过渡协调，所以 `GAMBLING_CHIP` 的选择很可能使 `run_step` 一直等待，客户端只看见无响应。实测与这条路径吻合；具体停在 native 栈的哪一帧还未抓取。
+
+**交给 [工单 03](../../.scratch/scenario-generation-throughput/issues/03-repair-first-combat-element-timeout.md) 的决定。** 采用 **native 侧过渡续接修复**：让地图入战的异步执行沿用现有 `StartTransitionAsync` / `ResumeChoiceAsync` 协议，在首回合遗物打开卡牌选择时返回可操作提示，并在选择后继续到稳定的战斗决策。随后由场景驱动明确处理这个首战提示及其可复现 recipe；若当前 row 格式无法忠实表达选择，就迅速生成该 Ancient 选项的 failure 行，保持 worker 可复用。**不**用全局短超时或盲重试掩盖这个确定性等待：短超时仍会杀 worker，重试会重复相同分支。fake worker 可离线验证生成器对「入战时出现卡牌提示」的 row/failure 行为与 worker 复用，但无法复现 shipped game 中 `GAMBLING_CHIP` 的异步等待；native 修复还需本 seed 的真机验收。观察到的发生率仍只有参考请求 B 的 **512/512 element 无失败**与请求外的 **1 个已知复现 element**，不能由此估计总体概率。
+
 ## 成本归因：实测与推断的分界
 
 **实测（单 worker、无争用、份额以生成为分母）：** `restore` 46.9%、`run_reset` 31.3%、`run_step` 21.3%，三者合计 99.5%。
