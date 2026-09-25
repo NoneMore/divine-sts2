@@ -62,9 +62,9 @@
 在已按[开发环境说明](../agents/dev-environment.md)配置好游戏、Godot 和 Python 的主机上，于项目根目录运行受跟踪的[基准脚本](../../python/tools/benchmark_scenario_generation.py)：
 
 ```powershell
-python python/tools/benchmark_scenario_generation.py r4
+python python/tools/benchmark_scenario_generation.py r4 --rounds 3 --legacy-comparison
 ```
 
-脚本先新建一个 `NativeWorker` 并计时启动，再在同一 worker 上按四个种子分别调用 `generate_rows`，用 `time.perf_counter()` 包装 `worker.request` 记录 `run_reset`/`run_step` wall time；随后按 1、2、4 workers 的顺序运行 `generate_corpus`。运行三次时改用 `r4`、`r5`、`r6` 等新标签，分别生成全新 `corpus-*-<标签>` 目录与 `results-<标签>.json`，再对三轮取中位数及范围。同一标签重跑会命中续跑，不能测完整生成耗时；本次三轮原始 JSON 只存于本机 gitignored `artifacts/`，仓库 checkout 不包含它们。[脚本](../../python/tools/benchmark_scenario_generation.py)、[续跑条件](../../python/sts2_native_sim/_scenario_store.py#L103-L133)。
+脚本加 `--legacy-comparison` 后先新建一个 `NativeWorker` 并计时启动，再在同一 worker 上按四个种子分别调用 `generate_rows`，用 `time.perf_counter()` 包装 `worker.request` 记录 `run_reset`/`run_step` wall time；随后按 1、2、4 workers 的顺序运行 `generate_corpus`。运行三次时改用 `r4`、`r5`、`r6` 等新标签，分别生成全新 `corpus-*-<标签>` 目录与 `results-<标签>.json`，再对三轮取中位数及范围。同一标签重跑会被脚本拒绝，以免把续跑计作完整生成耗时；本次三轮原始 JSON 只存于本机 gitignored `artifacts/`，仓库 checkout 不包含它们。[脚本](../../python/tools/benchmark_scenario_generation.py)、[续跑条件](../../python/sts2_native_sim/_scenario_store.py#L103-L133)。
 
 此次 `run_reset`/`run_step` 是 Python RPC wall time，包含 JSON 编解码和管道往返，不能据此把 68%–72% 全归于 GC 或游戏构建。worker 启动时间也包含 Godot 进程启动、原生环境初始化与 `hello`，不能仅归于 PCK hash。完整 corpus 的时间还包含 worker 启动/关闭、行编码、压缩和 summary 写入，且其 1/2/4 worker 测试始终按该顺序进行；本次没有随机化顺序，没有隔离系统负载，也没有 CPU/内存 profiling。没有使用客户端的 `worker_memory_bytes`，因此本文不报告内存开销。[RPC 计时边界](../../python/sts2_native_sim/client.py#L179-L228)、[worker 初始化](../../python/sts2_native_sim/client.py#L80-L109)、[corpus 边界](../../python/sts2_native_sim/_scenario_corpus.py#L32-L74)。

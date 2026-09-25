@@ -76,7 +76,7 @@ end-to-end speedup. The raw measurements are in the gitignored
 fresh label, for example:
 
 ```powershell
-pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py another-label --rounds 3'
+pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py another-label --rounds 3 --legacy-comparison'
 ```
 
 The earlier [performance investigation](act1-first-combat-scenario-generator-performance.md)

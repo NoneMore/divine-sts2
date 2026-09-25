@@ -1,8 +1,8 @@
-"""Compare the native fork reference and handle reuse for scenario generation.
+"""Measure both fixed scenario generation reference requests from fresh corpora.
 
-Usage: python python/tools/benchmark_scenario_generation.py <unique-run-id> [--rounds 3]
-Every corpus measurement writes a fresh directory. Reusing an ID is refused so resume
-cannot masquerade as full-generation throughput.
+Usage: python python/tools/benchmark_scenario_generation.py <unique-run-id> [--rounds 1]
+Use --legacy-comparison for the historical fork/handle comparison. Each corpus measurement
+writes a fresh directory; the default reference benchmark preflights all output paths.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ SEEDS = ("A1B2C3D4E5", "1", "2", "3")
 OUT = ROOT / "artifacts" / "scenario-performance"
 MODES = ("fork_reference", "reuse_handle")
 RPC_METHODS = ("run_reset", "restore", "run_step", "fork")
+REFERENCE_REQUESTS = {
+    "A": (ScenarioRequest(("IRONCLAD",), (0,), SEEDS), (1, 2, 4)),
+    "B": (ScenarioRequest(("IRONCLAD", "DEFECT"), (0, 2), tuple(str(n) for n in range(1, 129))), (8,)),
+}
 
 
 def _driver(worker: NativeWorker, mode: str) -> NativeWorker | ForkAfterAncientWorker:
@@ -146,21 +150,10 @@ def _summarize(report: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_id", help="unique alphanumeric label for fresh corpus directories")
-    parser.add_argument("--rounds", type=int, default=3)
-    args = parser.parse_args()
-    if not args.run_id.replace("-", "").replace("_", "").isalnum() or args.rounds < 1:
-        parser.error("run_id must be alphanumeric and rounds must be positive")
-    OUT.mkdir(parents=True, exist_ok=True)
-    output = OUT / f"results-{args.run_id}.json"
-    if output.exists():
-        raise FileExistsError(f"{output} exists; use a fresh run ID")
-
+def _legacy_comparison(run_id: str, rounds: int, output: Path) -> None:
     report: dict[str, Any] = {"request": {"character": "IRONCLAD", "ascension": 0, "seeds": SEEDS},
-                              "rounds": args.rounds, "rows": [], "corpora": []}
-    for round_number in range(1, args.rounds + 1):
+                              "rounds": rounds, "rows": [], "corpora": []}
+    for round_number in range(1, rounds + 1):
         order = MODES if round_number % 2 else tuple(reversed(MODES))
         for mode in order:
             result = timed_rows(mode, round_number)
@@ -168,15 +161,81 @@ def main() -> None:
             print(json.dumps({"kind": "rows", **result}), flush=True)
         for workers in (1, 2, 4):
             for mode in order:
-                result = timed_corpus(mode, workers, args.run_id, round_number)
+                result = timed_corpus(mode, workers, run_id, round_number)
                 report["corpora"].append(result)
                 print(json.dumps({"kind": "corpus", **result}), flush=True)
-            _assert_corpus_bytes_equal(workers, args.run_id, round_number)
+            _assert_corpus_bytes_equal(workers, run_id, round_number)
             print(json.dumps({"kind": "corpus_differential", "round": round_number,
                               "workers": workers, "byte_identical": True}), flush=True)
     report["summary"] = _summarize(report)
     output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps({"result_file": str(output), "summary": report["summary"]}, indent=2), flush=True)
+
+
+def _reference_path(reference: str, workers: int, run_id: str, round_number: int) -> Path:
+    return OUT / f"corpus-reference-{reference}-{workers}-{run_id}-r{round_number}"
+
+
+def _reference_requests(run_id: str, rounds: int) -> list[tuple[str, ScenarioRequest, int, int, Path]]:
+    return [
+        (name, request, workers, round_number, _reference_path(name, workers, run_id, round_number))
+        for round_number in range(1, rounds + 1)
+        for name, (request, worker_counts) in REFERENCE_REQUESTS.items()
+        for workers in worker_counts
+    ]
+
+
+def _benchmark_references(run_id: str, rounds: int, output: Path) -> None:
+    planned = _reference_requests(run_id, rounds)
+    for _, _, _, _, root in planned:
+        if root.exists():
+            raise FileExistsError(f"{root} exists; use a fresh run ID so resume cannot affect the benchmark")
+
+    report: dict[str, Any] = {"rounds": rounds, "corpora": []}
+    for name, request, workers, round_number, root in planned:
+        tick = time.perf_counter()
+        summary = generate_corpus(request, workers, root, compression=3)
+        elapsed = time.perf_counter() - tick
+        elements = summary["elements"]
+        rows = summary["succeeded"] + summary["failed"]
+        result = {
+            "reference": name,
+            "round": round_number,
+            "request": {"characters": request.characters, "ascensions": request.ascensions, "seeds": request.seeds},
+            "workers": workers,
+            "compression": 3,
+            "elements": elements,
+            "wall_seconds": elapsed,
+            "elements_per_second": elements / elapsed,
+            "rows_per_second": rows / elapsed,
+            "success_ratio": summary["succeeded"] / rows,
+            "rows": rows,
+            "succeeded": summary["succeeded"],
+            "failed": summary["failed"],
+            "worker_replacements": summary["worker_replacements"],
+        }
+        report["corpora"].append(result)
+        print(json.dumps({"kind": "reference_corpus", **result}), flush=True)
+    output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps({"result_file": str(output)}), flush=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("run_id", help="unique alphanumeric label for fresh corpus directories")
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--legacy-comparison", action="store_true", help="run the historical fork/handle comparison")
+    args = parser.parse_args()
+    if not args.run_id.replace("-", "").replace("_", "").isalnum() or args.rounds < 1:
+        parser.error("run_id must be alphanumeric and rounds must be positive")
+    OUT.mkdir(parents=True, exist_ok=True)
+    output = OUT / f"results-{args.run_id}.json"
+    if output.exists():
+        raise FileExistsError(f"{output} exists; use a fresh run ID")
+    if args.legacy_comparison:
+        _legacy_comparison(args.run_id, args.rounds, output)
+    else:
+        _benchmark_references(args.run_id, args.rounds, output)
 
 
 if __name__ == "__main__":

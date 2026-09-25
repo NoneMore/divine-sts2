@@ -32,7 +32,7 @@ A 与历史记录同形，用于对账；B 的每分片 64 个 element 足以摊
 
 ```powershell
 # 参考请求 A，三轮，含分片字节同一断言
-pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py diag-20260925-r1 --rounds 3'
+pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py diag-20260925-r1 --rounds 3 --legacy-comparison'
 
 # 参考请求 B：一次计时运行
 pwsh -NoProfile -Command '. ./scripts/common.ps1; $s = foreach ($n in 1..128) { "--seed"; "$n" }; & ./.venv/Scripts/python.exe -m sts2_native_sim.cli scenario --character IRONCLAD --character DEFECT --ascension 0 --ascension 2 @s --workers 8 --compression 3 --output-dir artifacts/scenario-performance/diag-campaign-a1'
@@ -91,6 +91,25 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 **字节同一（实测）：** A 与 B 的 `summary.json` 与 8 个 `worker-NN.jsonl.gz` 共 **9 对文件 SHA-256 全部相同**。这同时验证了 ADR-0008 所依赖的性质在批量尺度上成立。
 
 **推断（非实测）：** 单 worker 无争用时每 element 0.406 s，512 element 的串行计算量约 208 s；8 worker 理论下界 ≈ 26 s + 启动。实测 41.3 s 意味着 **8 路并发带来约 1.45 倍的单 element 膨胀**。这是由两个独立测量相除得到的推断，本次没有单独测量争用系数。
+
+### 维护基准脚本复测（2026-09-25，HEAD `c83e81c` 加本工单改动）
+
+**实测。** 在上表同一主机与游戏 build 上，运行维护的基准脚本三轮；它按上表固定维度与种子，用 gzip 等级 3，每轮先测 A 的 1/2/4 worker，再测 B 的 8 worker。每个配置、每轮都使用全新的 corpus 目录，脚本以完整 `generate_corpus` 调用的外层墙钟计时，结果写在 corpus 之外的 gitignored `artifacts/scenario-performance/results-ticket05-20260925-r3.json`。调用命令：
+
+```powershell
+pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py ticket05-20260925-r3 --rounds 3'
+```
+
+| 请求 | worker | element/秒中位（主速率） | 行/秒中位 | 墙钟中位（范围） | 每轮成功/总行（成功率） | 每轮 worker 替换 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A | 1 | 0.617 | 1.851 | 6.482 s（6.281–6.566） | 12/12（100%） | 0 |
+| A | 2 | 0.708 | 2.123 | 5.653 s（5.563–5.656） | 12/12（100%） | 0 |
+| A | 4 | 0.739 | 2.218 | 5.411 s（5.326–5.413） | 12/12（100%） | 0 |
+| B | 8 | **13.209** | **39.628** | 38.760 s（38.601–41.251） | 1536/1536（100%） | 0 |
+
+成功率为 scenario 行数除以 scenario 与 failure 行数之和；element/秒的分子始终是请求声明的 element 数。每轮的速率、成功率和替换数都在输出 JSON 中，表中速率与墙钟取三轮中位数。
+
+**与旧数据的差异。** 此前 A 的三轮墙钟范围分别是 1 worker **6.570–6.579 s**、2 worker **5.853–5.939 s**、4 worker **5.612–5.792 s**；这次 A 的三组中位数都比旧范围快，因此**未满足工单要求的“在既有逐轮波动范围内”**。此前 B 的两次是 **41.033–41.487 s**；这次三轮中有一次 41.251 s 落在旧范围，另外两次约 38.6–38.8 s，更快。此前仅两次 B 测量不足以界定其波动范围。补做的一轮旧 `--legacy-comparison` 模式在同一主机上给出 A 的 `reuse_handle` 墙钟 **6.476 / 5.658 / 5.322 s**（1/2/4 worker），与本次新模式接近，也低于原记录；故偏差不能仅归因于新模式的代码路径。尚未隔离主机负载、缓存与此间代码变更对差异各自的影响，不把它宣称为性能提升。首次单轮新模式的 B 是 **41.225 s、12.420 element/秒、37.259 行/秒**，落在旧 B 两次范围内；原始结果保存在 `results-ticket05-20260925-r2.json`。重跑需使用新标签，因为脚本拒绝已有 corpus 目录，防止续跑被计作完整生成。
 
 ## 单 worker 稳态探针（实测，64 element / 8 块）
 
