@@ -56,12 +56,32 @@ _Avoid_: Map variant, act 1 variant (the map itself does not vary)
 A recorded run-start situation together with the choices that produced it, such that the shipped game can reproduce it from the same run seed.
 _Avoid_: Sample, fixture, seed dump
 
+**First-combat scenario**:
+A generated scenario that reaches a run's first combat and records its combat initial state before the player acts, under its fixed character, Ascension, and run seed.
+_Avoid_: Synthetic first fight, mid-combat scenario
+
+**NoSL**:
+Play without save/load retries to reveal hidden outcomes or redo decisions; a NoSL policy chooses from information available at the time, without prior knowledge of future draws.
+_Avoid_: No-reload run, no-savescum run
+
+**NoSL scenario difference**:
+A difference in first-combat content selected for NoSL coverage, including card counts and upgrades, held relics and potions, and visible player or enemy combat state. Opening hand, draw order, card instance identity, map coordinate, and hidden RNG state alone do not make two scenarios different.
+_Avoid_: State-hash difference, draw-order variant
+
+**Covered character card**:
+A card model from a character's own card pool that appears in the run deck of at least one first-combat scenario across the generated seeds; repeated copies and repeated appearances still count once.
+_Avoid_: Card occurrence, draw-order variant
+
+**Character card coverage**:
+For one character and Ascension, the share of that character's card models represented by covered character cards across generated first-combat scenarios, counting each model once and excluding multiplayer-only and Ancient cards from the denominator. A10 is the combat-AI training target; lower Ascensions are experimental.
+_Avoid_: Per-seed card coverage, card frequency
+
 **Scenario generation element**:
-One character, Ascension, and canonical run seed combination declared by a generation request. Its run's offered Ancient choices determine how many scenario or failure rows it produces.
+One character, Ascension, and canonical run seed combination declared by a generation request. Its run's offered Ancient choices and their legal nested decisions may produce multiple first-combat scenarios or failure rows.
 _Avoid_: Seed alone, Ancient choice
 
 **Element throughput**:
-The rate at which a generation request's scenario generation elements are driven to completion, counted in elements per second and reported beside a row rate. It is a batch's throughput unit rather than a row rate, because one element yields one row per Ancient choice its run offers, and a failure row contributes no combat initial state.
+The rate at which a generation request's scenario generation elements are driven to completion, counted in elements per second and reported beside a row rate. It is a batch's throughput unit because one element can yield multiple scenario or failure rows, and a failure row contributes no combat initial state.
 _Avoid_: Rows per second when used as the batch's unit, records per second, seeds per second
 
 **Reference request**:
@@ -69,7 +89,7 @@ A generation request fixed by name together with its exact dimension sets, so th
 _Avoid_: Test request, sample request, benchmark corpus
 
 **Failure row**:
-A row of a generated corpus standing in for an Ancient choice that did not produce a scenario, or for a scenario generation element whose Ancient offer could not be read. It records the stage, error kind and message, and recipe resolved so far, never a combat initial state.
+A row of a generated corpus standing in for a legal opening branch that did not produce a scenario, or for a scenario generation element whose Ancient offer could not be read. It records the stage, error kind and message, and recipe resolved so far, never a combat initial state.
 _Avoid_: Error record, dropped seed, skipped element
 
 **Corpus shard**:
