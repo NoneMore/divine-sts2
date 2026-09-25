@@ -1,6 +1,6 @@
-"""Measure both fixed scenario generation reference requests from fresh corpora.
+"""Measure fixed scenario generation reference requests from fresh corpora.
 
-Usage: python python/tools/benchmark_scenario_generation.py <unique-run-id> [--rounds 1]
+Usage: python python/tools/benchmark_scenario_generation.py <unique-run-id> [--rounds 1] [--reference B]
 Use --legacy-comparison for the historical fork/handle comparison. Each corpus measurement
 writes a fresh directory; the default reference benchmark preflights all output paths.
 """
@@ -176,17 +176,18 @@ def _reference_path(reference: str, workers: int, run_id: str, round_number: int
     return OUT / f"corpus-reference-{reference}-{workers}-{run_id}-r{round_number}"
 
 
-def _reference_requests(run_id: str, rounds: int) -> list[tuple[str, ScenarioRequest, int, int, Path]]:
+def _reference_requests(run_id: str, rounds: int, reference: str) -> list[tuple[str, ScenarioRequest, int, int, Path]]:
     return [
         (name, request, workers, round_number, _reference_path(name, workers, run_id, round_number))
         for round_number in range(1, rounds + 1)
         for name, (request, worker_counts) in REFERENCE_REQUESTS.items()
+        if reference == "both" or name == reference
         for workers in worker_counts
     ]
 
 
-def _benchmark_references(run_id: str, rounds: int, output: Path) -> None:
-    planned = _reference_requests(run_id, rounds)
+def _benchmark_references(run_id: str, rounds: int, output: Path, reference: str) -> None:
+    planned = _reference_requests(run_id, rounds, reference)
     for _, _, _, _, root in planned:
         if root.exists():
             raise FileExistsError(f"{root} exists; use a fresh run ID so resume cannot affect the benchmark")
@@ -224,10 +225,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id", help="unique alphanumeric label for fresh corpus directories")
     parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--reference", choices=("both", "A", "B"), default="both",
+                        help="measure one fixed reference request or both (default both)")
     parser.add_argument("--legacy-comparison", action="store_true", help="run the historical fork/handle comparison")
     args = parser.parse_args()
     if not args.run_id.replace("-", "").replace("_", "").isalnum() or args.rounds < 1:
         parser.error("run_id must be alphanumeric and rounds must be positive")
+    if args.legacy_comparison and args.reference != "both":
+        parser.error("--reference cannot be combined with --legacy-comparison")
     OUT.mkdir(parents=True, exist_ok=True)
     output = OUT / f"results-{args.run_id}.json"
     if output.exists():
@@ -235,7 +240,7 @@ def main() -> None:
     if args.legacy_comparison:
         _legacy_comparison(args.run_id, args.rounds, output)
     else:
-        _benchmark_references(args.run_id, args.rounds, output)
+        _benchmark_references(args.run_id, args.rounds, output, args.reference)
 
 
 if __name__ == "__main__":
