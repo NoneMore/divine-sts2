@@ -38,8 +38,9 @@ from pathlib import Path
 from typing import Any, Self
 
 import pytest
-from sts2_native_sim import scenarios
+from sts2_native_sim import _scenario_corpus, scenarios
 from sts2_native_sim.client import NativeSimError
+from sts2_native_sim.pck_fingerprint import PckFingerprint
 from sts2_native_sim.scenarios import (
     CORPUS_SCHEMA,
     ERROR_RUN,
@@ -1206,6 +1207,77 @@ def _four_element_request() -> ScenarioRequest:
     return ScenarioRequest(characters=("IRONCLAD", "DEFECT"), ascensions=(0,), seeds=("SEED1", "SEED2"))
 
 
+def _offline_game_assembly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    game = tmp_path / "game"
+    (game / "data").mkdir(parents=True)
+    assembly = game / "data" / "sts2.dll"
+    assembly.touch()
+    (game / "SlayTheSpire2.pck").write_bytes(b"small offline pack")
+    monkeypatch.setattr(_scenario_corpus, "find_game_assembly", lambda: assembly)
+
+
+@pytest.mark.skipif(_scenario_corpus.os.name != "nt", reason="PCK hints are supported on Windows")
+def test_a_multi_shard_batch_shares_one_parent_pck_fingerprint_through_its_worker_factory(
+    corpus_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _offline_game_assembly(tmp_path, monkeypatch)
+    measured: list[PckFingerprint] = []
+    real_measure = PckFingerprint.measure
+
+    def measure(path: Path) -> PckFingerprint:
+        result = real_measure(path)
+        measured.append(result)
+        return result
+
+    monkeypatch.setattr(PckFingerprint, "measure", measure)
+    class FingerprintWorker(FakeRunWorker):
+        def __init__(self, fingerprint: PckFingerprint | None) -> None:
+            super().__init__()
+            self.parent_fingerprint = fingerprint
+            self.pck_fingerprint = {
+                "source": "pool" if fingerprint is not None else "worker",
+                "bytes_hashed": 0 if fingerprint is not None else 18,
+            }
+
+    started: list[FingerprintWorker] = []
+
+    def worker_factory(_shard: int, *, pck_fingerprint: PckFingerprint | None = None) -> FingerprintWorker:
+        worker = FingerprintWorker(pck_fingerprint)
+        started.append(worker)
+        return worker
+
+    summary = generate_corpus(_four_element_request(), 2, corpus_root, worker_factory=worker_factory)
+
+    assert summary["complete"] is True
+    assert len(measured) == 1
+    assert len(started) == 2
+    assert all(worker.parent_fingerprint is measured[0] for worker in started)
+    assert all(worker.pck_fingerprint == {"source": "pool", "bytes_hashed": 0} for worker in started)
+
+
+@pytest.mark.skipif(_scenario_corpus.os.name != "nt", reason="PCK hints are supported on Windows")
+@pytest.mark.parametrize("workers", (1, 2))
+def test_a_batch_with_one_nonempty_shard_does_not_measure_a_parent_fingerprint(
+    workers: int, corpus_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _scenario_corpus, "find_game_assembly",
+        lambda: pytest.fail("one active shard should not discover the game pack"),
+    )
+    started: list[PckFingerprint | None] = []
+
+    def worker_factory(_shard: int, *, pck_fingerprint: PckFingerprint | None = None) -> FakeRunWorker:
+        started.append(pck_fingerprint)
+        return FakeRunWorker()
+
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1",))
+
+    summary = generate_corpus(request, workers, corpus_root, worker_factory=worker_factory)
+
+    assert summary["complete"] is True
+    assert started == [None]
+
+
 def _fresh_worker(_shard: int) -> FakeRunWorker:
     """One fresh double per shard, which is what a real worker factory builds."""
     return FakeRunWorker()
@@ -1791,10 +1863,11 @@ def test_the_same_request_serialises_to_the_same_bytes_through_the_rows_interfac
 
 
 def test_the_console_entry_point_writes_the_batch_as_a_corpus(
-    corpus_root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    corpus_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from sts2_native_sim import cli
 
+    _offline_game_assembly(tmp_path, monkeypatch)
     monkeypatch.setattr(scenarios, "NativeWorker", lambda **_: FakeRunWorker())
     with pytest.raises(SystemExit) as raised:
         cli.main([

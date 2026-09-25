@@ -68,16 +68,19 @@ def generate_corpus(
     workers: int,
     output_dir: str | Path,
     *,
-    worker_factory: Callable[[int], CorpusWorker] | None = None,
+    worker_factory: Callable[..., CorpusWorker] | None = None,
     compression: int = 3,
 ) -> dict[str, Any]:
     """Write a deterministic Generated scenario corpus and return its summary.
 
     The default worker is selected here so existing callers that replace scenarios.NativeWorker
-    at the public seam continue to work after the implementation split.
+    at the public seam continue to work after the implementation split. A custom ``worker_factory``
+    may declare a ``pck_fingerprint`` keyword to receive one shared digest for multiple active shards.
     """
-    factory = worker_factory or (lambda _shard: NativeWorker())
-    return _generate_corpus(request, workers, output_dir, worker_factory=factory, compression=compression)
+    return _generate_corpus(
+        request, workers, output_dir, worker_factory=worker_factory,
+        native_worker=NativeWorker, compression=compression,
+    )
 
 
 __all__ = [

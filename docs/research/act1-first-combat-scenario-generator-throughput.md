@@ -156,6 +156,25 @@ pwsh -NoProfile -File scripts/compare-scenario-reference-b.ps1 -RunId paired2026
 
 **推断：** 占参考请求 A 的 **21%**（1.393/6.574）；占参考请求 B 约 **3–7%**，因为 8 个 worker 的哈希本来就在并发中重叠。**不是**解决规模化问题的杠杆，但它是内循环最便宜的一步。
 
+### 工单 01：corpus 批量共享 PCK 指纹（2026-09-25，基线 HEAD `a13ba39`）
+
+**实测，单轮。** 在同一游戏 build 上先从改动前 HEAD 运行固定 A（1/2/4 worker）与 B（8 worker）请求，再用基准脚本的 `--fingerprint-comparison` 对同一请求交替运行旧的裸 worker 工厂（「旧路径」）和新的默认共享路径（「新路径」）。启动时间从每个 `NativeWorker()` 构造调用到 `hello` 返回；墙钟包含父进程的 PCK 测量、worker 启动、生成与 corpus 写入。每个配置的新旧 corpus，以及新 corpus 与改动前 HEAD 的 corpus，都对 `summary.json` 和所有压缩分片逐文件作 SHA-256 比较，**全部相同**。原始报告与产物保存在 gitignored 的 `artifacts/scenario-performance/results-ticket01-before-20260925.json`、`results-ticket01-comparison-20260925.json` 及其 corpus 目录。
+
+| 请求 | worker | 改动前 HEAD 墙钟 | 旧路径墙钟 | 新路径墙钟 | 旧路径每 worker 启动中位（范围） | 新路径每 worker 启动中位（范围） |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A | 1 | 6.655 s | 6.561 s | 6.565 s | 2.440 s | 2.417 s |
+| A | 2 | 5.850 s | 5.654 s | 5.174 s | 2.551 s（2.547–2.555） | 1.144 s（1.137–1.150） |
+| A | 4 | 5.341 s | 5.421 s | 4.921 s | 2.769 s（2.736–2.781） | 1.227 s（1.189–1.283） |
+| B | 8 | 42.955 s | 41.137 s | 40.469 s | 3.313 s（3.283–3.348） | 1.460 s（1.440–1.491） |
+
+新路径的 A/2、A/4、B/8 worker 均报告 `source: "pool"`、`bytes_hashed: 0`；旧路径每个 worker 均报告 `source: "worker"`、`bytes_hashed: 1901378340`。A/1 两条路径都让唯一 worker 自行计算，没有父进程测量。多 worker 的父进程指纹在启动分片前测量一次；离线测试用小型 PCK 和假 worker 断言这一次数以及向每个 worker 传递同一指纹。墙钟收益明显小于逐 worker 的启动差，因为旧路径的哈希并发重叠，而新路径包含一次父进程测量。单轮墙钟受运行抖动影响，不宜把这些差值当稳定加速比。
+
+复现命令（在仓库根目录、通过 PowerShell 加载 `.env`）：
+
+```powershell
+pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe python/tools/benchmark_scenario_generation.py <fresh-id> --rounds 1 --fingerprint-comparison'
+```
+
 ## 已知超时缺陷（实测）
 
 参考请求 B 之外单独复跑种子 `200150`（`IRONCLAD` / A0 / 1 worker）：

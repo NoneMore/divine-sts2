@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import inspect
 import os
 import threading
 from collections.abc import Callable, Sequence
@@ -27,6 +28,8 @@ from ._scenario_model import (
 )
 from ._scenario_store import _request_identity, _resume, _shard_writer, _write_summary
 from .client import NativeWorker
+from .paths import find_game_assembly
+from .pck_fingerprint import PckFingerprint
 
 
 def generate_corpus(
@@ -34,7 +37,8 @@ def generate_corpus(
     workers: int,
     output_dir: str | Path,
     *,
-    worker_factory: Callable[[int], CorpusWorker] | None = None,
+    worker_factory: Callable[..., CorpusWorker] | None = None,
+    native_worker: Callable[..., CorpusWorker] = NativeWorker,
     compression: int = 3,
 ) -> dict[str, Any]:
     """Record the batch into an artifact root: one shard per worker, plus the summary naming them.
@@ -52,6 +56,8 @@ def generate_corpus(
     is a failure row like any other, so no single seed can end, bias or reorder a batch.
     ``worker_factory`` builds the worker for one shard index; the default builds a fresh native
     worker per shard, and a caller that supplies one can drive a batch without a game installed.
+    A factory that declares a ``pck_fingerprint`` keyword receives the batch's shared fingerprint
+    when multiple non-empty shards need workers. Existing one-argument factories keep their path.
     """
     if workers < 1:
         raise ScenarioRequestError(f"a corpus needs at least one worker, not {workers}")
@@ -61,22 +67,36 @@ def generate_corpus(
     corpus = _Corpus(
         root, _elements(request), request, workers, compression, _resume(root, request, workers, compression)
     )
-    factory = worker_factory or _native_worker
     pending = corpus.pending
     if pending:
+        if worker_factory is None:
+            def factory(_shard: int, *, pck_fingerprint: PckFingerprint | None = None) -> CorpusWorker:
+                return native_worker(pck_fingerprint=pck_fingerprint) if pck_fingerprint else native_worker()
+        else:
+            factory = worker_factory
+        start_worker: Callable[[int], CorpusWorker] = factory
+        if os.name == "nt" and sum(bool(shard.elements) for shard in pending) > 1 and _accepts_pck_fingerprint(factory):
+            shared_pck = PckFingerprint.measure_for_assembly(find_game_assembly())
+            start_worker = lambda shard: factory(shard, pck_fingerprint=shared_pck)
         with ThreadPoolExecutor(max_workers=len(pending)) as executor:
             # One task per shard: workers are blocking processes, so shards run in threads, and a
             # hard failure — a batch that was killed — takes the batch down while what already
             # landed stays resumable.
-            futures = [executor.submit(corpus.write, shard, factory) for shard in pending]
+            futures = [executor.submit(corpus.write, shard, start_worker) for shard in pending]
             for future in futures:
                 future.result()
     return corpus.write_summary()
 
 
-def _native_worker(_shard: int) -> CorpusWorker:
-    """The default shard worker: one isolated native worker, which ignores its shard index."""
-    return NativeWorker()
+def _accepts_pck_fingerprint(factory: Callable[..., CorpusWorker]) -> bool:
+    """An explicit keyword opts a worker factory into the batch's shared PCK hint."""
+    try:
+        parameter = inspect.signature(factory).parameters.get("pck_fingerprint")
+    except (TypeError, ValueError):
+        return False
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY,
+    )
 
 
 def _shard_name(index: int, workers: int) -> str:

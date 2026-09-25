@@ -8,9 +8,11 @@ writes a fresh directory; the default reference benchmark preflights all output 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +23,7 @@ sys.path.insert(0, str(ROOT / "python"))
 sys.path.insert(0, str(ROOT / "tests" / "acceptance"))
 
 from scenario_fork_reference import ForkAfterAncientWorker  # type: ignore[import-not-found]
+from sts2_native_sim import scenarios
 from sts2_native_sim.client import NativeWorker
 from sts2_native_sim.scenarios import ScenarioRequest, generate_corpus, generate_rows
 
@@ -221,6 +224,69 @@ def _benchmark_references(run_id: str, rounds: int, output: Path, reference: str
     print(json.dumps({"result_file": str(output)}), flush=True)
 
 
+def _fingerprint_comparison(run_id: str, rounds: int, output: Path, reference: str) -> None:
+    """Compare the old bare-worker path with the corpus's shared-fingerprint path."""
+    planned = _reference_requests(run_id, rounds, reference)
+    roots = [OUT / f"{root.name}-{policy}" for _, _, _, _, root in planned for policy in ("before", "after")]
+    for root in roots:
+        if root.exists():
+            raise FileExistsError(f"{root} exists; use a fresh run ID")
+
+    report: dict[str, Any] = {"rounds": rounds, "corpora": [], "comparisons": []}
+    for name, request, workers, round_number, base_root in planned:
+        hashes: list[dict[str, str]] = []
+        for policy in ("before", "after"):
+            root = OUT / f"{base_root.name}-{policy}"
+            starts: list[dict[str, Any]] = []
+            lock = threading.Lock()
+
+            def timed_native_worker(
+                *, _starts: list[dict[str, Any]] = starts, _lock: threading.Lock = lock,
+                **options: Any,
+            ) -> NativeWorker:
+                tick = time.perf_counter()
+                worker = NativeWorker(**options)
+                sample = {
+                    "seconds": time.perf_counter() - tick,
+                    "source": worker.pck_fingerprint.get("source"),
+                    "bytes_hashed": worker.pck_fingerprint.get("bytes_hashed"),
+                }
+                with _lock:
+                    _starts.append(sample)
+                return worker
+
+            old_constructor = scenarios.NativeWorker
+            scenarios.NativeWorker = timed_native_worker  # type: ignore[assignment,misc]
+            try:
+                tick = time.perf_counter()
+                # An explicit bare factory reproduces the pre-change corpus worker path.
+                factory = (lambda _shard: timed_native_worker()) if policy == "before" else None
+                summary = scenarios.generate_corpus(request, workers, root, worker_factory=factory, compression=3)
+                elapsed = time.perf_counter() - tick
+            finally:
+                scenarios.NativeWorker = old_constructor  # type: ignore[misc]
+
+            digest = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in root.iterdir() if path.is_file()}
+            hashes.append(digest)
+            result = {
+                "reference": name, "round": round_number, "workers": workers, "policy": policy,
+                "wall_seconds": elapsed, "elements": summary["elements"],
+                "succeeded": summary["succeeded"], "failed": summary["failed"],
+                "worker_replacements": summary["worker_replacements"], "worker_startups": starts,
+                "files": digest,
+            }
+            report["corpora"].append(result)
+            print(json.dumps({"kind": "fingerprint_corpus", **result}), flush=True)
+        same = hashes[0] == hashes[1]
+        comparison = {"reference": name, "round": round_number, "workers": workers, "byte_identical": same}
+        report["comparisons"].append(comparison)
+        print(json.dumps({"kind": "fingerprint_comparison", **comparison}), flush=True)
+        if not same:
+            raise AssertionError(f"{name} with {workers} workers changed corpus bytes")
+    output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(json.dumps({"result_file": str(output)}), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id", help="unique alphanumeric label for fresh corpus directories")
@@ -228,10 +294,12 @@ def main() -> None:
     parser.add_argument("--reference", choices=("both", "A", "B"), default="both",
                         help="measure one fixed reference request or both (default both)")
     parser.add_argument("--legacy-comparison", action="store_true", help="run the historical fork/handle comparison")
+    parser.add_argument("--fingerprint-comparison", action="store_true",
+                        help="compare bare and shared-fingerprint workers, including startup and corpus bytes")
     args = parser.parse_args()
     if not args.run_id.replace("-", "").replace("_", "").isalnum() or args.rounds < 1:
         parser.error("run_id must be alphanumeric and rounds must be positive")
-    if args.legacy_comparison and args.reference != "both":
+    if args.legacy_comparison and (args.reference != "both" or args.fingerprint_comparison):
         parser.error("--reference cannot be combined with --legacy-comparison")
     OUT.mkdir(parents=True, exist_ok=True)
     output = OUT / f"results-{args.run_id}.json"
@@ -239,6 +307,8 @@ def main() -> None:
         raise FileExistsError(f"{output} exists; use a fresh run ID")
     if args.legacy_comparison:
         _legacy_comparison(args.run_id, args.rounds, output)
+    elif args.fingerprint_comparison:
+        _fingerprint_comparison(args.run_id, args.rounds, output, args.reference)
     else:
         _benchmark_references(args.run_id, args.rounds, output, args.reference)
 

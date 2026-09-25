@@ -376,8 +376,7 @@ class NativeWorkerPool:
         self._shared_measurements: list[PckFingerprint] = []
         if workers > 1 and os.name == "nt" and "pck_fingerprint" not in self.worker_options:
             assembly = Path(self.worker_options.get("assembly") or find_game_assembly())
-            pck = assembly.resolve().parent.parent / "SlayTheSpire2.pck"
-            self._shared_pck = PckFingerprint.measure(pck)
+            self._shared_pck = PckFingerprint.measure_for_assembly(assembly)
             self._shared_measurements.append(self._shared_pck)
         self.workers = [self._new_worker() for _ in range(workers)]
         self._all_workers = list(self.workers)

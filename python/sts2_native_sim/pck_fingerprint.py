@@ -29,6 +29,10 @@ class PckFingerprint:
     seconds: float
 
     @classmethod
+    def measure_for_assembly(cls, assembly: str | Path) -> PckFingerprint:
+        return cls.measure(Path(assembly).resolve().parent.parent / "SlayTheSpire2.pck")
+
+    @classmethod
     def measure(cls, path: Path) -> PckFingerprint:
         path = path.resolve()
         before = _identity(path)
