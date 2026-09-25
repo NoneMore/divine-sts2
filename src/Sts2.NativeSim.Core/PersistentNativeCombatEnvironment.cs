@@ -38,6 +38,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     private readonly Dictionary<object, string> _deckInstanceIds = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<uint, object> _combatCreaturesById = new();
     private string _lastSnapshotDebug = "";
+    private double _lastRunSnapshotCaptureMs;
     private int _dynamicCardOrdinal;
     private object? _run, _player, _combat, _manager, _pcs;
     private IDisposable? _selectorScope;
@@ -627,7 +628,7 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
     }
 
     public string Fork() => GetOrAddCurrentBranch();
-    public object Diagnostics() => new { unlock_policy = UnlockPolicy, branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug };
+    public object Diagnostics() => new { unlock_policy = UnlockPolicy, branch_count = _branches.Count, branch_capacity = BranchCapacity, history_length = _history.Count, current_state_hash = _hash, last_snapshot_debug = _lastSnapshotDebug, snapshot_capture_ms = RestoreProfile.Enabled ? _lastRunSnapshotCaptureMs : (double?)null };
 
     public async Task<EnvironmentResult> RestoreAsync(string id)
     {
@@ -654,36 +655,34 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         Stopwatch timer = Stopwatch.StartNew();
 
         long snapshotStartedAt = RestoreProfile.Tick();
-        if (branch.CombatSnapshot is not null)
-        {
-            if (RestoreCombatSnapshot(branch.CombatSnapshot))
-            {
-                profile?.RecordSnapshot(snapshotStartedAt);
-                _history.Clear();
-                _history.AddRange(branchHistory);
-                _currentBranchHandle = id;
-                EnvironmentResult snapResult = CaptureRestored(profile);
-                if (StringComparer.Ordinal.Equals(snapResult.StateHash, branch.ExpectedHash))
-                {
-                    timer.Stop();
-                    _lastSnapshotDebug = "snapshot_success";
-                    profile?.Close(startedAt);
-                    return snapResult with { Transition = new { kind = "snapshot_restore", replayed_actions = 0, elapsed_ms = timer.Elapsed.TotalMilliseconds, profile } };
-                }
-                else
-                {
-                    _lastSnapshotDebug = $"hash_mismatch: expected={branch.ExpectedHash}, got={snapResult.StateHash}";
-                }
-            }
-            else
-            {
-                _lastSnapshotDebug = $"restore_failed: {_lastSnapshotDebug}";
-            }
-        }
+        bool snapshotRestored;
+        if (branch.RunSnapshot is not null)
+            snapshotRestored = await RestoreRunSnapshotAsync(branch.RunSnapshot).ConfigureAwait(false);
+        else if (branch.CombatSnapshot is not null)
+            snapshotRestored = RestoreCombatSnapshot(branch.CombatSnapshot);
         else
         {
             _lastSnapshotDebug = "snapshot_was_null";
+            snapshotRestored = false;
         }
+        if (snapshotRestored)
+        {
+            profile?.RecordSnapshot(snapshotStartedAt);
+            _history.Clear();
+            _history.AddRange(branchHistory);
+            _currentBranchHandle = id;
+            EnvironmentResult snapResult = CaptureRestored(profile);
+            if (StringComparer.Ordinal.Equals(snapResult.StateHash, branch.ExpectedHash))
+            {
+                timer.Stop();
+                _lastSnapshotDebug = "snapshot_success";
+                profile?.Close(startedAt);
+                return snapResult with { Transition = new { kind = "snapshot_restore", replayed_actions = 0, elapsed_ms = timer.Elapsed.TotalMilliseconds, profile } };
+            }
+            _lastSnapshotDebug = $"hash_mismatch: expected={branch.ExpectedHash}, got={snapResult.StateHash}";
+        }
+        else if (branch.RunSnapshot is not null || branch.CombatSnapshot is not null)
+            _lastSnapshotDebug = $"restore_failed: {_lastSnapshotDebug}";
 
         await ReconstructAsync(branch.ResetRecipe, profile).ConfigureAwait(false);
         long replayStartedAt = RestoreProfile.Tick();
@@ -3331,14 +3330,17 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         // self-contained.  ResolveBranchHistory() reads this directly and is
         // therefore immune to ancestor eviction regardless of LRU order.
         string[] history = _history.ToArray();
+        _lastRunSnapshotCaptureMs = 0;
         CombatSnapshot? combatSnapshot = CaptureCombatSnapshot();
+        RunSnapshot? runSnapshot = CaptureRunSnapshot();
         _branches[id] = new(
             _currentBranchHandle,
             _lastActionId,
             _hash,
             _resetRecipe ?? throw new ProtocolException("invalid_state", "The native adapter has no reset recipe."),
             history,
-            combatSnapshot);
+            combatSnapshot,
+            runSnapshot);
         _branchOrder.AddLast(id);
         _currentBranchHandle = id;
         while (_branches.Count > BranchCapacity && _branchOrder.First is { } oldest)
@@ -3354,6 +3356,132 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         // History is stored directly on the Branch record at creation time, so
         // resolution is an O(1) array copy that is immune to ancestor eviction.
         return [.. leaf.History];
+    }
+
+    private RunSnapshot? CaptureRunSnapshot()
+    {
+        // The scenario driver's retained checkpoint is the first entered Ancient room. Later
+        // event states may contain an in-flight choice which the shipped save schema omits.
+        if (!RunResetActive || _runStage != "event" || _history.Count != 1 ||
+            _pendingChoice is not null || HasOpenRewardSet || _run is null || _player is null)
+            return null;
+        long startedAt = RestoreProfile.Tick();
+        try
+        {
+            object room = ReflectionTools.Get(_run, "CurrentRoom")!;
+            object runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!;
+            object save = ReflectionTools.Invoke(runManager, "ToSave", room)!;
+            object deck = ReflectionTools.Get(_player, "Deck")!;
+            string?[] deckIds = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards"))
+                .Select(card => card is not null && _deckInstanceIds.TryGetValue(card, out string? id) ? id : null)
+                .ToArray();
+            return new RunSnapshot(save, deckIds, _dynamicCardOrdinal, _choiceOrdinal);
+        }
+        catch (Exception ex)
+        {
+            _lastSnapshotDebug = $"capture_failed: {ex.GetType().Name}: {ex.Message}";
+            return null;
+        }
+        finally
+        {
+            if (RestoreProfile.Enabled) _lastRunSnapshotCaptureMs = RestoreProfile.Since(startedAt);
+        }
+    }
+
+    private async Task<bool> RestoreRunSnapshotAsync(RunSnapshot snapshot)
+    {
+        try
+        {
+            object runManager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance")!;
+            if (_runServicesInitialized)
+            {
+                object? synchronizer = ReflectionTools.Get(runManager, "PlayerChoiceSynchronizer");
+                if (synchronizer is not null) ReflectionTools.Invoke(synchronizer, "Dispose");
+                object? replayWriter = ReflectionTools.Get(runManager, "CombatReplayWriter");
+                if (replayWriter is not null) ReflectionTools.Invoke(replayWriter, "Dispose");
+                ReflectionTools.Set(runManager, "State", null);
+            }
+            object save = snapshot.Save;
+            _run = ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Runs.RunState"), "FromSerializable", save)!;
+            _player = ReflectionTools.Enumerate(ReflectionTools.Get(_run, "Players")).First()!;
+            // FromSerializable shares each saved history list and its entries with the save.
+            // Later Ancient decisions update those entries, so detach the history graph before
+            // the run continues. Otherwise the next restore would load a mutated checkpoint.
+            IList history = (IList)ReflectionTools.Get(_run, "_mapPointHistory")!;
+            for (int act = 0; act < history.Count; act++)
+            {
+                IList savedAct = (IList)history[act]!;
+                IList detached = (IList)ReflectionTools.Create(savedAct.GetType());
+                foreach (object? entry in savedAct)
+                    detached.Add(entry is null ? null : CloneHistoryNode(entry));
+                history[act] = detached;
+            }
+            _manager = ReflectionTools.GetStatic(T("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance")!;
+            ReflectionTools.Invoke(_manager, "Reset", false);
+            ReflectionTools.Set(_manager, "_state", null);
+            // SetUpSavedSingleplayer performs a real save-manager reload count write. Its three
+            // setup steps are used here with saving disabled, as in the worker's SetUpTest path.
+            object netService = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Multiplayer.NetSingleplayerGameService"));
+            object inputSynchronizer = ReflectionTools.Create(T("MegaCrit.Sts2.Core.Multiplayer.Game.PeerInput.PeerInputSynchronizer"), netService);
+            ReflectionTools.Set(runManager, "State", _run);
+            ReflectionTools.Invoke(runManager, "InitializeShared", netService, inputSynchronizer, false,
+                ReflectionTools.Get(save, "DailyTime"), ReflectionTools.Get(save, "StartTime"),
+                ReflectionTools.Get(save, "RunTime"), ReflectionTools.Get(save, "WinTime"),
+                ReflectionTools.Get(save, "NumReloads"));
+            ReflectionTools.Invoke(runManager, "InitializeRunLobby", netService, _run);
+            ReflectionTools.Invoke(runManager, "InitializeSavedRun", save);
+            ReflectionTools.Set(ReflectionTools.Get(runManager, "CombatReplayWriter")!, "IsEnabled", false);
+            ReflectionTools.SetStatic(T("MegaCrit.Sts2.Core.Context.LocalContext"), "NetId", (ulong?)1);
+            if (ReflectionTools.Invoke(runManager, "GenerateMap") is Task generateMap)
+                await generateMap.ConfigureAwait(false);
+            object? serialRoom = ReflectionTools.Get(save, "PreFinishedRoom");
+            object? room = ReflectionTools.InvokeStatic(T("MegaCrit.Sts2.Core.Rooms.AbstractRoom"), "FromSerializable", serialRoom, _run);
+            if (ReflectionTools.Invoke(runManager, "LoadIntoLatestMapCoord", room) is Task loadRoom)
+                await loadRoom.ConfigureAwait(false);
+            _event = ReflectionTools.Get(ReflectionTools.Get(_run, "CurrentRoom")!, "LocalMutableEvent");
+            _eventId = _event is null ? null : Entry(_event);
+            _runStage = "event";
+            _combat = null;
+            _pcs = null;
+            _pendingChoice = null;
+            _continuationTask = null;
+            _cardInstanceIds.Clear();
+            _deckInstanceIds.Clear();
+            object deck = ReflectionTools.Get(_player, "Deck")!;
+            IReadOnlyList<object?> deckCards = ReflectionTools.Enumerate(ReflectionTools.Get(deck, "Cards"));
+            if (deckCards.Count != snapshot.DeckIds.Length) return false;
+            for (int index = 0; index < deckCards.Count; index++)
+                if (deckCards[index] is { } card && snapshot.DeckIds[index] is { } cardId)
+                    _deckInstanceIds[card] = cardId;
+            _dynamicCardOrdinal = snapshot.DynamicCardOrdinal;
+            _choiceOrdinal = snapshot.ChoiceOrdinal;
+            _combatCreaturesById.Clear();
+            _currentBranchHandle = null;
+            _lastActionId = null;
+            await AwaitEventStartedAsync().ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _lastSnapshotDebug = ex.ToString();
+            return false;
+        }
+    }
+
+    private static object CloneHistoryNode(object source)
+    {
+        object clone = typeof(object).GetMethod("MemberwiseClone", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(source, null)!;
+        foreach (PropertyInfo property in source.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!property.CanWrite || !typeof(IList).IsAssignableFrom(property.PropertyType) ||
+                property.GetValue(source) is not IList items) continue;
+            IList copy = (IList)ReflectionTools.Create(items.GetType());
+            foreach (object? item in items)
+                copy.Add(item is null || item.GetType().IsValueType || item is string ? item : CloneHistoryNode(item));
+            property.SetValue(clone, copy);
+        }
+        return clone;
     }
 
     private CombatSnapshot? CaptureCombatSnapshot()
@@ -3938,6 +4066,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         List<string?> PotionSlots,
         OrbQueueSnapshot? Orbs);
 
+    private sealed record RunSnapshot(object Save, string?[] DeckIds, int DynamicCardOrdinal, int ChoiceOrdinal);
+
     private enum NativeResetKind
     {
         Combat,
@@ -3968,7 +4098,8 @@ public sealed class PersistentNativeCombatEnvironment : IDisposable
         string ExpectedHash,
         NativeResetRecipe ResetRecipe,
         string[] History,
-        CombatSnapshot? CombatSnapshot = null);
+        CombatSnapshot? CombatSnapshot = null,
+        RunSnapshot? RunSnapshot = null);
     private sealed record PendingRewardSelection(object TopReward, object SelectedReward, bool IsLinked);
 
     /// <summary>

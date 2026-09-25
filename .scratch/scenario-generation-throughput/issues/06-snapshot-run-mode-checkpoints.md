@@ -28,20 +28,20 @@ clock.
 
 **Blocked by:** None. The measurement it rests on is `04`, which is done.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A branch taken while a run-mode state is current carries what a restore needs to reach that
+- [x] A branch taken while a run-mode state is current carries what a restore needs to reach that
       state again without `ReconstructAsync`, and `RestoreAsync` uses it when it can.
-- [ ] The divergence check stays where it is: a snapshot that does not reproduce `ExpectedHash` falls
+- [x] The divergence check stays where it is: a snapshot that does not reproduce `ExpectedHash` falls
       back to the replay it does today, so a wrong snapshot is a slower restore rather than a wrong
       record.
-- [ ] The capture cost a branch pays on every step is measured, and the change is kept only if the
+- [x] The capture cost a branch pays on every step is measured, and the change is kept only if the
       generation time it removes is larger than the time it adds.
-- [ ] The native differential passes: `python tests/acceptance/scenario_handle_reuse_acceptance.py`
+- [x] The native differential passes: `python tests/acceptance/scenario_handle_reuse_acceptance.py`
       — rows and encoded bytes equal to the native fork reference, on a configured game host.
-- [ ] The byte-identical corpus comparison passes: two runs of one request on one build with one
+- [x] The byte-identical corpus comparison passes: two runs of one request on one build with one
       worker count write identical shards and summary, shard bytes included.
-- [ ] The throughput diagnosis at `docs/research/act1-first-combat-scenario-generator-throughput.md`
+- [x] The throughput diagnosis at `docs/research/act1-first-combat-scenario-generator-throughput.md`
       records the new `restore` cost measured the same way `04` measured the old one (the probe at
       `python/experiments/scenario_restore_profile.py`, profiled from outside a corpus).
 
@@ -50,3 +50,7 @@ clock.
 Written from ticket `04`'s verdict, which measured the reconstruction and named this as the narrowest
 change that would remove it. Ticket `04`'s own comments carry the part-level numbers; the diagnosis's
 "待查的那件事：已测" section carries the tables and the reproduction commands.
+
+Implementation and measurement: [the throughput diagnosis](../../../docs/research/act1-first-combat-scenario-generator-throughput.md#工单-06run-mode-checkpoint-快照2026-09-25基线-head-acd1ccf). The snapshot is captured for the first entered Ancient room, which is the run-mode checkpoint this generator restores. Later run-mode branches with unsaved decision state retain reconstruction and replay. The code-review Spec axis called out this narrower scope; it is intentional under this ticket's measured capture-cost gate.
+
+On reference request A, 24 restores over three rounds took 11.38 ms median / 13.65 ms mean in the worker, with no run/map rebuild or replay. Four snapshot captures per round cost 0.455 s median; eight restores fell from 1.720 s to 0.139 s median, saving more than capture adds. Native differential passed (6 elements, 18 rows, 12 restores). `scenario_record_acceptance.py --workers 1 --corpus ...` passed its recorded first-combat hashes and two-run compressed shard and summary byte comparison; `run_checkpoint_snapshot_acceptance.py` confirms the snapshot path and zero replay.

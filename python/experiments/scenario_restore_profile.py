@@ -1,10 +1,9 @@
-"""Throwaway research probe: is the Ancient-entry restore a reconstruction, and what does it cost?
+"""Research probe: where does the Ancient-entry restore spend time, and what does snapshot capture cost?
 
-Not a maintained tool. It answers one question the throughput diagnosis leaves open: restoring the
-checkpoint taken when a run entered the Ancient room costs about 215 ms per call, and the same code
-carries a resident-prefix fast path that reports its own elapsed time as zero when it hits. Whether
-those 215 ms are a fast path that never fires, or a reconstruction that cannot be avoided, decides
-whether the largest single cost in scenario generation is removable at all.
+The original measurement showed that the Ancient-entry checkpoint rebuilt a run and its map.
+The same fixed request now measures the snapshot restore. Pass ``--capture-steps`` to ask the
+worker for the capture cost after every step; this adds diagnostic RPCs, so use a run without that
+flag when comparing generation time. All timings live outside the corpus.
 
 So the probe drives reference request A — the small request the diagnosis fixes — on one worker with
 profiling on, and reports for every restore the wall time it took from the outside and where the
@@ -125,12 +124,13 @@ def attribute_restores(restores: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def measure_round(round_number: int) -> dict[str, Any]:
+def measure_round(round_number: int, *, capture_steps: bool = False) -> dict[str, Any]:
     """Drive the request on one worker, timing every restore the generation performs from outside."""
     started = time.perf_counter()
     worker = NativeWorker()
     startup_seconds = time.perf_counter() - started
     restores: list[dict[str, Any]] = []
+    step_capture_ms: list[float] = []
     original_request = worker.request
 
     def timed_request(method: str, params: dict[str, Any] | None = None) -> Any:
@@ -143,6 +143,11 @@ def measure_round(round_number: int) -> dict[str, Any]:
                     "transition": result.get("transition") or {},
                 }
             )
+        elif method == "run_step" and capture_steps:
+            # The coordinator owns the step transition, so read the native environment's
+            # measured capture cost through its diagnostic endpoint after the step.
+            diagnostics = original_request("diagnostics")
+            step_capture_ms.append(float(diagnostics.get("snapshot_capture_ms") or 0.0))
         return result
 
     worker.request = timed_request  # type: ignore[method-assign]
@@ -162,6 +167,8 @@ def measure_round(round_number: int) -> dict[str, Any]:
         "scenario_rows": sum(1 for row in rows if row.get("record_type") == "scenario"),
         "failure_rows": sum(1 for row in rows if row.get("record_type") == "failure"),
         "restores": restores,
+        "step_snapshot_capture_ms": step_capture_ms,
+        "snapshot_capture_total_ms": sum(step_capture_ms),
         "attribution": attribute_restores(restores),
     }
 
@@ -169,6 +176,8 @@ def measure_round(round_number: int) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--capture-steps", action="store_true",
+                        help="read native snapshot capture timings after every step (adds diagnostic RPCs)")
     parser.add_argument("--out", type=Path, default=None)
     arguments = parser.parse_args()
     if arguments.rounds < 1:
@@ -177,7 +186,8 @@ def main() -> int:
     # The worker is a child process that copies this environment at spawn, so profiling is asked for
     # before the first worker starts and every round of the probe measures the same thing.
     os.environ[PROFILE_ENVIRONMENT_VARIABLE] = "1"
-    rounds = [measure_round(number) for number in range(1, arguments.rounds + 1)]
+    rounds = [measure_round(number, capture_steps=arguments.capture_steps)
+              for number in range(1, arguments.rounds + 1)]
     report = {
         "measured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "request": {
@@ -186,6 +196,7 @@ def main() -> int:
             "seeds": list(REQUEST.seeds),
         },
         "rounds": rounds,
+        "snapshot_capture_total_ms": sum(one_round["snapshot_capture_total_ms"] for one_round in rounds),
         "all_restores": attribute_restores(
             [restore for one_round in rounds for restore in one_round["restores"]]
         ),

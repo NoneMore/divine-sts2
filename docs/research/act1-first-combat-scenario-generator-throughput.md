@@ -261,6 +261,26 @@ pwsh -NoProfile -Command '. ./scripts/common.ps1; & ./.venv/Scripts/python.exe p
 
 **验收：现成的两道门，补测都跑过。** [`scenario_handle_reuse_acceptance.py`](../../tests/acceptance/scenario_handle_reuse_acceptance.py) 是 native 差分（同 build 上逐行、逐编码字节等于 native fork 参考），补测通过：6 element / 18 行 / 12 次 `restore`，与参考计数一致。corpus 的字节同一（`corpus_differential: byte_identical: true`）是第二道：同一请求在 `STS2_RESTORE_PROFILE` 开与关下写出的 `worker-00.jsonl.gz` 与 `summary.json` 的 SHA-256 完全相同。这一条要说清它能证明什么：驱动从不读 `transition`（[`_scenario_driver.py:425`](../../python/sts2_native_sim/_scenario_driver.py#L425)），所以计时本来就没有进入行的路径，字节同一证明的是"开着开关跑出来的批量与关着时逐字节无法区分"，而不是"差点就漏进去了"。
 
+### 工单 06：run-mode checkpoint 快照（2026-09-25，基线 HEAD `acd1ccf`）
+
+**实测，参考请求 A，单 worker，三轮。** Ancient 入口的分支现在保存 shipped game 的 `SerializableRun`（含 `SerializableActMap`），恢复时走存档载入的 run/map 路径，不再运行 `GenerateRooms` 或重放动作；恢复后的 `ExpectedHash` 仍逐次检查，不匹配则回退到原来的重建和重放。快照仅用于本次生成器会保留的第一间 Ancient 房间入口；之后可能持有未序列化选择状态的事件分支继续走原路径。恢复时还需复制存档所共享的地图历史对象，并重绑牌组实例 ID，否则第一次分支运行会污染下一次恢复，或使首战行的编码字节变化。
+
+同一探针 [`scenario_restore_profile.py`](../../python/experiments/scenario_restore_profile.py) 在外部生成器上计时，开 `STS2_RESTORE_PROFILE=1`，每轮 8 次 restore。`--capture-steps` 另在每步后读取 worker 诊断来归因快照捕获；其额外 RPC 不计入下表的无诊断生成时间。原始报告位于 gitignored `artifacts/scenario-performance/restore-profile-snapshot-final.json` 与 `restore-profile-snapshot-final-capture.json`。
+
+| 参考请求 A，每轮 | 旧路径（工单 04） | 快照路径（工单 06） |
+| --- | ---: | ---: |
+| 热 worker 生成时间，三轮中位 | 4.049 s | 2.89 s（2.83 / 2.92 / 2.89） |
+| 8 次 restore 的 RPC 墙钟，三轮中位 | 1.720 s | 0.139 s（0.141 / 0.139 / 0.131） |
+| 每次 restore 的 worker 中位 / 均值 | 163.4 / 205.5 ms | 11.38 / 13.65 ms |
+| 每次 restore 的 RPC 中位 / 均值 | 164.2 / 209.1 ms | 12.52 / 17.12 ms |
+| 每轮 4 次快照捕获的 worker 成本 | 未付出 | 0.455 s（0.462 / 0.455 / 0.437） |
+
+24 次 restore 的 worker 合计 **327.6 ms**：`snapshot_ms` 320.3 ms，`run_rebuild_ms` / `map_rebuild_ms` / `replay_ms` 均为 **0**，resident-prefix 命中仍为 **0/24**。相比旧路径每轮约 1.72 s 的 restore，新的约 0.139 s 节省约 **1.58 s**；每轮捕获增加约 **0.455 s**，净节省约 **1.13 s**。独立的完整生成时间中位下降 **1.16 s**，与逐项归因接近。这个前后对照复用了同一游戏 build 和固定请求，但不是交错运行的随机试验；净收益判定主要由 worker 对捕获和恢复的直接计时支持。
+
+**验收。** `scenario_handle_reuse_acceptance.py` 通过，6 element / 18 行 / 12 restore，与原生 fork 参考逐行及编码字节相同；`scenario_record_acceptance.py --workers 1 --corpus ...` 通过已录制首战状态校验，并在同一构建、同一请求、同一 worker 数下两次写出字节相同的压缩分片和 summary。新增的 `run_checkpoint_snapshot_acceptance.py` 验证 Ancient checkpoint 的观察值、hash、合法选项相同，且返回 `snapshot_restore` / 0 个重放动作。
+
+此项改动改变了 [ADR-0006](../adr/0006-model-run-decisions-as-one-active-state.md) 中“分支恢复继续重放”的既有决定：Ancient 入口快照现在先尝试原生存档载入，失败或 hash 不符时仍使用该 ADR 描述的重放路径。该决定的会话边界和不可序列化的嵌套选择续接保持不变。
+
 ## 建议
 
 **建议做（与门槛无关，因为便宜且机制现成）：**

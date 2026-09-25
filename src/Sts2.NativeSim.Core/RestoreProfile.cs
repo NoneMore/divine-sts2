@@ -54,7 +54,7 @@ internal sealed class RestoreProfile
     /// <summary>Replaying the checkpoint's action history onto the rebuilt run.</summary>
     [JsonPropertyName("replay_ms")] public double? ReplayMs { get; set; }
 
-    /// <summary>Restoring the combat snapshot a combat-mode checkpoint carries.</summary>
+    /// <summary>Restoring a combat or run snapshot carried by a checkpoint.</summary>
     [JsonPropertyName("snapshot_ms")] public double? SnapshotMs { get; set; }
 
     /// <summary>Capturing the restored state: its observation, its legal actions and its hash.</summary>
