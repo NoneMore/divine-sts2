@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass, field
 from typing import Any
 
 from ._scenario_codec import _refuse_floats, error_kind
@@ -45,6 +46,25 @@ from .client import RESET_MODE_RUN
 from .schema import validate_observation
 
 _UNSUPPORTED_INTERACTIVE_FIRST_COMBAT_RELICS = frozenset({"GAMBLING_CHIP"})
+
+
+@dataclass
+class _SinglePromptBranches:
+    """The legal options of one reward or option pick, in their offered order."""
+
+    indices: list[int] = field(default_factory=list)
+    position: int = 0
+
+    def choose(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
+        if not self.indices:
+            self.indices = [index for index, action in enumerate(actions) if _non_skip_nested_action(action)]
+        if not self.indices:
+            raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, "the nested prompt has no non-skip action")
+        return actions[self.indices[self.position]]
+
+    def advance(self) -> bool:
+        self.position += 1
+        return self.position < len(self.indices)
 
 
 class UnsupportedInteractiveFirstCombatRelic(RuntimeError):
@@ -218,7 +238,8 @@ def _validated_scenario(
         raise ScenarioMaterializationError("invalid scenario row: $.recipe.nested_choices must be an array")
     for index, value in enumerate(nested_choices):
         path = f"$.recipe.nested_choices[{index}]"
-        nested = _require_record_keys(value, set(NESTED_CHOICE_KEY_ORDER), set(), path)
+        nested = _require_record_keys(value, set(NESTED_CHOICE_KEY_ORDER) - {"selected_reward"},
+                                      {"selected_reward"}, path)
         _require_text(nested["kind"], f"{path}.kind")
         _require_integer(nested["selected_index"], f"{path}.selected_index", minimum=0)
         option_ids = nested["selected_option_ids"]
@@ -226,6 +247,17 @@ def _validated_scenario(
             raise ScenarioMaterializationError(
                 f"invalid scenario row: {path}.selected_option_ids must be a string array"
             )
+        if "selected_reward" in nested:
+            reward = _require_record_keys(
+                nested["selected_reward"],
+                {"reward_index", "child_index", "option_index", "reward_kind", "model_id"}, set(),
+                f"{path}.selected_reward",
+            )
+            for key in ("reward_index", "child_index", "option_index"):
+                _require_integer(reward[key], f"{path}.selected_reward.{key}")
+            _require_text(reward["reward_kind"], f"{path}.selected_reward.reward_kind")
+            if reward["model_id"] is not None:
+                _require_text(reward["model_id"], f"{path}.selected_reward.model_id")
 
     node = _require_record_keys(recipe["node"], set(NODE_KEY_ORDER), set(), "$.recipe.node")
     _require_integer(node["col"], "$.recipe.node.col", minimum=0)
@@ -318,6 +350,10 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
                 f"recipe mismatch: nested choice {nested_index} option ids are {selected_option_ids!r}, "
                 f"not {recorded.get('selected_option_ids')!r}"
             )
+        if "selected_reward" in recorded and recorded["selected_reward"] != (action.get("parameters") or {}):
+            raise ScenarioMaterializationError(
+                f"recipe mismatch: nested choice {nested_index} reward identity differs from the offered action"
+            )
         nested_index += 1
         return action["action_id"]
 
@@ -361,10 +397,11 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
 
 
 def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, Any]]:
-    """Every row one element of the request produces: one per Ancient choice its run offers.
+    """Every row one element produces, in Ancient and nested option offer order.
 
-    The run starts once, then its Ancient offer's returned handle is kept before taking any
-    choice. A failed choice gets its own failure row, and the next choice restores that state.
+    The run starts once and keeps the Ancient offer's handle. Each choice's first reward or
+    option pick may expand to several branches. A failed branch gets its own failure row;
+    later branches restore the offer and continue.
     """
     build = worker.build
     attempted = _Recipe(element, build)
@@ -385,14 +422,16 @@ def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, An
     assert attempted.offered is not None
     rows: list[dict[str, Any]] = []
     for choice_index, (identity, action) in enumerate(choices):
-        recipe = _Recipe(
-            element,
-            build,
-            act_variant=attempted.act_variant,
-            ancient_choice=identity,
-        )
-        outcome = _drive_safely(recipe, action, attempted.offered, worker, checkpoint if choice_index else None)
-        rows.append(_element_row(recipe, outcome))
+        branches = _SinglePromptBranches()
+        while True:
+            recipe = _Recipe(element, build, act_variant=attempted.act_variant, ancient_choice=identity)
+            outcome = _drive_safely(
+                recipe, action, attempted.offered, worker,
+                checkpoint if choice_index or branches.position else None, branches,
+            )
+            rows.append(_element_row(recipe, outcome))
+            if not branches.advance():
+                break
     return rows
 
 
@@ -419,6 +458,7 @@ def _drive_safely(
     offered: list[dict[str, Any]],
     worker: RunWorker,
     checkpoint: str | None,
+    branches: _SinglePromptBranches,
 ) -> _DrivenRun | _Stopped:
     """Drive one run, handing back the failure instead of raising it.
 
@@ -429,13 +469,13 @@ def _drive_safely(
         recipe.stage = STAGE_ANCIENT_CHOICE
         if checkpoint is not None:
             worker.restore(checkpoint)
-        return _drive_to_first_fight(recipe, choice, offered, worker)
+        return _drive_to_first_fight(recipe, choice, offered, worker, branches)
     except Exception as error:  # noqa: BLE001
         return _Stopped(error)
 
 
 def _element_row(recipe: _Recipe, outcome: _DrivenRun | _Stopped) -> dict[str, Any]:
-    """One Ancient choice's row: the scenario its drive reached, or the failure that stopped it.
+    """One opening branch's scenario row, or the failure that stopped it.
 
     Recording the scenario can fail too — a nested selection the prompt does not report is a
     failure of that choice's record — and that is a failure row like any other.
@@ -453,6 +493,7 @@ def _drive_to_first_fight(
     choice: dict[str, Any],
     offered: list[dict[str, Any]],
     worker: RunWorker,
+    branches: _SinglePromptBranches,
 ) -> _DrivenRun:
     """Drive one Ancient choice from its offered state to the first fight.
 
@@ -460,8 +501,22 @@ def _drive_to_first_fight(
     worker's error, or a bug — is still attributed to the phase the drive was in.
     """
     recipe.stage = STAGE_ANCIENT_CHOICE
+    decisions: list[NestedDecision] = []
+
+    def choose_nested(prompt: dict[str, Any]) -> str:
+        actions = prompt["legal_actions"]
+        kind = prompt["observation"]["decision"]["kind"]
+        if not decisions and kind in {"custom_reward_choice", "option_choice"}:
+            action = branches.choose(actions)
+        else:
+            action = actions[0]
+        decision = NestedDecision(prompt, action["action_id"])
+        recipe.nested_choices.append(_nested_choice(decision))
+        decisions.append(decision)
+        return action["action_id"]
+
     try:
-        driven = drive_choice(worker, choice)
+        driven = drive_choice(worker, choice, choose=choose_nested)
     except ValueError as error:
         raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, str(error)) from error
 
@@ -504,6 +559,14 @@ def _drive_to_first_fight(
         observation=observation,
         state_hash=combat["state_hash"],
     )
+
+
+def _non_skip_nested_action(action: dict[str, Any]) -> bool:
+    if action.get("kind") == "skip_custom_rewards":
+        return False
+    if action.get("kind") == "choose_option":
+        return bool((action.get("parameters") or {}).get("option_ids"))
+    return True
 
 
 def _reset_state(element: _Element) -> dict[str, Any]:
@@ -561,14 +624,20 @@ def _offered_choices(state: dict[str, Any]) -> list[tuple[dict[str, Any], dict[s
 
     takers: dict[Any, tuple[dict[str, Any], dict[str, Any]]] = {}
     for action in choice_actions(state):
-        identity = _choice_identity(action.get("parameters") or {})
+        parameters = action.get("parameters") or {}
+        if parameters.get("is_proceed"):
+            continue
+        identity = _choice_identity(parameters)
         index = identity["option_index"]
         if index in takers:
             raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, f"the Ancient offers two choices at option {index}")
         takers[index] = (identity, action)
 
     offered: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for reported in (_choice_identity(option) for option in event.get("options") or []):
+    for option in event.get("options") or []:
+        if option.get("is_proceed"):
+            continue
+        reported = _choice_identity(option)
         index = reported["option_index"]
         taker = takers.pop(index, None)
         if taker is None:
@@ -649,6 +718,8 @@ def _failure_row(recipe: _Recipe, error: BaseException) -> dict[str, Any]:
         row["recipe"]["act_variant"] = recipe.act_variant
     if recipe.ancient_choice is not None:
         row["recipe"]["ancient_choice"] = dict(recipe.ancient_choice)
+    if recipe.nested_choices:
+        row["recipe"]["nested_choices"] = copy.deepcopy(recipe.nested_choices)
     row["stage"] = stage
     row["error"] = {"kind": error_kind(error), "message": message}
     return row
@@ -704,11 +775,14 @@ def _nested_choice(decision: NestedDecision) -> dict[str, Any]:
             STAGE_ANCIENT_CHOICE,
             f"the {action.get('kind')!r} action {decision.action_id!r} names no option ids",
         )
-    return {
+    nested = {
         "kind": state["observation"]["decision"]["kind"],
         "selected_index": index,
         "selected_option_ids": list(option_ids) if isinstance(option_ids, list) else [],
     }
+    if action.get("kind") == "choose_custom_reward":
+        nested["selected_reward"] = dict(action.get("parameters") or {})
+    return nested
 
 
 # -- the corpus a batch writes -----------------------------------------------------------

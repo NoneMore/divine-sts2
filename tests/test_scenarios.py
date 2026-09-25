@@ -813,29 +813,109 @@ def test_a_nested_prompt_is_resolved_by_the_first_legal_action_and_recorded() ->
     }]
 
 
-def test_a_nested_reward_pick_is_recorded_by_the_index_it_selected() -> None:
+def test_every_non_skip_reward_pick_has_a_replayable_row() -> None:
     worker = FakeRunWorker(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"),
                            nested=(_reward_choice(),))
-    row = _row(worker=worker)
+    rows = _rows(worker)
 
-    # A reward pick names a reward index rather than option ids, so the index is the selection.
-    assert row["recipe"]["nested_choices"] == [{
-        "kind": "custom_reward_choice",
-        "selected_index": 0,
-        "selected_option_ids": [],
-    }]
+    assert [row["recipe"]["ancient_choice"]["option_index"] for row in rows] == [0, 0, 1, 2]
+    assert [row["recipe"]["nested_choices"] for row in rows[:2]] == [
+        [{"kind": "custom_reward_choice", "selected_index": index, "selected_option_ids": [],
+          "selected_reward": {"reward_index": index, "child_index": -1, "option_index": 0,
+                              "reward_kind": "gold", "model_id": None}}]
+        for index in (0, 1)
+    ]
+    assert all(row["record_type"] == SCENARIO_RECORD for row in rows)
+    for row in rows[:2]:
+        replay = FakeRunWorker(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"), nested=(_reward_choice(),))
+        assert materialize_scenario(row, replay).observation == row["combat_initial_state"]
+        assert replay.steps[2] == f"choose_custom_reward:{row['recipe']['nested_choices'][0]['selected_index']}:-1:0:gold:none"
 
 
-def test_a_nested_bundle_pick_records_the_options_it_selected() -> None:
+def test_every_bundle_option_has_a_replayable_row() -> None:
     worker = FakeRunWorker(offer=("SCROLL_BOXES", "FISHING_ROD", "SILKEN_TRESS"),
                            nested=(_bundle_choice("bundle-0", "bundle-1"),))
-    row = _row(worker=worker)
+    rows = _rows(worker)
 
-    assert row["recipe"]["nested_choices"] == [{
-        "kind": "option_choice",
-        "selected_index": 0,
-        "selected_option_ids": ["bundle-0"],
-    }]
+    assert [row["recipe"]["ancient_choice"]["option_index"] for row in rows] == [0, 0, 1, 2]
+    assert [row["recipe"]["nested_choices"] for row in rows[:2]] == [
+        [{"kind": "option_choice", "selected_index": index, "selected_option_ids": [f"bundle-{index}"]}]
+        for index in (0, 1)
+    ]
+    for row in rows[:2]:
+        replay = FakeRunWorker(offer=("SCROLL_BOXES", "FISHING_ROD", "SILKEN_TRESS"),
+                               nested=(_bundle_choice("bundle-0", "bundle-1"),))
+        assert materialize_scenario(row, replay).observation == row["combat_initial_state"]
+
+
+def test_skippable_nested_option_is_not_a_branch() -> None:
+    prompt = _bundle_choice("bundle-0", "bundle-1")
+    prompt["decision"]["legal_actions"].append({
+        "action_id": "choose_option:card-choice-0:skip", "kind": "choose_option",
+        "parameters": {"choice_id": "card-choice-0", "option_ids": []},
+    })
+    rows = _rows(offer=("SCROLL_BOXES", "FISHING_ROD", "SILKEN_TRESS"), nested=(prompt,))
+
+    assert [row["recipe"]["nested_choices"][0]["selected_index"] for row in rows[:2]] == [0, 1]
+    assert len(rows) == 4
+
+
+def test_a_top_level_skip_choice_produces_no_row() -> None:
+    class SkipOfferingWorker(FakeRunWorker):
+        def _event_choice(self) -> dict[str, Any]:
+            observation = super()._event_choice()
+            observation["event"]["options"].append({
+                "option_index": 3, "relic_model_id": None, "is_proceed": True,
+            })
+            observation["decision"]["legal_actions"].append({
+                "action_id": "choose_event:3:skip", "kind": "choose_event",
+                "parameters": {"option_index": 3, "relic_model_id": None, "is_proceed": True},
+            })
+            return observation
+
+    worker = SkipOfferingWorker()
+    rows = _rows(worker)
+
+    assert [row["recipe"]["ancient_choice"]["option_index"] for row in rows] == [0, 1, 2]
+    assert "choose_event:3:skip" not in worker.steps
+
+
+def test_a_failed_reward_option_keeps_its_recipe_and_sibling_options() -> None:
+    failed_action = "choose_custom_reward:0:-1:0:gold:none"
+    rows = _rows(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"),
+                 nested=(_reward_choice(),), crash_on={failed_action: RuntimeError("reward failed")})
+
+    assert [row["record_type"] for row in rows] == [FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD, SCENARIO_RECORD]
+    assert rows[0]["recipe"]["nested_choices"] == [
+        {"kind": "custom_reward_choice", "selected_index": 0, "selected_option_ids": [],
+         "selected_reward": {"reward_index": 0, "child_index": -1, "option_index": 0,
+                             "reward_kind": "gold", "model_id": None}}
+    ]
+    assert rows[0]["stage"] == "ancient_choice"
+    assert rows[1]["recipe"]["nested_choices"][0]["selected_index"] == 1
+
+
+def test_reward_branches_capture_their_own_combat_initial_states() -> None:
+    class RewardStateWorker(FakeRunWorker):
+        def __init__(self) -> None:
+            super().__init__(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"), nested=(_reward_choice(),))
+            self.selected_reward: int | None = None
+
+        def run_step(self, action_id: str) -> dict[str, Any]:
+            if action_id.startswith("choose_custom_reward:"):
+                self.selected_reward = int(action_id.split(":")[1])
+            result = super().run_step(action_id)
+            if action_id == FIRST_ROW_ONE_ACTION and self.selected_reward is not None:
+                observation = copy.deepcopy(result["observation"])
+                observation["run"]["gold"] = (111, 222)[self.selected_reward]
+                return self._next(observation)
+            return result
+
+    rows = _rows(RewardStateWorker())
+
+    assert [row["combat_initial_state"]["run"]["gold"] for row in rows[:2]] == [111, 222]
+    for row in rows[:2]:
+        assert materialize_scenario(row, RewardStateWorker()).observation == row["combat_initial_state"]
 
 
 def test_a_nested_selection_that_names_no_option_ids_is_recorded_as_a_failure_row() -> None:
@@ -1745,6 +1825,26 @@ def test_another_worker_count_produces_the_same_rows_at_other_shard_boundaries(
         3: [[0, 1], [2], [3]],
         4: [[0], [1], [2], [3]],
     }
+
+
+def test_reward_branches_keep_corpus_bytes_and_row_set_deterministic(
+    corpus_roots: Callable[[], Path],
+) -> None:
+    request = ScenarioRequest(characters=("IRONCLAD",), ascensions=(0,), seeds=("SEED1", "SEED2"))
+
+    def worker(_shard: int) -> FakeRunWorker:
+        return FakeRunWorker(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"), nested=(_reward_choice(),))
+
+    first, second, single = corpus_roots(), corpus_roots(), corpus_roots()
+    generate_corpus(request, 2, first, worker_factory=worker)
+    generate_corpus(request, 2, second, worker_factory=worker)
+    generate_corpus(request, 1, single, worker_factory=worker)
+
+    assert _corpus_files(first) == _corpus_files(second)
+    assert _read_corpus(first) == _read_corpus(single)
+    assert [row["recipe"]["ancient_choice"]["option_index"] for row in _read_corpus(first)] == [
+        0, 0, 1, 2, 0, 0, 1, 2,
+    ]
 
 
 def test_a_corpus_is_byte_identical_when_the_workers_finish_in_another_order(

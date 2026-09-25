@@ -10,13 +10,13 @@ from ._scenario_model import RunWorker, ScenarioRequest, ScenarioRequestError, _
 
 
 def generate_rows(request: ScenarioRequest, worker: RunWorker) -> list[dict[str, Any]]:
-    """Record the first fight of every run the request names, one row per element.
+    """Record the first-fight branches of every run the request names.
 
     Rows come back in the request's declared order — character, then Ascension, then seed, then
     the Ancient choice the run offers — so a caller enumerates a corpus in one call instead of
     scripting the loop. The Ancient choices are the dimension the request does not declare: a
-    seed contributes exactly as many rows as its run offers choices, and neither more nor fewer,
-    so no opening is invented and none is skipped.
+    seed contributes a row for each offered choice and each eligible option of its first reward
+    or option pick. Other nested prompts currently follow their deterministic default action.
 
     An element that cannot produce a scenario contributes a failure row in its place — the same
     position in the same order, with the stage, the error and the recipe resolved so far — and

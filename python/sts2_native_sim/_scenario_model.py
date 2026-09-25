@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -57,7 +57,7 @@ RECIPE_KEY_ORDER = (
     "encounter",
 )
 ANCIENT_CHOICE_KEY_ORDER = ("option_index", "relic_model_id")
-NESTED_CHOICE_KEY_ORDER = ("kind", "selected_index", "selected_option_ids")
+NESTED_CHOICE_KEY_ORDER = ("kind", "selected_index", "selected_option_ids", "selected_reward")
 NODE_KEY_ORDER = ("col", "row", "point_type")
 ERROR_KEY_ORDER = ("kind", "message")
 SUMMARY_KEY_ORDER = (
@@ -257,6 +257,7 @@ class _Recipe:
     act_variant: str | None = None
     offered: list[dict[str, Any]] | None = None
     ancient_choice: dict[str, Any] | None = None
+    nested_choices: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
