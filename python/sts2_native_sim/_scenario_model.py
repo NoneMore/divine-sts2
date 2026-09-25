@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .ancient import DrivenChoice, RunStepWorker
+from .ancient import RunStepWorker
 
 ROW_SCHEMA = "sts2-native-sim/scenario-record/1"
 SCENARIO_RECORD = "scenario"
@@ -57,7 +57,12 @@ RECIPE_KEY_ORDER = (
     "encounter",
 )
 ANCIENT_CHOICE_KEY_ORDER = ("option_index", "relic_model_id")
-NESTED_CHOICE_KEY_ORDER = ("kind", "selected_index", "selected_option_ids")
+#: A nested choice's own fields, and the fields of the identity a reward pick carries. `selected_reward`
+#: is present exactly when the pick took a reward: a reward names no option ids, so `selected_option_ids`
+#: is empty for it and the reward's indices, kind and model are what say which reward was taken. A
+#: skip's record carries neither, because it selected nothing.
+NESTED_CHOICE_KEY_ORDER = ("kind", "selected_index", "selected_option_ids", "selected_reward")
+REWARD_CHOICE_KEY_ORDER = ("reward_index", "child_index", "option_index", "reward_kind", "model_id")
 NODE_KEY_ORDER = ("col", "row", "point_type")
 ERROR_KEY_ORDER = ("kind", "message")
 SUMMARY_KEY_ORDER = (
@@ -119,6 +124,17 @@ STAGE_RECORD = "record"
 #: The nested actions that select a reward rather than choice options, so they carry no
 #: `option_ids`; every other nested action must name the option ids it selected.
 _REWARD_ACTIONS = frozenset({"choose_custom_reward", "skip_custom_rewards"})
+
+#: The nested prompt kinds one Ancient choice's rows are enumerated over: the prompts that offer
+#: whole options — a reward set, and an option pick — rather than single cards. One option of such
+#: a prompt is a different situation from another, so each is a branch of its own; the option ids
+#: or the reward's identity are what makes it replayable. A card select is deliberately not among
+#: them: its options are interchangeable copies of cards, and which copy is taken is a
+#: selection-time pruning rule of its own. `tests/acceptance/ancient_choice_acceptance.py`'s
+#: offered-relic table is the evidence for which prompts an act-1 Ancient reaches: a reward set
+#: from `KALEIDOSCOPE`, `LOST_COFFER`, `SMALL_CAPSULE` and `NEOWS_BONES`, and an option pick from
+#: `SCROLL_BOXES`.
+BRANCHING_PROMPT_KINDS = frozenset({"custom_reward_choice", "option_choice"})
 
 
 class ScenarioRequestError(ValueError):
@@ -200,7 +216,8 @@ class ScenarioRequest:
 
     Each set is kept in the order the caller declared it, because that order is the order the
     request expands in and therefore the order rows come back in. The Ancient choices are the
-    dimension the request does not declare; the run supplies them.
+    dimension the request does not declare, and the options of the reward and option prompts those
+    choices open are the dimension under them; the run supplies both.
     """
 
     characters: Sequence[str]
@@ -244,9 +261,11 @@ class _Recipe:
     """One element's recipe, resolved as far as a drive got, on the build it was resolved on.
 
     A drive fills this in as it walks the run — the phase it is in, the Act variant the run
-    reports, the choices the run offers, the choice this element is for — so a drive that stops
-    early leaves the rest unset and the caller holds exactly the facts the run reached. That is
-    what a failure row carries, and it is why the recipe is filled in rather than built at the end.
+    reports, the choices the run offers, the choice this element is for, and every nested choice
+    the drive took — so a drive that stops early leaves the rest unset and the caller holds exactly
+    the facts the run reached. That is what a failure row carries, and it is why the recipe is
+    filled in rather than built at the end: a branch that resolved an option and then failed still
+    says which option it was, which is what tells one option's failure row from its sibling's.
     ``build`` and ``stage`` ride along because a row carries both: they are the envelope's and the
     failure's, not the recipe's own fields.
     """
@@ -257,15 +276,45 @@ class _Recipe:
     act_variant: str | None = None
     offered: list[dict[str, Any]] | None = None
     ancient_choice: dict[str, Any] | None = None
+    nested: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _OpenedPrompts:
+    """Every nested prompt one drive met, and what the first of them offered.
+
+    A branch is enumerated from the first prompt a choice opens, so what that prompt offered is
+    remembered here as the drive passes through it rather than read back off a finished drive: a
+    drive that stopped after the prompt still says which options it held, which is what lets one
+    failed option be a failure row of its own without suppressing its siblings. ``count`` is what
+    says whether the choice opened a single prompt or a chain of them, ``selected_action`` is the
+    action the drive took from the first one, and the two together are what makes "the drive already
+    produced this branch" a fact rather than a guess.
+    """
+
+    count: int = 0
+    kind: str | None = None
+    actions: tuple[dict[str, Any], ...] = ()
+    selected_action: str | None = None
+
+    def meet(self, state: dict[str, Any]) -> None:
+        """Record standing at one more prompt, keeping the first one's kind and its options."""
+        self.count += 1
+        if self.kind is None:
+            self.kind = state["observation"]["decision"]["kind"]
+            self.actions = tuple(state.get("legal_actions") or [])
 
 
 @dataclass(frozen=True)
 class _DrivenRun:
-    """What one drive of the run reached: the choices it offered and the fight it arrived at."""
+    """What one drive of the run reached: the choices it offered and the fight it arrived at.
+
+    The nested choices the drive took are not repeated here: the drive records each one into its
+    recipe as it takes it, so a branch that stopped after a selection still carries it.
+    """
 
     offered: list[dict[str, Any]]
     choice: dict[str, Any]
-    driven: DrivenChoice
     node: dict[str, Any]
     observation: dict[str, Any]
     state_hash: str

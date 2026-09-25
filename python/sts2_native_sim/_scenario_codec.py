@@ -15,6 +15,7 @@ from ._scenario_model import (
     NESTED_CHOICE_KEY_ORDER,
     NODE_KEY_ORDER,
     RECIPE_KEY_ORDER,
+    REWARD_CHOICE_KEY_ORDER,
     ROW_ESCAPE_NON_ASCII,
     ROW_KEY_ORDER,
     ROW_SEPARATORS,
@@ -114,11 +115,26 @@ def _recipe_in_declared_order(recipe: dict[str, Any]) -> dict[str, Any]:
         )
     if "nested_choices" in recipe:
         declared["nested_choices"] = [
-            _in_declared_order(nested, NESTED_CHOICE_KEY_ORDER, f"$.recipe.nested_choices[{index}]")
+            _nested_choice_in_declared_order(nested, f"$.recipe.nested_choices[{index}]")
             for index, nested in enumerate(recipe["nested_choices"])
         ]
     if "node" in recipe:
         declared["node"] = _in_declared_order(recipe["node"], NODE_KEY_ORDER, "$.recipe.node")
+    return declared
+
+
+def _nested_choice_in_declared_order(nested: dict[str, Any], path: str) -> dict[str, Any]:
+    """One nested choice in declared order, with the identity a reward pick carries in its own.
+
+    A nested choice is a record of a record: its own fields are declared, and the reward identity
+    inside it is declared too, because a record assembled in another order must still be the same
+    bytes. The identity is optional — a prompt that selects option ids, and a skip, carry none.
+    """
+    declared = _in_declared_order(nested, NESTED_CHOICE_KEY_ORDER, path)
+    if "selected_reward" in nested:
+        declared["selected_reward"] = _in_declared_order(
+            nested["selected_reward"], REWARD_CHOICE_KEY_ORDER, f"{path}.selected_reward"
+        )
     return declared
 
 

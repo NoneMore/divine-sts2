@@ -43,8 +43,8 @@ def generate_corpus(
 ) -> dict[str, Any]:
     """Record the batch into an artifact root: one shard per worker, plus the summary naming them.
 
-    Rows come out exactly as :func:`generate_rows` produces them — one row per element, per Ancient
-    choice the run offers, in the request's declared order — but they are written to *shards*
+    Rows come out exactly as :func:`generate_rows` produces them — one row per opening branch of
+    every element, in the request's declared order — but they are written to *shards*
     rather than returned: shard *k* takes a contiguous block of the expanded request, so a batch
     read back in shard order is the request in element order for any worker count, and a slow
     worker changes when a row appears and never where it lands. The summary beside the shards is
@@ -118,9 +118,10 @@ def _shards(elements: Sequence[_Element], workers: int) -> list[_Shard]:
     else — in particular not of how fast any worker is.
 
     A shard is a block of *elements*, and an element is a character, an Ascension and a seed: the
-    Ancient choices a seed's run offers are discovered by driving it, so they cannot index a shard.
-    A batch with more workers than elements therefore leaves the shards after the last element
-    empty — they are still written, so the worker count still names the corpus.
+    Ancient choices a seed's run offers, and the options of the prompts those choices open, are
+    discovered by driving it, so they cannot index a shard. A batch with more workers than elements
+    therefore leaves the shards after the last element empty — they are still written, so the
+    worker count still names the corpus.
     """
     size, longer = divmod(len(elements), workers)
     shards: list[_Shard] = []

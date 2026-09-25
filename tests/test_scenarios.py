@@ -117,6 +117,7 @@ class FakeRunWorker:
         delay_seconds: float = 0.0,
         float_quantity: bool = False,
         relics_after_choice: dict[int, tuple[str, ...]] | None = None,
+        proceed: bool = False,
     ) -> None:
         self.offer = list(offer)
         #: The offered relics that also have a legal action. The event reports every one of
@@ -146,6 +147,10 @@ class FakeRunWorker:
         #: accepts, because `1.0` is an integer to JSON Schema.
         self.float_quantity = float_quantity
         self.relics_after_choice = relics_after_choice or {}
+        #: Whether the event also reports its own way out — an option that takes no blessing. The
+        #: shipped act-1 Ancient builds no such option, but the environment reports the flag, and a
+        #: caller that took one would record a choice granting nothing.
+        self.proceed = proceed
         self.selected_choice: int | None = None
         self.dead = False
         self.closed = False
@@ -278,6 +283,20 @@ class FakeRunWorker:
                         "is_proceed": False, "relic_model_id": relic,
                     },
                 })
+        if self.proceed:
+            # The event's own way out, as the environment reports one: an option and an action that
+            # take no blessing, which is what a run takes when it has nothing left to choose.
+            index = max(self._choice_indices(), default=-1) + 1
+            action_id = f"choose_event:{index}:PROCEED"
+            options.append({
+                "option_index": index, "text_key": "PROCEED", "locked": False,
+                "chosen": False, "is_proceed": True, "relic_model_id": None,
+            })
+            actions.append({
+                "action_id": action_id, "kind": "choose_event",
+                "parameters": {"option_index": index, "text_key": "PROCEED", "is_proceed": True, "relic_model_id": None},
+            })
+            self._routes[action_id] = self._patched("run_event_complete")
         observation = self._patched("run_event_choice")
         observation["event"] = {"model_id": "NEOW", "options": options, "finished": False}
         observation["decision"] = {"kind": "event_choice", "legal_actions": actions}
@@ -304,8 +323,13 @@ def _card_choice(*action_ids: str) -> dict[str, Any]:
     }
 
 
-def _bundle_choice(*option_ids: str) -> dict[str, Any]:
-    """A nested bundle pick: `choose_option` actions, each naming the option it selects."""
+def _bundle_choice(*option_ids: str, skippable: bool = False) -> dict[str, Any]:
+    """A nested bundle pick: `choose_option` actions, each naming the option it selects.
+
+    A pick the run also allows to be declined carries the empty selection the environment emits for
+    a prompt whose minimum selection is zero — first, as `EnumerateSelections` emits it — which is
+    how a relic pick's offered relics sit behind a skip.
+    """
     actions = [
         {
             "action_id": f"choose_option:card-choice-0:{option_id}", "kind": "choose_option",
@@ -313,10 +337,15 @@ def _bundle_choice(*option_ids: str) -> dict[str, Any]:
         }
         for option_id in option_ids
     ]
+    if skippable:
+        actions.insert(0, {
+            "action_id": "choose_option:card-choice-0:skip", "kind": "choose_option",
+            "parameters": {"choice_id": "card-choice-0", "option_ids": []},
+        })
     return {
         "schema_version": 3, "game_build": {}, "run": {"seed": SEED, "ascension": 0, "act_variant": "OVERGROWTH", "rng_counters": {}},
         "outstanding_choice": {
-            "choice_id": "card-choice-0", "kind": "choose_option", "min_select": 1, "max_select": 1,
+            "choice_id": "card-choice-0", "kind": "choose_option", "min_select": 0 if skippable else 1, "max_select": 1,
             "provenance": "native",
             "options": [{"option_id": option_id, "cards": [{"model_id": "ANGER"}]} for option_id in option_ids],
         },
@@ -332,14 +361,19 @@ def _silent_card_choice() -> dict[str, Any]:
     return state
 
 
-def _reward_choice() -> dict[str, Any]:
-    """A nested reward set: two rewards to take, and a skip the run also allows."""
+def _reward_action(index: int) -> str:
+    """The action `_reward_choice` names for one of the rewards it offers, by reward index."""
+    return f"choose_custom_reward:{index}:-1:0:gold:none"
+
+
+def _reward_choice(rewards: int = 2) -> dict[str, Any]:
+    """A nested reward set: `rewards` rewards to take, and a skip the run also allows."""
     actions = [
         {
-            "action_id": f"choose_custom_reward:{index}:-1:0:gold:none", "kind": "choose_custom_reward",
+            "action_id": _reward_action(index), "kind": "choose_custom_reward",
             "parameters": {"reward_index": index, "child_index": -1, "option_index": 0, "reward_kind": "gold", "model_id": None},
         }
-        for index in range(2)
+        for index in range(rewards)
     ]
     actions.append({"action_id": "skip_custom_rewards", "kind": "skip_custom_rewards", "parameters": {}})
     return {
@@ -347,7 +381,7 @@ def _reward_choice() -> dict[str, Any]:
         "custom_rewards": {
             "rewards": [
                 {"reward_index": index, "reward": {"kind": "gold", "implementation": "GoldReward", "selected": False}, "children": []}
-                for index in range(2)
+                for index in range(rewards)
             ],
             "can_skip": True, "depth": 1,
         },
@@ -501,6 +535,49 @@ def test_materialization_reports_a_state_hash_mismatch_after_the_observation_mat
 
     with pytest.raises(ScenarioMaterializationError, match="state_hash mismatch"):
         materialize_scenario(row, ChangedHashWorker())
+
+
+def test_materialization_replays_the_reward_branch_a_row_recorded() -> None:
+    """An enumerated branch is a recipe like any other: it replays to the fight it recorded.
+
+    The branch is the reward the discovery drive did not take, so a replay that took the prompt's
+    first option instead would be a different branch and this is where that would show.
+    """
+    branch = _rows(worker=_branched_worker())[1]
+    worker = _branched_worker()
+
+    episode = materialize_scenario(branch, worker)
+
+    assert _reward_action(1) in worker.steps
+    assert episode.observation == branch["combat_initial_state"]
+
+
+def test_materialization_refuses_a_recorded_reward_the_prompt_no_longer_offers_at_that_index() -> None:
+    """The recorded identity is what makes the index a reward rather than a position.
+
+    A build that offers another reward at the recorded index would otherwise replay a branch the
+    row does not describe, so the identity the row carries is checked against the action taken.
+    """
+    branch = _rows(worker=_branched_worker())[1]
+    branch["recipe"]["nested_choices"][0]["selected_reward"]["reward_kind"] = "relic"
+
+    with pytest.raises(ScenarioMaterializationError, match="not the recorded"):
+        materialize_scenario(branch, _branched_worker())
+
+
+def test_materialization_refuses_a_reward_identity_that_is_not_the_shape_the_prompt_reports() -> None:
+    """A recorded identity that is not a reward's identity is refused before a run is started."""
+    branch = _rows(worker=_branched_worker())[1]
+    del branch["recipe"]["nested_choices"][0]["selected_reward"]["reward_index"]
+    worker = _branched_worker()
+
+    with pytest.raises(
+        ScenarioMaterializationError,
+        match=r"invalid scenario row: \$\.recipe\.nested_choices\[0\]\.selected_reward\.reward_index is required",
+    ):
+        materialize_scenario(branch, worker)
+
+    assert worker.resets == 0
 
 
 def test_materialization_refuses_a_failure_row_before_starting_a_run() -> None:
@@ -813,17 +890,21 @@ def test_a_nested_prompt_is_resolved_by_the_first_legal_action_and_recorded() ->
     }]
 
 
-def test_a_nested_reward_pick_is_recorded_by_the_index_it_selected() -> None:
+def test_a_nested_reward_pick_names_a_reward_instead_of_option_ids() -> None:
+    """A reward pick is not an action that failed to name what it selected.
+
+    A reward set offers rewards rather than option ids, so the pick's selection is the reward's own
+    identity, recorded beside an empty `selected_option_ids`: the branch reaches a scenario row
+    rather than the failure row a selection that names nothing gets.
+    """
     worker = FakeRunWorker(offer=("NEW_LEAF", "FISHING_ROD", "SILKEN_TRESS"),
                            nested=(_reward_choice(),))
     row = _row(worker=worker)
 
-    # A reward pick names a reward index rather than option ids, so the index is the selection.
-    assert row["recipe"]["nested_choices"] == [{
-        "kind": "custom_reward_choice",
-        "selected_index": 0,
-        "selected_option_ids": [],
-    }]
+    picked = row["recipe"]["nested_choices"][0]
+    assert row["record_type"] == SCENARIO_RECORD
+    assert picked["selected_index"] == 0 and picked["selected_option_ids"] == []
+    assert picked["selected_reward"]["reward_index"] == 0
 
 
 def test_a_nested_bundle_pick_records_the_options_it_selected() -> None:
@@ -852,10 +933,278 @@ def test_a_nested_selection_that_names_no_option_ids_is_recorded_as_a_failure_ro
     assert [other["record_type"] for other in rows] == [FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD]
 
 
+def test_a_proceed_option_the_ancient_reports_is_not_a_choice_and_records_no_row() -> None:
+    """The Ancient's own way out ends the room instead of taking a blessing, so it is no branch.
+
+    The environment reports such an option with ``is_proceed``. A run that takes it holds no new
+    relic and reaches no new situation, and a row for it would claim a choice the offer does not
+    make: the batch records the choices that take something, the offer it records is those choices,
+    and the proceed option is not driven at all.
+    """
+    worker = FakeRunWorker(proceed=True)
+
+    rows = _rows(worker=worker)
+
+    assert [row["recipe"]["ancient_choice"]["relic_model_id"] for row in rows] == list(RECORDED_OFFER)
+    assert [row["recipe"]["ancient_options"] for row in rows] == [
+        [{"option_index": index, "relic_model_id": relic} for index, relic in enumerate(RECORDED_OFFER)],
+    ] * len(RECORDED_OFFER)
+    assert "choose_event:3:PROCEED" not in worker.steps
+
+
 def test_a_choice_that_opens_no_prompt_records_no_nested_choice() -> None:
     row = _row(worker=FakeRunWorker(offer=("SILKEN_TRESS", "FISHING_ROD", "LAVA_ROCK")))
 
     assert row["recipe"]["nested_choices"] == []
+
+
+# -- the enumerated opening branches -----------------------------------------------------
+
+
+#: The offer whose first choice opens one reward prompt — a reward set of two rewards and a skip —
+#: and the double that serves it. The offer's other two choices open no prompt, so a test's row set
+#: is that choice's branches followed by one row per remaining choice.
+_BRANCHED_OFFER = ("SMALL_CAPSULE", "FISHING_ROD", "SILKEN_TRESS")
+
+
+def _branched_worker(**options: Any) -> FakeRunWorker:
+    """A double whose first offered choice opens one reward prompt."""
+    return FakeRunWorker(offer=_BRANCHED_OFFER, nested=(_reward_choice(),), **options)
+
+
+def test_a_choice_that_opens_one_option_pick_records_a_row_per_option_and_none_for_the_skip() -> None:
+    """An option pick offers whole bundles, and declining it is not a branch of its own.
+
+    The empty selection is the environment's own spelling of "skip this prompt": it is emitted first
+    for a prompt whose minimum selection is zero, which is what a relic pick's offered relics sit
+    behind. Every bundle the prompt offers is a branch of its own — the drive that found the prompt
+    took the skip, so each bundle is driven from the state the offered state was left in — and the
+    skip records nothing.
+    """
+    worker = FakeRunWorker(
+        offer=("SCROLL_BOXES", "FISHING_ROD", "SILKEN_TRESS"),
+        nested=(_bundle_choice("bundle-0", "bundle-1", skippable=True),),
+    )
+
+    rows = _rows(worker=worker)
+
+    assert [
+        (
+            row["recipe"]["ancient_choice"]["option_index"],
+            [nested["selected_option_ids"] for nested in row["recipe"]["nested_choices"]],
+        )
+        for row in rows
+    ] == [(0, [["bundle-0"]]), (0, [["bundle-1"]]), (1, []), (2, [])]
+    assert all("selected_reward" not in nested for row in rows for nested in row["recipe"]["nested_choices"])
+    # Each bundle is driven once: the skip the finding drive took is not a row, so neither bundle
+    # is the drive that found the prompt.
+    assert worker.steps.count("choose_option:card-choice-0:bundle-0") == 1
+    assert worker.steps.count("choose_option:card-choice-0:bundle-1") == 1
+
+
+def test_a_failed_option_is_its_own_failure_row_and_leaves_its_sibling_recorded() -> None:
+    """One option failing is that option's failure, not the choice's.
+
+    The failure row carries the recipe resolved so far — the Ancient choice and the reward the
+    branch took — which is what tells it from its sibling's failure, and the sibling is still driven
+    from the offered state the run was left in.
+    """
+    worker = _branched_worker(crash_on={_reward_action(1): WORKER_CRASH})
+
+    rows = _rows(worker=worker)
+
+    assert [row["record_type"] for row in rows] == [
+        SCENARIO_RECORD, FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD,
+    ]
+    failed = rows[1]
+    assert failed["stage"] == "ancient_choice"
+    assert failed["error"] == {"kind": "worker_crashed", "message": "worker exited 1"}
+    assert failed["recipe"]["ancient_choice"] == {"option_index": 0, "relic_model_id": "SMALL_CAPSULE"}
+    assert failed["recipe"]["nested_choices"] == [{
+        "kind": "custom_reward_choice",
+        "selected_index": 1,
+        "selected_option_ids": [],
+        "selected_reward": {
+            "reward_index": 1, "child_index": -1, "option_index": 0, "reward_kind": "gold", "model_id": None,
+        },
+    }]
+    assert "combat_initial_state" not in failed and "state_hash" not in failed
+
+
+def test_an_option_that_fails_before_it_is_taken_still_leaves_its_siblings_recorded() -> None:
+    """The drive that finds the prompt is the drive of the option it took, failure included.
+
+    When that option is the one that fails, the failure is its row rather than the choice's, and
+    every other reward the prompt offers is still driven — which is what "a failed option does not
+    suppress its siblings" means for the option that happened to be found first.
+    """
+    worker = _branched_worker(crash_on={_reward_action(0): WORKER_CRASH})
+
+    rows = _rows(worker=worker)
+
+    assert [row["record_type"] for row in rows] == [
+        FAILURE_RECORD, SCENARIO_RECORD, SCENARIO_RECORD, SCENARIO_RECORD,
+    ]
+    assert rows[0]["recipe"]["nested_choices"][0]["selected_reward"]["reward_index"] == 0
+    assert rows[1]["recipe"]["nested_choices"][0]["selected_reward"]["reward_index"] == 1
+    assert worker.steps.count(_reward_action(0)) == 1 and worker.steps.count(_reward_action(1)) == 1
+
+
+def test_a_prompt_with_no_option_to_take_leaves_the_choice_the_row_it_drove() -> None:
+    """An offered Ancient choice still contributes a row when its prompt offers nothing to take.
+
+    A prompt whose only legal action is a skip has no non-skip option to branch on, so branching on
+    it would leave the offered choice contributing no row at all. The choice keeps the row its own
+    drive produced instead; the skip it took is that row's own record, not a branch of its own.
+    """
+    worker = FakeRunWorker(
+        offer=("SMALL_CAPSULE", "FISHING_ROD", "SILKEN_TRESS"),
+        nested=(_reward_choice(0),),
+    )
+
+    rows = _rows(worker=worker)
+
+    assert [
+        (
+            row["recipe"]["ancient_choice"]["option_index"],
+            [nested["kind"] for nested in row["recipe"]["nested_choices"]],
+        )
+        for row in rows
+    ] == [(0, ["custom_reward_choice"]), (1, []), (2, [])]
+    assert rows[0]["recipe"]["nested_choices"] == [{
+        "kind": "custom_reward_choice",
+        "selected_index": 0,
+        "selected_option_ids": [],
+    }]
+
+
+def test_a_choice_that_opens_a_card_select_is_not_branched_on() -> None:
+    """A card select is the next cardinality, not this one: which copy is taken is pruned there.
+
+    The prompt offers two cards and the choice records the one the fixed rule takes, so a card
+    select contributes one row rather than one row per card.
+    """
+    worker = FakeRunWorker(
+        offer=("HEFTY_TABLET", "FISHING_ROD", "SILKEN_TRESS"),
+        nested=(_card_choice("card-choice-0", "card-choice-1"),),
+    )
+
+    rows = _rows(worker=worker)
+
+    assert [row["recipe"]["ancient_choice"]["option_index"] for row in rows] == [0, 1, 2]
+    assert rows[0]["recipe"]["nested_choices"] == [{
+        "kind": "card_choice",
+        "selected_index": 0,
+        "selected_option_ids": ["card-choice-0"],
+    }]
+
+
+def test_a_choice_that_opens_a_prompt_and_then_another_keeps_the_single_row_it_drove() -> None:
+    """One prompt is this ticket's cardinality; a chain of prompts is the chained-choice ticket's.
+
+    The choice's own drive resolves each prompt it meets by the fixed rule, so its row records the
+    chain it walked — the reward it took and the card select that followed — and the rewards it did
+    not take stay unrecorded until the recursive policy owns them.
+    """
+    worker = FakeRunWorker(
+        offer=("NEOWS_BONES", "FISHING_ROD", "SILKEN_TRESS"),
+        nested=(_reward_choice(), _card_choice("card-choice-0", "card-choice-1")),
+    )
+
+    rows = _rows(worker=worker)
+
+    assert [
+        (
+            row["recipe"]["ancient_choice"]["option_index"],
+            [nested["kind"] for nested in row["recipe"]["nested_choices"]],
+        )
+        for row in rows
+    ] == [(0, ["custom_reward_choice", "card_choice"]), (1, []), (2, [])]
+    assert worker.steps.count(_reward_action(1)) == 0
+
+
+def test_a_choice_that_opens_one_reward_prompt_records_a_row_per_reward_and_none_for_the_skip() -> None:
+    """A reward set offers whole rewards, so each reward it offers is a branch of its own.
+
+    The drive that finds the prompt takes the first legal action, and the branch it took is the row
+    it produced rather than a second run of the same branch; each reward it did not take is driven
+    from the state the Ancient offer was left in. The skip the set also allows is no branch at all:
+    it declines the prompt rather than taking a reward from it, so it records nothing.
+    """
+    worker = _branched_worker()
+
+    rows = _rows(worker=worker)
+
+    assert [
+        (
+            row["recipe"]["ancient_choice"]["option_index"],
+            [nested["selected_index"] for nested in row["recipe"]["nested_choices"]],
+        )
+        for row in rows
+    ] == [(0, [0]), (0, [1]), (1, []), (2, [])]
+    assert all(row["record_type"] == SCENARIO_RECORD for row in rows)
+    validate_observation(rows[1]["combat_initial_state"])
+    # Each reward is driven once: the row for the branch the discovery drive took is that drive's,
+    # and the sibling's is its own drive of the same offered state.
+    assert worker.steps.count(_reward_action(0)) == 1
+    assert worker.steps.count(_reward_action(1)) == 1
+
+
+def test_a_branch_records_the_reward_it_took_by_the_identity_the_pick_names() -> None:
+    """A reward pick names no option ids, so what it took is recorded as the reward it is.
+
+    The row's index is the pick's position among the prompt's legal actions, which is what a replay
+    takes from it; the identity beside it — the reward's indices, its kind and its model — is what
+    says the replay took the same reward rather than whatever holds that position on another build.
+    A reward model is the reward's subject, so `model_id` is null for a reward that has none.
+    """
+    worker = FakeRunWorker(offer=("SMALL_CAPSULE", "FISHING_ROD", "SILKEN_TRESS"), nested=(_reward_choice(),))
+
+    rows = _rows(worker=worker)
+
+    assert [row["recipe"]["nested_choices"] for row in rows[:2]] == [
+        [{
+            "kind": "custom_reward_choice",
+            "selected_index": 0,
+            "selected_option_ids": [],
+            "selected_reward": {
+                "reward_index": 0, "child_index": -1, "option_index": 0,
+                "reward_kind": "gold", "model_id": None,
+            },
+        }],
+        [{
+            "kind": "custom_reward_choice",
+            "selected_index": 1,
+            "selected_option_ids": [],
+            "selected_reward": {
+                "reward_index": 1, "child_index": -1, "option_index": 0,
+                "reward_kind": "gold", "model_id": None,
+            },
+        }],
+    ]
+
+
+def test_a_nested_choice_is_serialised_in_the_declared_key_order_and_the_identity_beside_it() -> None:
+    """A nested choice's identity is a record of its own, so its bytes are declared too.
+
+    The corpus is diffed line by line, so the order the identity's fields were filled in must not
+    be able to reach the bytes: the same record assembled in another order is the same line.
+    """
+    row = _rows(
+        offer=("SMALL_CAPSULE", "FISHING_ROD", "SILKEN_TRESS"), nested=(_reward_choice(),)
+    )[1]
+
+    recorded = json.loads(encode_row(row))["recipe"]["nested_choices"][0]
+    assert list(recorded) == ["kind", "selected_index", "selected_option_ids", "selected_reward"]
+    assert list(recorded["selected_reward"]) == [
+        "reward_index", "child_index", "option_index", "reward_kind", "model_id",
+    ]
+
+    scrambled = copy.deepcopy(row)
+    nested = scrambled["recipe"]["nested_choices"][0]
+    nested["selected_reward"] = _reversed_keys(nested["selected_reward"])
+    scrambled["recipe"]["nested_choices"] = [_reversed_keys(nested)]
+    assert encode_row(scrambled) == encode_row(row)
 
 
 # -- the combat initial state ------------------------------------------------------------
@@ -1551,6 +1900,36 @@ def test_shard_names_stay_in_shard_order_past_the_second_digit(corpus_root: Path
     assert names == [shard["file"] for shard in summary["shards"]], "name order is not shard order"
     assert names[:2] == ["worker-000.jsonl.gz", "worker-001.jsonl.gz"] and names[-1] == "worker-100.jsonl.gz"
     assert _read_corpus(corpus_root) == generate_rows(request, FakeRunWorker())
+
+
+def test_a_corpus_holds_every_branch_of_every_element_and_stays_byte_identical(
+    corpus_roots: Callable[[], Path],
+) -> None:
+    """A branched element's rows are the corpus's rows, in order, whatever worker count wrote them.
+
+    The element is still the shard's unit — its Ancient choices and their options are discovered by
+    driving it — so a corpus holds every branch of it, written once, in element order and then in
+    the order the run offered the branches. Another worker count therefore moves the shard
+    boundaries and the rows by nothing.
+    """
+    request = _four_element_request()
+    first, second, other = corpus_roots(), corpus_roots(), corpus_roots()
+
+    def shard_worker(_shard: int) -> FakeRunWorker:
+        return _branched_worker()
+
+    summary = generate_corpus(request, 2, first, worker_factory=shard_worker)
+    generate_corpus(request, 2, second, worker_factory=shard_worker)
+    generate_corpus(request, 4, other, worker_factory=shard_worker)
+
+    expected = generate_rows(request, _branched_worker())
+    assert len(expected) == 16, "four elements of two reward branches and two prompt-free choices"
+    assert summary["rows"] == {SCENARIO_RECORD: 16, FAILURE_RECORD: 0}
+    assert _read_corpus(first) == expected
+    assert _corpus_files(first) == _corpus_files(second)
+    assert _read_corpus(other) == expected, "another worker count moved the rows, not only the boundaries"
+    # The boundaries are the worker count's: four elements at four workers is one element each.
+    assert [shard["elements"] for shard in _recorded_summary(other)["shards"]] == [[0], [1], [2], [3]]
 
 
 def test_the_repositorys_existing_corpus_reader_collects_the_shards_it_wrote(

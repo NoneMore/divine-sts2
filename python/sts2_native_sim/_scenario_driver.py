@@ -9,11 +9,13 @@ from ._scenario_codec import _refuse_floats, error_kind
 from ._scenario_model import (
     _REWARD_ACTIONS,
     ANCIENT_CHOICE_KEY_ORDER,
+    BRANCHING_PROMPT_KINDS,
     COMBAT_ACTION,
     FAILURE_RECORD,
     NESTED_CHOICE_KEY_ORDER,
     NODE_KEY_ORDER,
     RECIPE_KEY_ORDER,
+    REWARD_CHOICE_KEY_ORDER,
     ROW_KEY_ORDER,
     ROW_SCHEMA,
     SCENARIO_RECORD,
@@ -28,6 +30,7 @@ from ._scenario_model import (
     ScenarioMaterializationError,
     _DrivenRun,
     _Element,
+    _OpenedPrompts,
     _Recipe,
     _Stopped,
     canonicalize_seed,
@@ -35,7 +38,6 @@ from ._scenario_model import (
 from .ancient import (
     LEAVE_EVENT_ACTION,
     MAP_CHOICE,
-    NestedDecision,
     ancient_action,
     choice_actions,
     drive_choice,
@@ -180,6 +182,23 @@ def _validate_ancient_identity(value: Any, path: str) -> dict[str, Any]:
     return identity
 
 
+def _validated_reward_identity(value: Any, path: str) -> dict[str, Any]:
+    """One recorded reward pick's identity, in the shape the environment reports a reward in.
+
+    A reward set may nest a linked reward set, which is what `child_index` names — `-1` for a reward
+    that is not a child — and a card reward names the option of its own card list; the model is the
+    reward's subject and is absent for a reward that has none, such as gold.
+    """
+    identity = _require_record_keys(value, set(REWARD_CHOICE_KEY_ORDER), set(), path)
+    _require_integer(identity["reward_index"], f"{path}.reward_index", minimum=0)
+    _require_integer(identity["child_index"], f"{path}.child_index")
+    _require_integer(identity["option_index"], f"{path}.option_index", minimum=0)
+    _require_text(identity["reward_kind"], f"{path}.reward_kind")
+    if identity["model_id"] is not None:
+        _require_text(identity["model_id"], f"{path}.model_id")
+    return identity
+
+
 def _validated_scenario(
     scenario: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], str, _Element]:
@@ -218,7 +237,9 @@ def _validated_scenario(
         raise ScenarioMaterializationError("invalid scenario row: $.recipe.nested_choices must be an array")
     for index, value in enumerate(nested_choices):
         path = f"$.recipe.nested_choices[{index}]"
-        nested = _require_record_keys(value, set(NESTED_CHOICE_KEY_ORDER), set(), path)
+        nested = _require_record_keys(
+            value, set(NESTED_CHOICE_KEY_ORDER) - {"selected_reward"}, {"selected_reward"}, path
+        )
         _require_text(nested["kind"], f"{path}.kind")
         _require_integer(nested["selected_index"], f"{path}.selected_index", minimum=0)
         option_ids = nested["selected_option_ids"]
@@ -226,6 +247,8 @@ def _validated_scenario(
             raise ScenarioMaterializationError(
                 f"invalid scenario row: {path}.selected_option_ids must be a string array"
             )
+        if "selected_reward" in nested:
+            _validated_reward_identity(nested["selected_reward"], f"{path}.selected_reward")
 
     node = _require_record_keys(recipe["node"], set(NODE_KEY_ORDER), set(), "$.recipe.node")
     _require_integer(node["col"], "$.recipe.node.col", minimum=0)
@@ -318,6 +341,13 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
                 f"recipe mismatch: nested choice {nested_index} option ids are {selected_option_ids!r}, "
                 f"not {recorded.get('selected_option_ids')!r}"
             )
+        recorded_reward = recorded.get("selected_reward")
+        actual_reward = _reward_identity(action)
+        if recorded_reward is not None and actual_reward != recorded_reward:
+            raise ScenarioMaterializationError(
+                f"recipe mismatch: nested choice {nested_index} is the reward {actual_reward!r}, "
+                f"not the recorded {recorded_reward!r}"
+            )
         nested_index += 1
         return action["action_id"]
 
@@ -361,10 +391,12 @@ def materialize_scenario(scenario: dict[str, Any], worker: RunWorker) -> CombatE
 
 
 def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, Any]]:
-    """Every row one element of the request produces: one per Ancient choice its run offers.
+    """Every row one element of the request produces: one per opening branch its run offers.
 
     The run starts once, then its Ancient offer's returned handle is kept before taking any
-    choice. A failed choice gets its own failure row, and the next choice restores that state.
+    choice. Each offered choice contributes the branches its own pick-up opens — the non-skip
+    options of a reward or option prompt, or the single drive of a choice that opens none — and a
+    branch that fails gets its own failure row while its siblings are still driven.
     """
     build = worker.build
     attempted = _Recipe(element, build)
@@ -384,16 +416,105 @@ def _rows_for_element(element: _Element, worker: RunWorker) -> list[dict[str, An
 
     assert attempted.offered is not None
     rows: list[dict[str, Any]] = []
-    for choice_index, (identity, action) in enumerate(choices):
-        recipe = _Recipe(
-            element,
-            build,
-            act_variant=attempted.act_variant,
-            ancient_choice=identity,
+    for choice_index, choice in enumerate(choices):
+        rows.extend(
+            _element_row(recipe, outcome)
+            for recipe, outcome in _choice_branches(
+                attempted, choice, choice_index, worker, checkpoint
+            )
         )
-        outcome = _drive_safely(recipe, action, attempted.offered, worker, checkpoint if choice_index else None)
-        rows.append(_element_row(recipe, outcome))
     return rows
+
+
+def _choice_branches(
+    attempted: _Recipe,
+    choice: tuple[dict[str, Any], dict[str, Any]],
+    choice_index: int,
+    worker: RunWorker,
+    checkpoint: str,
+) -> list[tuple[_Recipe, _DrivenRun | _Stopped]]:
+    """Every branch one offered Ancient choice produces, in the order its prompt offered them.
+
+    The choice is driven once to find the prompt its pick-up opens. When that is a prompt this
+    generation branches on — the drive met exactly one prompt, and it offers whole options — every
+    non-skip option it offers is a branch of its own, each driven from the offered state the run
+    was left in. The branch the finding drive itself took is that drive's row rather than a second
+    run of the same option. Anything a branch opens after that first prompt is resolved by the
+    fixed rule, until the chained-choice policy replaces it.
+
+    A choice whose drive met no prompt, met a card select, or met a prompt and then another keeps
+    the single row its own drive produced: those are the cardinalities later tickets own, and none
+    of them is a branch this generation invents. The finding drive is what says how many prompts the
+    choice opens, so a prompt that offers a skip first spends that drive on a branch no row records;
+    the reward and option prompts an act-1 Ancient reaches offer their options first.
+    """
+    identity, action = choice
+    offered = attempted.offered
+    assert offered is not None, "a choice is branched only after its run's offer has been read"
+    probe_recipe = _branch_recipe(attempted, identity)
+    prompt = _OpenedPrompts()
+    probe = _drive_safely(
+        probe_recipe, action, offered, worker, checkpoint if choice_index else None, prompt=prompt
+    )
+    options = _options_to_branch_on(prompt)
+    if options is None:
+        return [(probe_recipe, probe)]
+
+    branches: list[tuple[_Recipe, _DrivenRun | _Stopped]] = []
+    for option in options:
+        if option["action_id"] == prompt.selected_action:
+            branches.append((probe_recipe, probe))
+            continue
+        recipe = _branch_recipe(attempted, identity)
+        branches.append((
+            recipe,
+            _drive_safely(recipe, action, offered, worker, checkpoint, selection=option["action_id"]),
+        ))
+    return branches
+
+
+def _branch_recipe(attempted: _Recipe, identity: dict[str, Any]) -> _Recipe:
+    """One branch's recipe: the element as far as the Ancient offer resolved it.
+
+    Every branch of one choice starts from what the element and the offer already resolved — the
+    build, the Act variant the run reports, the choices it offered and the choice this branch is
+    for — and records the nested choices the branch's own drive takes.
+    """
+    return _Recipe(
+        attempted.element,
+        attempted.build,
+        act_variant=attempted.act_variant,
+        offered=attempted.offered,
+        ancient_choice=identity,
+    )
+
+
+def _options_to_branch_on(prompt: _OpenedPrompts) -> list[dict[str, Any]] | None:
+    """The options one Ancient choice's pick-up is branched on, or ``None`` when it is not branched.
+
+    A prompt is branched on when the drive met exactly one of them and it offers whole options;
+    a skip is not an option, because declining a prompt is not an opening this generation records
+    as a situation of its own. A prompt with no option to take leaves the choice its single drive,
+    so an offered choice still contributes a row rather than silently contributing none.
+    """
+    if prompt.count != 1 or prompt.kind not in BRANCHING_PROMPT_KINDS:
+        return None
+    return [action for action in prompt.actions if not _is_skip(action)] or None
+
+
+def _is_skip(action: dict[str, Any]) -> bool:
+    """Whether one prompt action declines the prompt rather than taking an option from it.
+
+    A reward set spells its skip as an action of its own (``skip_custom_rewards``), and an option
+    pick whose minimum selection is zero spells it as a selection of nothing — the empty selection
+    the environment emits first, which is what a relic pick's offered relics sit behind. Either way
+    the fact is the same to a caller: the branch declines the prompt instead of taking an option
+    from it, so it is not an opening this generation records a row for.
+    """
+    kind = action.get("kind") or ""
+    if kind.startswith("skip"):
+        return True
+    return kind == "choose_option" and not (action.get("parameters") or {}).get("option_ids")
 
 
 def _open_ancient(recipe: _Recipe, worker: RunWorker) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], str]:
@@ -419,26 +540,36 @@ def _drive_safely(
     offered: list[dict[str, Any]],
     worker: RunWorker,
     checkpoint: str | None,
+    *,
+    prompt: _OpenedPrompts | None = None,
+    selection: str | None = None,
 ) -> _DrivenRun | _Stopped:
     """Drive one run, handing back the failure instead of raising it.
 
-    Whatever goes wrong is this Ancient choice's failure, not the batch's: it is recorded —
-    stage, kind and message — rather than raised, so the caller keeps the rest of the offer.
+    Whatever goes wrong is this branch's failure, not the batch's: it is recorded — stage, kind and
+    message — rather than raised, so the caller keeps the rest of the offer and of the choice's own
+    options. ``checkpoint`` is the state the Ancient offer was left in; a drive that is not the
+    element's first continues from it, and a branch always starts there because the drive that found
+    its prompt has already walked the run away from it. ``prompt`` is where a drive reports the
+    prompts it meets, and a drive handed none still needs one, because which prompt is the first is
+    what ``selection`` — the option a branch takes — is taken from.
     """
     try:
         recipe.stage = STAGE_ANCIENT_CHOICE
         if checkpoint is not None:
             worker.restore(checkpoint)
-        return _drive_to_first_fight(recipe, choice, offered, worker)
+        return _drive_to_first_fight(
+            recipe, choice, offered, worker, prompt if prompt is not None else _OpenedPrompts(), selection
+        )
     except Exception as error:  # noqa: BLE001
         return _Stopped(error)
 
 
 def _element_row(recipe: _Recipe, outcome: _DrivenRun | _Stopped) -> dict[str, Any]:
-    """One Ancient choice's row: the scenario its drive reached, or the failure that stopped it.
+    """One branch's row: the scenario its drive reached, or the failure that stopped it.
 
     Recording the scenario can fail too — a nested selection the prompt does not report is a
-    failure of that choice's record — and that is a failure row like any other.
+    failure of that branch's record — and that is a failure row like any other.
     """
     if isinstance(outcome, _Stopped):
         return _failure_row(recipe, outcome.error)
@@ -453,15 +584,25 @@ def _drive_to_first_fight(
     choice: dict[str, Any],
     offered: list[dict[str, Any]],
     worker: RunWorker,
+    prompt: _OpenedPrompts,
+    selection: str | None,
 ) -> _DrivenRun:
     """Drive one Ancient choice from its offered state to the first fight.
 
     The recipe is stamped before every phase, so a failure that names no stage of its own — a
-    worker's error, or a bug — is still attributed to the phase the drive was in.
+    worker's error, or a bug — is still attributed to the phase the drive was in, and every nested
+    choice the drive takes is recorded into it as it is taken, so a drive that stops after a
+    selection still says what it selected.
     """
+
+    def choose(state: dict[str, Any]) -> str:
+        pick = _selection_at(prompt, selection, state)
+        recipe.nested.append(_nested_choice(state, pick))
+        return pick
+
     recipe.stage = STAGE_ANCIENT_CHOICE
     try:
-        driven = drive_choice(worker, choice)
+        drive_choice(worker, choice, choose=choose)
     except ValueError as error:
         raise ScenarioGenerationError(STAGE_ANCIENT_CHOICE, str(error)) from error
 
@@ -499,11 +640,36 @@ def _drive_to_first_fight(
     return _DrivenRun(
         offered=offered,
         choice=choice,
-        driven=driven,
         node=node,
         observation=observation,
         state_hash=combat["state_hash"],
     )
+
+
+def _selection_at(prompt: _OpenedPrompts, selection: str | None, state: dict[str, Any]) -> str:
+    """The action this drive takes from the prompt it is standing at.
+
+    The first prompt a drive meets is the one the branch was enumerated from, so that is where the
+    branch's own option is forced — and where the prompt's kind and options are remembered, before
+    the option is taken, so a drive that stops there still reports what it was standing at. Every
+    prompt after the first is resolved by the fixed rule: the first legal action the run offers,
+    which is what the generator records for a prompt kind it does not branch on.
+    """
+    first = prompt.count == 0
+    prompt.meet(state)
+    if first and selection is not None:
+        offered = state.get("legal_actions") or []
+        if not any(action.get("action_id") == selection for action in offered):
+            raise ScenarioGenerationError(
+                STAGE_ANCIENT_CHOICE,
+                f"the prompt a branch was enumerated from no longer offers {selection!r}",
+            )
+        pick = selection
+    else:
+        pick = state["legal_actions"][0]["action_id"]
+    if first:
+        prompt.selected_action = pick
+    return pick
 
 
 def _reset_state(element: _Element) -> dict[str, Any]:
@@ -545,6 +711,17 @@ def _choice_identity(parameters: dict[str, Any]) -> dict[str, Any]:
     return {"option_index": parameters.get("option_index"), "relic_model_id": parameters.get("relic_model_id")}
 
 
+def _is_proceed(parameters: dict[str, Any]) -> bool:
+    """Whether one reported option or action ends the Ancient room instead of taking a blessing.
+
+    The environment reports the flag on both views of an option. A run that takes it holds no new
+    relic and stands in no new situation, so it is no choice of this generation's: not an offer a
+    row enumerates, and — because the offer a row records is the choices it branches on — not part
+    of the recorded offer either.
+    """
+    return parameters.get("is_proceed") is True
+
+
 def _offered_choices(state: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """The Ancient's offered choices: each option the event reports, with the action that takes it.
 
@@ -553,7 +730,8 @@ def _offered_choices(state: dict[str, Any]) -> list[tuple[dict[str, Any], dict[s
     corpus: an option no action can take would be recorded as offered while being impossible, and
     a legal choice the event does not report would leave the run opening unrecorded. That match is
     what makes "a seed records exactly the choices its run offers" a checked claim rather than a
-    count taken from one list and an index taken from another.
+    count taken from one list and an index taken from another. An option that takes no blessing —
+    a proceed, which ends the room — is neither, so both views of it are dropped here.
     """
     event = state["observation"].get("event")
     if not isinstance(event, dict):
@@ -561,6 +739,8 @@ def _offered_choices(state: dict[str, Any]) -> list[tuple[dict[str, Any], dict[s
 
     takers: dict[Any, tuple[dict[str, Any], dict[str, Any]]] = {}
     for action in choice_actions(state):
+        if _is_proceed(action.get("parameters") or {}):
+            continue
         identity = _choice_identity(action.get("parameters") or {})
         index = identity["option_index"]
         if index in takers:
@@ -568,7 +748,10 @@ def _offered_choices(state: dict[str, Any]) -> list[tuple[dict[str, Any], dict[s
         takers[index] = (identity, action)
 
     offered: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for reported in (_choice_identity(option) for option in event.get("options") or []):
+    for option in event.get("options") or []:
+        if _is_proceed(option):
+            continue
+        reported = _choice_identity(option)
         index = reported["option_index"]
         taker = takers.pop(index, None)
         if taker is None:
@@ -617,7 +800,7 @@ def _row(recipe: _Recipe, walk: _DrivenRun) -> dict[str, Any]:
             "act_variant": walk.observation["run"]["act_variant"],
             "ancient_options": walk.offered,
             "ancient_choice": _choice_identity(parameters),
-            "nested_choices": [_nested_choice(decision) for decision in walk.driven.decisions],
+            "nested_choices": copy.deepcopy(recipe.nested),
             "node": {
                 "col": node_parameters["col"],
                 "row": node_parameters["row"],
@@ -639,9 +822,11 @@ def _failure_row(recipe: _Recipe, error: BaseException) -> dict[str, Any]:
 
     A failure row never carries a combat initial state, partial or otherwise: its whole claim is
     that no scenario was produced, so there is no state to carry and no simulator hash of one. Its
-    recipe names what the element resolved — the declaration, the Act variant the run reports, and
-    the Ancient choice the element is for once the run has offered one — and never a field of the
-    fight, because the row's stage already says how far the drive got.
+    recipe names what the element resolved — the declaration, the Act variant the run reports, the
+    Ancient choice the element is for once the run has offered one, and every nested choice the
+    branch took before it stopped — and never a field of the fight, because the row's stage already
+    says how far the drive got. The nested choices are what tells one failed option of a choice
+    from its sibling's failure, which would otherwise be the same row twice.
     """
     stage, message = _staged_failure(recipe, error)
     row = _envelope(recipe, FAILURE_RECORD)
@@ -649,6 +834,8 @@ def _failure_row(recipe: _Recipe, error: BaseException) -> dict[str, Any]:
         row["recipe"]["act_variant"] = recipe.act_variant
     if recipe.ancient_choice is not None:
         row["recipe"]["ancient_choice"] = dict(recipe.ancient_choice)
+    if recipe.nested:
+        row["recipe"]["nested_choices"] = copy.deepcopy(recipe.nested)
     row["stage"] = stage
     row["error"] = {"kind": error_kind(error), "message": message}
     return row
@@ -682,33 +869,57 @@ def _element_recipe(element: _Element) -> dict[str, Any]:
     return resolved
 
 
-def _nested_choice(decision: NestedDecision) -> dict[str, Any]:
-    """One nested decision, and the action the fixed rule took from it."""
-    state = decision.state
+def _nested_choice(state: dict[str, Any], action_id: str) -> dict[str, Any]:
+    """One nested decision, and the action this drive took from it.
+
+    The action is named by its position among the prompt's legal actions — which is what a replay
+    takes from — and by what it selected: the option ids it names, for a prompt that offers options,
+    or the reward's own identity for a reward pick, which names none. An action that says neither is
+    a failure of this branch's record rather than a selection of nothing.
+    """
     actions = state.get("legal_actions") or []
     picked = next(
-        ((index, action) for index, action in enumerate(actions) if action.get("action_id") == decision.action_id),
+        ((index, action) for index, action in enumerate(actions) if action.get("action_id") == action_id),
         None,
     )
     if picked is None:
         raise ScenarioGenerationError(
             STAGE_ANCIENT_CHOICE,
-            f"the nested choice took {decision.action_id!r}, which the prompt did not offer",
+            f"the nested choice took {action_id!r}, which the prompt did not offer",
         )
     index, action = picked
-    option_ids = (action.get("parameters") or {}).get("option_ids")
-    if option_ids is None and action.get("kind") not in _REWARD_ACTIONS:
+    parameters = action.get("parameters") or {}
+    option_ids = parameters.get("option_ids")
+    reward = _reward_identity(action)
+    if reward is None and option_ids is None and action.get("kind") not in _REWARD_ACTIONS:
         # An action that selects options has to say which; a record that quietly stored an
         # empty selection would look like a choice of nothing rather than a missing fact.
         raise ScenarioGenerationError(
             STAGE_ANCIENT_CHOICE,
-            f"the {action.get('kind')!r} action {decision.action_id!r} names no option ids",
+            f"the {action.get('kind')!r} action {action_id!r} names no option ids",
         )
-    return {
+    recorded = {
         "kind": state["observation"]["decision"]["kind"],
         "selected_index": index,
         "selected_option_ids": list(option_ids) if isinstance(option_ids, list) else [],
     }
+    if reward is not None:
+        recorded["selected_reward"] = reward
+    return recorded
+
+
+def _reward_identity(action: dict[str, Any]) -> dict[str, Any] | None:
+    """The reward one action takes, as the identity a record carries, or ``None`` for any other action.
+
+    A reward pick's own parameters are what identify it — which reward of its set, which child of a
+    linked reward set if any, which option of a card reward, and the kind and model the reward is —
+    and they are read in the record's declared order rather than the order the action happened to
+    report them in, because a record's bytes are the record's.
+    """
+    if action.get("kind") != "choose_custom_reward":
+        return None
+    parameters = action.get("parameters") or {}
+    return {key: parameters.get(key) for key in REWARD_CHOICE_KEY_ORDER}
 
 
 # -- the corpus a batch writes -----------------------------------------------------------

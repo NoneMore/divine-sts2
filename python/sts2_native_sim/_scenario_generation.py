@@ -10,18 +10,21 @@ from ._scenario_model import RunWorker, ScenarioRequest, ScenarioRequestError, _
 
 
 def generate_rows(request: ScenarioRequest, worker: RunWorker) -> list[dict[str, Any]]:
-    """Record the first fight of every run the request names, one row per element.
+    """Record the first fight of every run the request names, one row per opening branch.
 
-    Rows come back in the request's declared order — character, then Ascension, then seed, then
-    the Ancient choice the run offers — so a caller enumerates a corpus in one call instead of
-    scripting the loop. The Ancient choices are the dimension the request does not declare: a
-    seed contributes exactly as many rows as its run offers choices, and neither more nor fewer,
-    so no opening is invented and none is skipped.
+    Rows come back in the request's declared order — character, then Ascension, then seed, then the
+    Ancient choice the run offers, then the options that choice's pick-up opens — so a caller
+    enumerates a corpus in one call instead of scripting the loop. The Ancient choices are the
+    dimension the request does not declare, and the options of a reward or option prompt are the
+    dimension the run supplies under them: a choice contributes one row, plus one more for each
+    non-skip option of the single reward or option prompt it opens. A choice whose pick-up opens no
+    such prompt, opens a card select, or opens a chain of prompts contributes the one row its own
+    drive produced, so no opening is invented and none is skipped.
 
     An element that cannot produce a scenario contributes a failure row in its place — the same
-    position in the same order, with the stage, the error and the recipe resolved so far — and
-    the rest of the request is still driven, so one bad seed cannot end or bias a batch. Nothing
-    is retried: see the module docstring for what a failure row carries.
+    position in the same order, with the stage, the error and the recipe resolved so far — and the
+    rest of the request is still driven, so one bad seed cannot end or bias a batch. Nothing is
+    retried: see the module docstring for what a failure row carries.
     """
     _check_request(request)
     rows: list[dict[str, Any]] = []

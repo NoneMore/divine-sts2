@@ -11,9 +11,12 @@ that disagrees.
 What the run does, per sample:
 
 * the record is produced by the generator's public interface (``generate_rows``) on a native worker,
-  one row per Ancient choice the run offers, so the sample takes the row for the choice it names — and
-  a sample whose element produced a failure row fails here naming the stage and the error rather than
-  being read as a scenario;
+  a row per offered Ancient choice and per option of a single reward or option prompt under it, so
+  the sample takes the rows for the choices it names — and a sample whose element produced a failure
+  row fails here naming the stage and the error rather than being read as a scenario. A choice whose
+  pick-up opens such a prompt owns several rows and this sample declares no option, so it fails
+  rather than comparing whichever row was recorded last: those branches are the nested-parity
+  sample's to compare;
 * a real headless ``SlayTheSpire2.exe`` is launched with the same character and driven from
   ``start_run`` with the record's canonical seed and Ascension, through the Ancient room, taking the
   recorded Ancient choice, answering every nested prompt the way the record's own nested choice
@@ -171,9 +174,14 @@ class _Record:
 
 @dataclass(frozen=True)
 class _RecordedRun:
-    """What the generator recorded for one run: a row per Ancient choice, and any failure rows."""
+    """What the generator recorded for one run: the rows of each Ancient choice, and any failures.
 
-    rows: dict[int, _Record]
+    A choice whose pick-up opens a single reward or option prompt contributes one row per non-skip
+    option of it, so the rows of one choice are a list — and a sample that names only the choice
+    cannot say which of them it means.
+    """
+
+    rows: dict[int, list[_Record]]
     failures: list[dict[str, Any]]
 
 
@@ -217,19 +225,21 @@ def _records(pool: NativeWorkerPool, samples: tuple[Sample, ...]) -> dict[Run, _
     """Every row the generator records for the runs the sample names, by Ancient choice index.
 
     The generator's public interface is the only thing used here: a request in, rows out. One call per
-    distinct run enumerates that run's Ancient choices, which is what lets a sample name a choice by
-    index and fail when the run no longer offers one.
+    distinct run enumerates that run's Ancient choices and the options their prompts open, which is
+    what lets a sample name a choice by index and fail when the run no longer offers one.
     """
     runs: dict[Run, _RecordedRun] = {}
     for index, run in enumerate(dict.fromkeys(sample.run for sample in samples)):
         request = ScenarioRequest(characters=(run.character,), ascensions=(run.ascension,), seeds=(run.seed,))
         rows = generate_rows(request, pool.workers[index % len(pool.workers)])
+        recorded: dict[int, list[_Record]] = {}
+        for row in rows:
+            if row["record_type"] != SCENARIO_RECORD:
+                continue
+            option_index = row["recipe"]["ancient_choice"]["option_index"]
+            recorded.setdefault(option_index, []).append(_Record(row["recipe"], row["combat_initial_state"]))
         runs[run] = _RecordedRun(
-            rows={
-                row["recipe"]["ancient_choice"]["option_index"]: _Record(row["recipe"], row["combat_initial_state"])
-                for row in rows
-                if row["record_type"] == SCENARIO_RECORD
-            },
+            rows=recorded,
             # An element that could not produce a scenario is recorded as a failure row, and that row
             # is the element's own answer: it is kept beside the successes so a sample with no row can
             # say what happened rather than reporting a missing key.
@@ -239,10 +249,23 @@ def _records(pool: NativeWorkerPool, samples: tuple[Sample, ...]) -> dict[Run, _
 
 
 def _record_for(sample: Sample, runs: dict[Run, _RecordedRun]) -> _Record:
-    """The row one sample compares, or the failure that stands in its place."""
+    """The row one sample compares, or the failure that stands in its place.
+
+    A sample names a character, an Ascension, a seed and an Ancient choice, which is not enough to
+    pick between the rows of a choice whose pick-up opens a reward or option prompt: those rows are
+    that prompt's options, and this sample declares no option. Such a sample fails here, naming what
+    it cannot choose between, rather than comparing whichever row happened to be recorded last.
+    """
     recorded = runs[sample.run]
-    if sample.option_index in recorded.rows:
-        return recorded.rows[sample.option_index]
+    branches = recorded.rows.get(sample.option_index, [])
+    if len(branches) == 1:
+        return branches[0]
+    if branches:
+        raise AssertionError(
+            f"the generator recorded {len(branches)} rows for {sample.label}: the choice's pick-up opens a "
+            "prompt whose options are branched on, and this sample declares no option of it — the nested "
+            "branches are the nested-parity sample's to compare"
+        )
     if recorded.failures:
         failure = recorded.failures[0]
         raise AssertionError(
