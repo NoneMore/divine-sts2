@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -12,15 +14,74 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GAME_DIRECTORY_NAME = "Slay the Spire 2"
 GAME_DATA_DIRECTORY_NAME = "data_sts2_windows_x86_64"
+GODOT_VERSION = "4.5.1"
 _SANDBOX_DIRECTORY = Path("divine-sts2") / "full-app-sandboxes"
+_DOT_ENV_PATH_VARIABLES = {
+    "STS2_GAME_ROOT",
+    "STS2_SANDBOX_ROOT",
+    "GODOT",
+}
 
 
 class DiscoveryError(FileNotFoundError):
     """Raised when a required local dependency cannot be discovered."""
 
 
+def _load_dot_env(path: str | Path | None = None) -> None:
+    """Fill unset environment variables from the repository-local .env file."""
+
+    env_path = Path(path) if path is not None else REPOSITORY_ROOT / ".env"
+    if not env_path.is_file():
+        return
+
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+
+        name, value = (part.strip() for part in stripped.split("=", 1))
+        if not name or name in os.environ:
+            continue
+        if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+            value = value[1:-1]
+        if name in _DOT_ENV_PATH_VARIABLES and value and not Path(value).is_absolute():
+            value = str((REPOSITORY_ROOT / value).resolve())
+        os.environ[name] = value
+
+
+def _registry_steam_roots() -> list[Path]:
+    if os.name != "nt":
+        return []
+
+    try:
+        import winreg
+    except ImportError:
+        return []
+
+    probes = (
+        (winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", "SteamPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", "InstallPath"),
+    )
+    roots: list[Path] = []
+    for hive, key_name, value_name in probes:
+        try:
+            with winreg.OpenKey(hive, key_name) as key:
+                value, _ = winreg.QueryValueEx(key, value_name)
+        except OSError:
+            continue
+        if value:
+            roots.append(Path(str(value)))
+    return roots
+
+
 def _steam_roots() -> list[Path]:
-    candidates: list[Path] = []
+    candidates: list[Path] = _registry_steam_roots()
     for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES"):
         base = os.environ.get(variable)
         if base:
@@ -69,40 +130,67 @@ def find_game_root(explicit: str | Path | None = None) -> Path:
     searched = ", ".join(str(path) for path in candidates) or "standard Steam libraries"
     raise DiscoveryError(
         "Slay the Spire 2 was not found. Set STS2_GAME_ROOT to the installed game directory, or put "
-        "it in .env. Steam libraries are read from %PROGRAMFILES%, %PROGRAMFILES(X86)% and STEAM_PATH "
-        "only, so a Steam installation that is not below one of those needs the variable. "
+        "it in .env. Steam libraries are read from the Windows registry, %PROGRAMFILES%, "
+        "%PROGRAMFILES(X86)% and STEAM_PATH. "
         f"Searched: {searched}"
     )
 
 
 def find_game_assembly(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("STS2_ASSEMBLY")
-    candidate = Path(override).expanduser().resolve() if override else find_game_root() / GAME_DATA_DIRECTORY_NAME / "sts2.dll"
+    candidate = (
+        Path(explicit).expanduser().resolve()
+        if explicit
+        else find_game_root() / GAME_DATA_DIRECTORY_NAME / "sts2.dll"
+    )
     if not candidate.is_file():
         raise DiscoveryError(f"STS2 assembly not found: {candidate}")
     return candidate
 
 
-def find_dotnet(explicit: str | Path | None = None) -> Path:
-    override = explicit or os.environ.get("DOTNET")
-    if override:
-        candidate = Path(override).expanduser().resolve()
-        if candidate.is_file():
-            return candidate
-        raise DiscoveryError(f"Dotnet executable not found: {candidate}")
+def expected_dotnet_version() -> str:
+    configuration = json.loads((REPOSITORY_ROOT / "global.json").read_text(encoding="utf-8"))
+    return str(configuration["sdk"]["version"])
 
-    exe_name = "dotnet.exe" if os.name == "nt" else "dotnet"
-    candidates = [
-        REPOSITORY_ROOT / ".tools" / "dotnet9" / exe_name,
-    ]
-    for c in candidates:
-        if c.is_file():
-            return c.resolve()
+
+def _dotnet_has_expected_sdk(executable: Path) -> bool:
+    expected = expected_dotnet_version()
+    try:
+        result = subprocess.run(
+            [str(executable), "--list-sdks"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0 and any(
+        line.strip().startswith(f"{expected} ") for line in result.stdout.splitlines()
+    )
+
+
+def find_dotnet(explicit: str | Path | None = None) -> Path:
+    expected = expected_dotnet_version()
+    if explicit:
+        candidate = Path(explicit).expanduser().resolve()
+        if not candidate.is_file():
+            raise DiscoveryError(f"Dotnet executable not found: {candidate}")
+        if not _dotnet_has_expected_sdk(candidate):
+            raise DiscoveryError(f"Configured dotnet does not provide SDK {expected}: {candidate}")
+        return candidate
 
     resolved = shutil.which("dotnet")
     if resolved:
-        return Path(resolved).resolve()
-    raise DiscoveryError(".NET 9 SDK was not found. Run scripts/install-dotnet-9.ps1 or set DOTNET.")
+        candidate = Path(resolved).resolve()
+        if _dotnet_has_expected_sdk(candidate):
+            return candidate
+
+    exe_name = "dotnet.exe" if os.name == "nt" else "dotnet"
+    bundled = REPOSITORY_ROOT / ".tools" / "dotnet9" / exe_name
+    if bundled.is_file() and _dotnet_has_expected_sdk(bundled):
+        return bundled.resolve()
+
+    raise DiscoveryError(f".NET SDK {expected} was not found. Run `pwsh ./dev.ps1 setup`.")
 
 
 def find_host_assembly(explicit: str | Path | None = None) -> Path:
@@ -113,48 +201,103 @@ def find_host_assembly(explicit: str | Path | None = None) -> Path:
             return candidate
         raise DiscoveryError(f"Host assembly not found: {candidate}")
 
-    release_dll = REPOSITORY_ROOT / "src" / "Sts2.NativeSim.Host" / "bin" / "Release" / "net9.0" / "Sts2.NativeSim.Host.dll"
+    release_dll = (
+        REPOSITORY_ROOT
+        / "src"
+        / "Sts2.NativeSim.Host"
+        / "bin"
+        / "Release"
+        / "net9.0"
+        / "Sts2.NativeSim.Host.dll"
+    )
     if release_dll.is_file():
         return release_dll.resolve()
 
-    debug_dll = REPOSITORY_ROOT / "src" / "Sts2.NativeSim.Host" / "bin" / "Debug" / "net9.0" / "Sts2.NativeSim.Host.dll"
+    debug_dll = (
+        REPOSITORY_ROOT
+        / "src"
+        / "Sts2.NativeSim.Host"
+        / "bin"
+        / "Debug"
+        / "net9.0"
+        / "Sts2.NativeSim.Host.dll"
+    )
     if debug_dll.is_file():
         return debug_dll.resolve()
 
-    # Also check for .exe
-    release_exe = REPOSITORY_ROOT / "src" / "Sts2.NativeSim.Host" / "bin" / "Release" / "net9.0" / "Sts2.NativeSim.Host.exe"
+    release_exe = (
+        REPOSITORY_ROOT
+        / "src"
+        / "Sts2.NativeSim.Host"
+        / "bin"
+        / "Release"
+        / "net9.0"
+        / "Sts2.NativeSim.Host.exe"
+    )
     if release_exe.is_file():
         return release_exe.resolve()
 
-    raise DiscoveryError("Sts2.NativeSim.Host was not built. Run scripts/build-persistent-server.ps1 or dotnet build.")
+    raise DiscoveryError("Sts2.NativeSim.Host was not built. Run `pwsh ./dev.ps1 build`.")
+
+
+def _is_supported_godot(executable: Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    version = (result.stdout or result.stderr).strip().lower()
+    if version.startswith(GODOT_VERSION) and "mono" in version:
+        return True
+    # The non-console Windows build may not attach captured stdout. Its official
+    # versioned filename is still an exact distribution identity.
+    name = executable.name.lower()
+    return name in {
+        "godot_v4.5.1-stable_mono_win64.exe",
+        "godot_v4.5.1-stable_mono_win64_console.exe",
+    }
 
 
 def find_godot(explicit: str | Path | None = None) -> Path:
     override = explicit or os.environ.get("GODOT")
     if override:
         candidate = Path(override).expanduser().resolve()
-        if candidate.is_file():
-            return candidate
-        raise DiscoveryError(f"Godot executable not found: {candidate}")
+        if not candidate.is_file():
+            raise DiscoveryError(f"Godot executable not found: {candidate}")
+        if not _is_supported_godot(candidate):
+            raise DiscoveryError(f"Configured Godot is not {GODOT_VERSION} .NET/Mono: {candidate}")
+        return candidate
 
-    tool_roots = [
-        REPOSITORY_ROOT / ".tools" / "godot-4.5.1-mono",
-    ]
     names = (
+        "godot",
+        "godot4",
         "Godot_v4.5.1-stable_mono_win64_console.exe",
         "Godot_v4.5.1-stable_mono_win64.exe",
     )
-    for tool_root in tool_roots:
-        if tool_root.exists():
-            for name in names:
-                match = next(tool_root.rglob(name), None)
-                if match:
-                    return match.resolve()
-    for name in ("godot", "godot4", *names):
+    for name in names:
         resolved = shutil.which(name)
         if resolved:
-            return Path(resolved).resolve()
-    raise DiscoveryError("Godot 4.5.1 .NET was not found. Optional for pure .NET runner; required only for FullAppBridge.")
+            candidate = Path(resolved).resolve()
+            if _is_supported_godot(candidate):
+                return candidate
+
+    tool_root = REPOSITORY_ROOT / ".tools" / "godot-4.5.1-mono"
+    if tool_root.exists():
+        for name in names[2:]:
+            match = next(tool_root.rglob(name), None)
+            if match and _is_supported_godot(match):
+                return match.resolve()
+
+    raise DiscoveryError(
+        f"Godot {GODOT_VERSION} .NET/Mono was not found. Run `pwsh ./dev.ps1 setup` or set GODOT."
+    )
 
 
 def volume_root(path: str | Path) -> str:
@@ -195,3 +338,6 @@ def find_sandbox_root(explicit: str | Path | None = None, *, game_root: str | Pa
     except DiscoveryError:
         return _local_appdata_sandbox_root()
     return sandbox_root_beside(install)
+
+
+_load_dot_env()

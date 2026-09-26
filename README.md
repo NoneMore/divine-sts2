@@ -1,7 +1,7 @@
 # divine-sts2
 
 [![.NET 9](https://img.shields.io/badge/.NET-9.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Throughput](https://img.shields.io/badge/Throughput-1%2C514%2B%20dec%2Fsec-success)](#benchmarks)
 [![Stability](https://img.shields.io/badge/Stability-100%25%20Zero--Crash-brightgreen)](#benchmarks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -38,63 +38,80 @@ Continuous 100-second sustained stress benchmark across 20 isolated native worke
 
 * **OS**: Windows 10 / 11 (x64)
 * **Game**: Legally installed copy of Slay the Spire 2 via Steam
-* **Runtime**: Python 3.10+ and PowerShell (`pwsh`)
+* **Shell**: PowerShell 7 (`pwsh`)
+* **Python environment manager**: [`uv`](https://docs.astral.sh/uv/)
+
+`uv` installs the repository's Python 3.12 development environment from `.python-version`. For .NET
+and Godot, the project first reuses a compatible system installation. `setup` downloads an exact
+checkout-local fallback under `.tools/` only when the required tool is missing.
 
 ---
 
 ## Quickstart
 
 ```powershell
-# 1. Clone & enter repository
-git clone https://github.com/favet/divine-sts2.git
+git clone https://github.com/NoneMore/divine-sts2.git
 cd divine-sts2
-
-# 2. Setup Python environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-
-# 3. Bootstrap persistent .NET 9 host & verify game link
-pwsh scripts/bootstrap.ps1
+pwsh ./dev.ps1 setup
 ```
+
+That is the complete native setup: locked Python dependencies, verified .NET and Godot tools, Release
+host, Debug Godot worker, and a deep environment check. Existing compatible system tools are reused.
+
+For everyday development:
+
+```powershell
+pwsh ./dev.ps1 check
+```
+
+`check` is the same source gate GitHub Actions runs. Human contributors, automation, and coding agents
+use the same commands; there is no alternate sandbox-specific development mode. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the development contract.
 
 ---
 
 ## Usage
 
 ### 1. Diagnostics & Environment Verification
+
 Verify assembly compatibility, SHA-256 signatures, and worker startup:
+
 ```powershell
-python -m sts2_native_sim.cli doctor --deep --json
+pwsh ./dev.ps1 doctor -Json
 ```
 
 ### 2. High-Throughput 20-Worker Benchmark
+
 Run the sustained multi-worker soak benchmark:
+
 ```powershell
-python python/soak_test_20_workers.py
+uv run --frozen python python/tools/soak_test_20_workers.py
 ```
 
 ### 3. Parallel Rollout Farm
+
 Generate parallel game trajectories across headless workers:
+
 ```powershell
-python python/native_rollout_farm.py --workers 6 --episodes 100 --ascension 1 --summary-only
+uv run --frozen python python/tools/native_rollout_farm.py --workers 6 --episodes 100 --ascension 1 --summary-only
 ```
 
 ### 4. Generated Scenario Corpus
+
 Record reproducible act-1 opening scenarios into deterministic corpus shards:
+
 ```powershell
-python -m sts2_native_sim.cli scenario --character IRONCLAD --seed A1B2C3D4E5 --workers 1 --output-dir artifacts/scenarios/quickstart
+uv run --frozen divine-sts2 scenario --character IRONCLAD --seed A1B2C3D4E5 --workers 1 --output-dir artifacts/scenarios/quickstart
 ```
 
 ### 5. Certify full-app process reuse
 
-Build the Release full-app bridge package. The scenario recorder uses the Debug native host, so after
-Core changes also run `pwsh scripts/build-persistent-server.ps1 -Configuration Debug` as described in
-`docs/agents/dev-environment.md`. Then run the dedicated shipped-game gate from a shell with
-`STS2_GAME_ROOT` configured:
+Build the native hosts, then run the dedicated shipped-game gate from a checkout with
+`STS2_GAME_ROOT` configured or discoverable:
 
 ```powershell
-python -m tests.acceptance.certify_full_app_reuse
+pwsh ./dev.ps1 build
+uv run --frozen python -m tests.acceptance.certify_full_app_reuse
 ```
 
 It runs sixteen independent fresh menu starts, then seventeen entries in one reusable process. The
@@ -112,11 +129,9 @@ Standard vectorized RL environment interface with action masking and state resto
 from sts2_native_sim import NativeWorkerPool, extract_agent_observation
 from sts2_native_gym import Sts2NativeVectorEnv
 
-# Initialize vectorized 4-worker environment
 with Sts2NativeVectorEnv(workers=4, ascension=1) as env:
     obs, info = env.reset(seed=42)
     for _ in range(100):
-        # Step environment using legal action masks from info
         actions = [legals[0] for legals in info["legal_action_ids"]]
         obs, rewards, terminations, truncations, info = env.step(actions)
         if any(terminations):
@@ -127,11 +142,16 @@ with Sts2NativeVectorEnv(workers=4, ascension=1) as env:
 
 ## Configuration
 
-The runtime auto-detects standard Steam installations. For custom library paths, define `STS2_GAME_ROOT` in `.env`:
+The runtime auto-detects standard Steam installations, including Steam's Windows registry location and
+configured library folders. For a custom install, define `STS2_GAME_ROOT` in the gitignored `.env`:
 
 ```ini
 STS2_GAME_ROOT=D:\SteamLibrary\steamapps\common\Slay the Spire 2
 ```
+
+Environment discovery is implemented once in Python and is used by both Python and PowerShell entry
+points. The repository-local `.env` has fill-only semantics: an environment variable already set by
+the caller always wins.
 
 Full-app sandboxes are prepared on the game install's own volume, because each sandbox hard-links the
 install instead of copying it and a hard link cannot cross volumes. Set `STS2_SANDBOX_ROOT` only to
@@ -141,16 +161,21 @@ place them somewhere else on that same volume:
 STS2_SANDBOX_ROOT=D:\SteamLibrary\steamapps\common\divine-sts2\full-app-sandboxes
 ```
 
+Tool and package-manager caches use their normal user-level locations. The checkout-local `.tools/`
+directory is only a disposable fallback for required runtime tools that are not already available on
+the host; runtime code does not assume tools live there.
+
 ---
 
 ## Troubleshooting
 
 | Error | Root Cause | Resolution |
 | :--- | :--- | :--- |
-| `Slay the Spire 2 was not found` | Non-default library drive | Set `STS2_GAME_ROOT` in `.env`. |
-| `Unsupported game build` | Game DLL/PCK hash mismatch | Verify game installation matches target build (`0.1.0+`). |
-| `.NET 9 SDK was not found` | Missing SDK tooling | Run `scripts/bootstrap.ps1` to download local `.tools/dotnet9`. |
-| `worker_poisoned` | Unmanaged task abort | Pool auto-recycles worker; restart farm if persistent. |
+| `uv was not found on PATH` | Missing Python environment manager | Install `uv`, then rerun `pwsh ./dev.ps1 setup`. |
+| `Slay the Spire 2 was not found` | Steam install could not be discovered | Set `STS2_GAME_ROOT` in `.env`. |
+| `Unsupported game build` | Game DLL/PCK hash mismatch | Verify the game installation matches the supported build. |
+| Required `.NET SDK` was not found | Pinned SDK is missing | Run `pwsh ./dev.ps1 setup`. |
+| `worker_poisoned` | Unmanaged task abort | Pool auto-recycles worker; restart the farm if persistent. |
 
 ---
 

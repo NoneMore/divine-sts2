@@ -1,5 +1,10 @@
 # Agent guide
 
+Agents use the same development environment and commands as human contributors. The development
+contract lives in `CONTRIBUTING.md`; do not add agent-only build wrappers, cache layouts, sandbox
+workarounds, or reduced test modes. A runner that cannot provide normal Windows process and named-pipe
+behavior does not satisfy this repository's development-host requirements.
+
 ## Related repositories
 
 When work needs Slay the Spire 2 decompiled source, mod frameworks, or implementations from related
@@ -14,8 +19,3 @@ Issues and specs live as local markdown files under `.scratch/`, tracked in git.
 ### Domain docs
 
 Single-context: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
-
-### Dev environment
-
-The commands that work on this repository's Windows host, and the one requirement a build has — MSBuild
-needs named pipes, so builds and tests run only with the file sandbox off: `docs/agents/dev-environment.md`.

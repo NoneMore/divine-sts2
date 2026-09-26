@@ -1,5 +1,16 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
+
+try {
+    $existing = Get-DivineGodot
+    if ($existing) {
+        Write-Output $existing
+        return
+    }
+} catch {
+    # No compatible system or fallback Godot yet; install the checkout-local fallback below.
+}
+
 $toolRoot = Get-DivineToolsRoot
 $archive = Join-Path $toolRoot 'Godot_v4.5.1-stable_mono_win64.zip'
 $destination = Join-Path $toolRoot 'godot-4.5.1-mono'
@@ -34,7 +45,6 @@ if (-not $godot) {
 $godot = Get-ChildItem -LiteralPath $destination -Recurse -File -Filter 'Godot_v4.5.1-stable_mono_win64.exe' |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $godot) {
-    throw 'The Godot archive was downloaded, but its executable was not found after extraction.'
+    throw 'The Godot fallback was installed, but its executable could not be found.'
 }
-
 Write-Output $godot

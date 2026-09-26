@@ -6,14 +6,22 @@ import argparse
 import hashlib
 import json
 import platform
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from .client import NativeWorker
-from .paths import DiscoveryError, REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_game_root, find_godot, find_host_assembly
+from .paths import (
+    DiscoveryError,
+    REPOSITORY_ROOT,
+    expected_dotnet_version,
+    find_dotnet,
+    find_game_assembly,
+    find_game_root,
+    find_godot,
+    find_host_assembly,
+)
 from .scenarios import ScenarioRequest, ScenarioRequestError, generate_corpus
 
 SUPPORTED_BUILD = {
@@ -31,9 +39,13 @@ def _sha256(path: Path) -> str:
 
 
 def doctor(deep: bool = False) -> dict[str, Any]:
-    bundled_dotnet = REPOSITORY_ROOT / ".tools" / "dotnet9" / "dotnet.exe"
-    dotnet = str(bundled_dotnet) if bundled_dotnet.is_file() else shutil.which("dotnet")
+    expected_dotnet = expected_dotnet_version()
+    dotnet: str | None = None
     dotnet_sdks: list[str] = []
+    try:
+        dotnet = str(find_dotnet())
+    except DiscoveryError:
+        pass
     if dotnet:
         try:
             result = subprocess.run([dotnet, "--list-sdks"], capture_output=True, text=True, timeout=10, check=False)
@@ -46,6 +58,7 @@ def doctor(deep: bool = False) -> dict[str, Any]:
         "python": sys.version.split()[0],
         "repository_root": str(REPOSITORY_ROOT),
         "dotnet": dotnet,
+        "dotnet_sdk_expected": expected_dotnet,
         "dotnet_sdks": dotnet_sdks,
     }
     try:
@@ -91,9 +104,11 @@ def doctor(deep: bool = False) -> dict[str, Any]:
             suffix = f" details={details}" if details else ""
             failures.append(f"Native worker smoke failed: {error}{suffix}")
 
-    has_dotnet_9 = any(version.startswith("9.") for version in dotnet_sdks)
-    checks["ok"] = not failures and has_dotnet_9
-    checks["failures"] = failures + ([] if has_dotnet_9 else [".NET 9 SDK was not found; run scripts/bootstrap.ps1."])
+    has_expected_dotnet = any(version.startswith(f"{expected_dotnet} ") for version in dotnet_sdks)
+    checks["ok"] = not failures and has_expected_dotnet
+    checks["failures"] = failures + (
+        [] if has_expected_dotnet else [f".NET SDK {expected_dotnet} was not found; run `pwsh ./dev.ps1 setup`."]
+    )
     checks["ok"] = not checks["failures"]
     return checks
 

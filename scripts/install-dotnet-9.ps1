@@ -1,22 +1,40 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
+
+$requiredVersion = Get-DivineExpectedDotnetVersion
+try {
+    $existing = Get-DivineDotnet
+    if ($existing) {
+        Write-Output $existing
+        return
+    }
+} catch {
+    # No compatible system or fallback SDK yet; install the checkout-local fallback below.
+}
+
 $toolRoot = Get-DivineToolsRoot
 $destination = Join-Path $toolRoot 'dotnet9'
 $installer = Join-Path $toolRoot 'dotnet-install.ps1'
+$installed = Join-Path $destination 'dotnet.exe'
 
 New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
 if (-not (Test-Path -LiteralPath $installer)) {
     Invoke-WebRequest -UseBasicParsing -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer
 }
-if (-not (Test-Path -LiteralPath (Join-Path $destination 'dotnet.exe'))) {
-    # dotnet-install.ps1 honours HTTP_PROXY/HTTPS_PROXY through the .NET HTTP stack, so a proxy
-    # needs no argument here.
-    & $installer -Channel 9.0 -InstallDir $destination -NoPath
-    $installerExit = 0
-    if (Test-Path variable:LASTEXITCODE) { $installerExit = [int]$LASTEXITCODE }
-    if ($installerExit -ne 0) { throw ".NET SDK installation failed with exit code $installerExit" }
-    if (-not (Test-Path -LiteralPath (Join-Path $destination 'dotnet.exe'))) {
-        throw ".NET SDK installation reported success, but dotnet.exe was not found under $destination."
-    }
+
+if (Test-Path -LiteralPath $destination) {
+    Remove-Item -LiteralPath $destination -Recurse -Force
 }
-Write-Output (Join-Path $destination 'dotnet.exe')
+& $installer -Version $requiredVersion -InstallDir $destination -NoPath
+$installerExit = if (Test-Path variable:LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+if ($installerExit -ne 0) {
+    throw ".NET SDK $requiredVersion installation failed with exit code $installerExit"
+}
+
+$sdks = & $installed --list-sdks 2>$null
+$escaped = [regex]::Escape($requiredVersion)
+if ($LASTEXITCODE -ne 0 -or -not ($sdks | Where-Object { $_ -match "^$escaped\s" })) {
+    throw ".NET SDK installation is inconsistent: expected $requiredVersion under $destination."
+}
+
+Write-Output $installed

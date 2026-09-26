@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .paths import REPOSITORY_ROOT, find_game_assembly, find_godot
+from .paths import REPOSITORY_ROOT, find_dotnet, find_game_assembly, find_godot
 from .pck_fingerprint import ENV_NAME as PCK_FINGERPRINT_ENV
 from .pck_fingerprint import PckFingerprint
 
@@ -127,12 +127,12 @@ class NativeWorker:
             hint = self._pck_fingerprint.worker_hint()
             if hint:
                 environment[PCK_FINGERPRINT_ENV] = hint
-        dotnet_root = REPOSITORY_ROOT / ".tools" / "dotnet9"
-        if dotnet_root.is_dir():
-            environment["DOTNET_ROOT"] = str(dotnet_root)
-            environment["DOTNET_ROOT_X64"] = str(dotnet_root)
-            environment["PATH"] = str(dotnet_root) + os.pathsep + environment.get("PATH", "")
-            environment["DOTNET_ROLL_FORWARD"] = "Major"
+        dotnet = find_dotnet()
+        dotnet_root = dotnet.parent
+        environment["DOTNET_ROOT"] = str(dotnet_root)
+        environment["DOTNET_ROOT_X64"] = str(dotnet_root)
+        environment["PATH"] = str(dotnet_root) + os.pathsep + environment.get("PATH", "")
+        environment["DOTNET_ROLL_FORWARD"] = "Major"
         self.process = _spawn_without_windows_error_dialogs(
             self.command,
             stdin=subprocess.PIPE,
